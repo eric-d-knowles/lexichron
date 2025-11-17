@@ -15,9 +15,14 @@ __all__ = ["plot_evaluation_results"]
 
 
 def plot_evaluation_results(
-    csv_file,
-    metric,
-    x_vars,
+    csv_file=None,
+    metric=None,
+    x_vars=None,
+    ngram_size=None,
+    repo_release_id=None,
+    repo_corpus_id=None,
+    db_path_stub=None,
+    dir_suffix=None,
     plot_type="line",
     output_file=None,
     plot_title=None,
@@ -31,13 +36,22 @@ def plot_evaluation_results(
     Creates visualizations of model performance across hyperparameter configurations.
     Supports line plots, contour plots, and 3D surface plots.
 
+    Can be called in two ways:
+    1. Direct mode: Provide csv_file path directly
+    2. Auto-detect mode: Provide ngram_size, repo_release_id, repo_corpus_id, db_path_stub, and dir_suffix
+
     Args:
-        csv_file (str): Path to the evaluation results CSV file.
+        csv_file (str, optional): Path to the evaluation results CSV file. If None, will auto-detect using path stub parameters.
         metric (str): Metric to plot ('similarity_score' or 'analogy_score').
         x_vars (str or list): Variable(s) for plotting. Can be:
             - Single string: Simple line plot with one x-axis variable
             - List of 2 strings: Line plot with hue, or 2D contour/surface plot
             - List of 3 strings: 3D scatter plot (contour type only)
+        ngram_size (int, optional): N-gram size (e.g., 5 for 5grams) - used for auto-detection
+        repo_release_id (str, optional): Release date in YYYYMMDD format (e.g., "20200217") - used for auto-detection
+        repo_corpus_id (str, optional): Corpus identifier (e.g., "eng", "eng-fiction") - used for auto-detection
+        db_path_stub (str, optional): Base directory for data (e.g., "/scratch/edk202/NLP_corpora/Google_Books/") - used for auto-detection
+        dir_suffix (str, optional): Suffix for model/log directories (e.g., 'test', 'final') - used for auto-detection
         plot_type (str): Type of plot ('line', 'contour', or 'surface'). Defaults to 'line'.
         output_file (str, optional): Path to save the plot. If None, displays interactively.
         plot_title (str, optional): Custom title for the plot. If None, generates default title.
@@ -53,12 +67,24 @@ def plot_evaluation_results(
         ValueError: If required columns are missing or plot configuration is invalid.
 
     Example:
-        >>> # Simple line plot
+        >>> # Direct mode - provide csv_file directly
         >>> plot_evaluation_results(
         ...     csv_file="results.csv",
         ...     metric="similarity_score",
         ...     x_vars="vector_size",
         ...     output_file="similarity_by_dim.png"
+        ... )
+
+        >>> # Auto-detect mode - provide path stub parameters
+        >>> plot_evaluation_results(
+        ...     ngram_size=5,
+        ...     repo_release_id='20200217',
+        ...     repo_corpus_id='eng-fiction',
+        ...     db_path_stub='/scratch/edk202/NLP_corpora/Google_Books/',
+        ...     dir_suffix='test',
+        ...     metric="similarity_score",
+        ...     x_vars=["epochs", "vector_size"],
+        ...     panel_by="year"
         ... )
 
         >>> # Grouped line plot
@@ -77,6 +103,29 @@ def plot_evaluation_results(
         ...     plot_type="contour"
         ... )
     """
+    # Auto-detect csv_file if path stub parameters are provided
+    if csv_file is None:
+        if all(param is not None for param in [ngram_size, repo_release_id, repo_corpus_id, db_path_stub, dir_suffix]):
+            # Construct path from stub parameters
+            from ngramkit.ngram_acquire.db.build_path import build_db_path
+            from pathlib import Path
+            from .config import construct_model_path
+            import os
+
+            base_path = Path(build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)).parent
+            model_base = construct_model_path(str(base_path))
+            csv_file = os.path.join(model_base, f"evaluation_results_{dir_suffix}.csv")
+        else:
+            raise ValueError(
+                "Either csv_file must be provided, or all of the following parameters: "
+                "ngram_size, repo_release_id, repo_corpus_id, db_path_stub, dir_suffix"
+            )
+
+    # Validate required parameters
+    if metric is None:
+        raise ValueError("metric parameter is required")
+    if x_vars is None:
+        raise ValueError("x_vars parameter is required")
     # Default label map
     default_label_map = {
         'vector_size': 'Vector Dimensions',
@@ -167,10 +216,10 @@ def plot_evaluation_results(
         is_3d_plot = plot_type == "surface" or (plot_type == "contour" and len(x_vars) == 3)
 
         if is_3d_plot:
-            fig = plt.figure(figsize=(6 * n_cols, 5 * n_rows), dpi=100)
+            fig = plt.figure(figsize=(6 * n_cols, 5 * n_rows), dpi=100, facecolor='white')
         else:
             fig, axes = plt.subplots(n_rows, n_cols, figsize=(6 * n_cols, 5 * n_rows), dpi=100,
-                                    squeeze=False, sharey=True)
+                                    squeeze=False, sharey=True, facecolor='white')
             axes = axes.flatten()
             # Add vertical spacing between rows
             fig.subplots_adjust(hspace=0.4)
@@ -264,7 +313,7 @@ def plot_evaluation_results(
         is_3d_plot = plot_type == "surface" or (plot_type == "contour" and len(x_vars) == 3)
 
         if not is_3d_plot:
-            fig, ax = plt.subplots(figsize=(10, 6), dpi=100)
+            fig, ax = plt.subplots(figsize=(10, 6), dpi=100, facecolor='white')
         else:
             fig, ax = None, None
 
@@ -512,7 +561,7 @@ def _plot_single(ax, grouped, x_vars, metric, plot_type, colorblind_palette,
 
             # Create figure if not provided (single plot case)
             if ax is None:
-                fig = plt.figure(figsize=(11, 7), dpi=100)
+                fig = plt.figure(figsize=(11, 7), dpi=100, facecolor='white')
                 ax = fig.add_subplot(111, projection='3d')
             else:
                 fig = ax.figure
@@ -606,7 +655,7 @@ def _plot_single(ax, grouped, x_vars, metric, plot_type, colorblind_palette,
 
         # Create figure if not provided (single plot case)
         if ax is None:
-            fig = plt.figure(figsize=(11, 7), dpi=100)
+            fig = plt.figure(figsize=(11, 7), dpi=100, facecolor='white')
             ax = fig.add_subplot(111, projection='3d')
         else:
             fig = ax.figure

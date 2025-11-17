@@ -466,7 +466,7 @@ def _setup_logging(log_dir):
     log_file = setup_logger(
         db_path=str(log_dir),
         filename_prefix="word2vec_evaluation",
-        console=True,
+        console=False,
         rotate=True,
         max_bytes=100_000_000,
         backup_count=5,

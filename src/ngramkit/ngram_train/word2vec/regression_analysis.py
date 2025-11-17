@@ -175,9 +175,14 @@ def _build_formula(
 
 
 def run_regression_analysis(
-    csv_file: str,
-    outcome: str,
-    predictors: List[str],
+    csv_file: Optional[str] = None,
+    outcome: Optional[str] = None,
+    predictors: Optional[List[str]] = None,
+    ngram_size: Optional[int] = None,
+    repo_release_id: Optional[str] = None,
+    repo_corpus_id: Optional[str] = None,
+    db_path_stub: Optional[str] = None,
+    dir_suffix: Optional[str] = None,
     interactions: Optional[List[Tuple[str, str]]] = None,
     random_effects: Optional[str] = 'year',
     standardize: bool = True,
@@ -192,12 +197,21 @@ def run_regression_analysis(
     hyperparameters on model performance. Can use mixed-effects (with random
     effects) or OLS regression.
 
+    Can be called in two ways:
+    1. Direct mode: Provide csv_file path directly
+    2. Auto-detect mode: Provide ngram_size, repo_release_id, repo_corpus_id, db_path_stub, and dir_suffix
+
     Args:
-        csv_file: Path to evaluation results CSV (from evaluate_models)
+        csv_file: Path to evaluation results CSV (from evaluate_models). If None, will auto-detect.
         outcome: Outcome variable ('similarity_score' or 'analogy_score')
         predictors: List of predictor variables to include as fixed effects.
                    Valid options: 'year', 'weight_by', 'vector_size', 'window',
                    'min_count', 'approach', 'epochs'
+        ngram_size (int, optional): N-gram size (e.g., 5 for 5grams) - used for auto-detection
+        repo_release_id (str, optional): Release date in YYYYMMDD format (e.g., "20200217") - used for auto-detection
+        repo_corpus_id (str, optional): Corpus identifier (e.g., "eng", "eng-fiction") - used for auto-detection
+        db_path_stub (str, optional): Base directory for data (e.g., "/scratch/edk202/NLP_corpora/Google_Books/") - used for auto-detection
+        dir_suffix (str, optional): Suffix for model/log directories (e.g., 'test', 'final') - used for auto-detection
         interactions: List of two-way interactions as tuples, e.g.,
                      [('year', 'vector_size'), ('year', 'epochs')]
         random_effects: Variable to use for random effects (default: 'year').
@@ -217,11 +231,23 @@ def run_regression_analysis(
     Example:
         >>> from ngramkit.ngram_train.word2vec import run_regression_analysis
         >>>
-        >>> # Simple model: main effects only
+        >>> # Direct mode - provide csv_file directly
         >>> results = run_regression_analysis(
         ...     csv_file='evaluation_results_test.csv',
         ...     outcome='similarity_score',
         ...     predictors=['year', 'vector_size', 'epochs']
+        ... )
+        >>>
+        >>> # Auto-detect mode - provide path stub parameters
+        >>> results = run_regression_analysis(
+        ...     ngram_size=5,
+        ...     repo_release_id='20200217',
+        ...     repo_corpus_id='eng-fiction',
+        ...     db_path_stub='/scratch/edk202/NLP_corpora/Google_Books/',
+        ...     dir_suffix='test',
+        ...     outcome='similarity_score',
+        ...     predictors=['year', 'vector_size', 'epochs', 'approach'],
+        ...     interactions=[('year', 'vector_size'), ('year', 'epochs')]
         ... )
         >>>
         >>> # Complex model: main effects + interactions
@@ -233,6 +259,28 @@ def run_regression_analysis(
         ...     output_file='regression_results.txt'
         ... )
     """
+    # Auto-detect csv_file if path stub parameters are provided
+    if csv_file is None:
+        if all(param is not None for param in [ngram_size, repo_release_id, repo_corpus_id, db_path_stub, dir_suffix]):
+            # Construct path from stub parameters
+            from ngramkit.ngram_acquire.db.build_path import build_db_path
+            from pathlib import Path
+            from .config import construct_model_path
+
+            base_path = Path(build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)).parent
+            model_base = construct_model_path(str(base_path))
+            csv_file = os.path.join(model_base, f"evaluation_results_{dir_suffix}.csv")
+        else:
+            raise ValueError(
+                "Either csv_file must be provided, or all of the following parameters: "
+                "ngram_size, repo_release_id, repo_corpus_id, db_path_stub, dir_suffix"
+            )
+
+    # Validate required parameters
+    if outcome is None:
+        raise ValueError("outcome parameter is required")
+    if predictors is None:
+        raise ValueError("predictors parameter is required")
     # Validate model_type parameter
     valid_model_types = ['auto', 'mixed', 'ols']
     if model_type not in valid_model_types:
