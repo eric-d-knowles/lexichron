@@ -16,7 +16,7 @@ from .display import print_training_header, print_completion_banner, LINE_WIDTH
 from .model import create_corpus_file
 from .worker import train_model
 
-__all__ = ["train_models"]
+__all__ = ["train_models", "build_word2vec_models"]
 
 
 def _parse_model_filename(filename):
@@ -218,12 +218,36 @@ def train_models(
     # Handle directory management based on mode
     if mode == 'restart':
         # Remove existing directories completely
+        def robust_rmtree(path, max_retries=5):
+            """Robustly remove directory tree, handling NFS/filesystem issues."""
+            import time
+
+            for attempt in range(max_retries):
+                try:
+                    shutil.rmtree(path, ignore_errors=False)
+                    return
+                except OSError as e:
+                    error_msg = str(e)
+                    # Check if it's an NFS lock issue
+                    if '.nfs' in error_msg or 'Device or resource busy' in error_msg:
+                        if attempt < max_retries - 1:
+                            wait_time = 1.0 * (attempt + 1)  # Increasing backoff
+                            time.sleep(wait_time)
+                        else:
+                            # On final attempt, use ignore_errors to remove what we can
+                            shutil.rmtree(path, ignore_errors=True)
+                            return
+                    else:
+                        # For non-NFS errors, retry with shorter delay
+                        if attempt < max_retries - 1:
+                            time.sleep(0.5)
+                        else:
+                            raise
+
         if os.path.exists(model_dir):
-            print(f"Restart mode: Removing existing models directory: {model_dir}")
-            shutil.rmtree(model_dir)
+            robust_rmtree(model_dir)
         if os.path.exists(log_dir):
-            print(f"Restart mode: Removing existing logs directory: {log_dir}")
-            shutil.rmtree(log_dir)
+            robust_rmtree(log_dir)
         # Recreate directories
         os.makedirs(model_dir, exist_ok=True)
         os.makedirs(log_dir, exist_ok=True)
@@ -433,3 +457,173 @@ def train_models(
 
     # Print completion banner
     print_completion_banner(model_dir, models_trained)
+
+
+def _setup_logging(log_dir):
+    """
+    Set up logging for the training pipeline if not already configured.
+
+    Args:
+        log_dir: Directory to store log files
+    """
+    import logging
+
+    # Check if logging is already configured
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        # Logging already configured, don't override
+        return
+
+    # Set up logging to log directory
+    from ngramkit.ngram_acquire.logger import setup_logger
+
+    log_file = setup_logger(
+        db_path=str(log_dir),
+        filename_prefix="word2vec_training",
+        console=False,
+        rotate=True,
+        max_bytes=100_000_000,
+        backup_count=5,
+        force=False  # Don't override if already configured
+    )
+
+    # Log initial context
+    logger = logging.getLogger(__name__)
+    logger.info("=" * 80)
+    logger.info("Word2Vec Training Pipeline")
+    logger.info(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Log file: {log_file}")
+    logger.info("=" * 80)
+
+
+def build_word2vec_models(
+    ngram_size=None,
+    repo_release_id=None,
+    repo_corpus_id=None,
+    db_path_stub=None,
+    years=None,
+    dir_suffix=None,
+    mode='resume',
+    year_step=1,
+    weight_by=('freq',),
+    vector_size=(100,),
+    window=(2,),
+    min_count=(1,),
+    approach=('skip-gram',),
+    epochs=(5,),
+    max_parallel_models=None,
+    workers_per_model=1,
+    unk_mode='reject',
+    cache_corpus=False,
+    use_corpus_file=True,
+    temp_dir=None,
+    debug_sample=0,
+    debug_interval=0
+):
+    """
+    Convenience wrapper for training Word2Vec models using path stub parameters.
+
+    This function mirrors the interface of build_processed_db and build_pivoted_db,
+    taking simple path parameters instead of requiring manual path construction.
+
+    Args:
+        ngram_size (int): N-gram size (e.g., 5 for 5grams) - required
+        repo_release_id (str): Release date in YYYYMMDD format (e.g., "20200217") - required
+        repo_corpus_id (str): Corpus identifier (e.g., "eng", "eng-fiction") - required
+        db_path_stub (str): Base directory for data (e.g., "/scratch/edk202/NLP_corpora/Google_Books/") - required
+        years (tuple): Tuple of (start_year, end_year) inclusive - required
+        dir_suffix (str): Suffix for model/log directories (e.g., 'test', 'final'). If None, uses timestamp.
+        mode (str): Training mode - 'resume', 'restart', or 'new'
+        year_step (int): Step size for year increments (default: 1)
+        weight_by (tuple): Weighting strategies ("freq", "doc_freq", or "none")
+        vector_size (tuple): Vector sizes to try
+        window (tuple): Window sizes to try
+        min_count (tuple): Minimum counts to try
+        approach (tuple): Training approaches ('CBOW' or 'skip-gram')
+        epochs (tuple): Epoch counts to try
+        max_parallel_models (int): Maximum parallel models (default: cpu_count())
+        workers_per_model (int): Worker threads per model
+        unk_mode (str): How to handle <UNK> tokens ('reject', 'strip', or 'retain')
+        cache_corpus (bool): Load entire corpus into memory
+        use_corpus_file (bool): Use temporary corpus files for better scaling
+        temp_dir (str): Directory for temporary files
+        debug_sample (int): Print first N sentences for debugging
+        debug_interval (int): Print samples every N seconds
+
+    Returns:
+        str: Path to the models directory
+
+    Example:
+        >>> build_word2vec_models(
+        ...     ngram_size=5,
+        ...     repo_release_id='20200217',
+        ...     repo_corpus_id='eng-fiction',
+        ...     db_path_stub='/scratch/edk202/NLP_corpora/Google_Books/',
+        ...     years=(1900, 2019),
+        ...     dir_suffix='final',
+        ...     vector_size=(200,),
+        ...     window=(4,),
+        ...     epochs=(10,),
+        ...     approach=('skip-gram',)
+        ... )
+    """
+    # Validate required parameters
+    if ngram_size is None or repo_release_id is None or repo_corpus_id is None or db_path_stub is None:
+        raise ValueError(
+            "All path stub parameters are required: "
+            "ngram_size, repo_release_id, repo_corpus_id, db_path_stub"
+        )
+
+    if years is None:
+        raise ValueError("years parameter is required (tuple of start_year, end_year)")
+
+    # Construct corpus path from stub parameters
+    from ngramkit.ngram_acquire.db.build_path import build_db_path
+    from pathlib import Path
+
+    base_path = Path(build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)).parent
+    corpus_path = str(base_path)
+
+    # Set default max_parallel_models if not provided
+    if max_parallel_models is None:
+        max_parallel_models = os.cpu_count()
+
+    # Generate default suffix if not provided
+    if dir_suffix is None:
+        dir_suffix = datetime.now().strftime('%Y%m%d_%H%M%S')
+        print(f"No dir_suffix provided. Using timestamp: {dir_suffix}\n")
+
+    # Set up logging internally
+    # We need to construct log_dir first to set up logging
+    from .config import construct_model_path
+    model_base = construct_model_path(corpus_path)
+    log_dir = os.path.join(model_base, f"logs_{dir_suffix}", "training")
+    os.makedirs(log_dir, exist_ok=True)
+    _setup_logging(log_dir)
+
+    # Call the main training function
+    train_models(
+        corpus_path=corpus_path,
+        years=years,
+        dir_suffix=dir_suffix,
+        mode=mode,
+        year_step=year_step,
+        weight_by=weight_by,
+        vector_size=vector_size,
+        window=window,
+        min_count=min_count,
+        approach=approach,
+        epochs=epochs,
+        max_parallel_models=max_parallel_models,
+        workers_per_model=workers_per_model,
+        unk_mode=unk_mode,
+        cache_corpus=cache_corpus,
+        use_corpus_file=use_corpus_file,
+        temp_dir=temp_dir,
+        debug_sample=debug_sample,
+        debug_interval=debug_interval
+    )
+
+    # Return model directory path
+    model_dir = os.path.join(model_base, f"models_{dir_suffix}")
+    return model_dir

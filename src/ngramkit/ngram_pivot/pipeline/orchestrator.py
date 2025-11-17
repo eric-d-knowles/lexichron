@@ -33,7 +33,7 @@ from .display import (
     print_completion_banner,
 )
 
-__all__ = ["run_pivot_pipeline", "PivotOrchestrator"]
+__all__ = ["run_pivot_pipeline", "build_pivoted_db", "PivotOrchestrator"]
 
 
 class PivotOrchestrator:
@@ -536,6 +536,49 @@ class PivotOrchestrator:
         )
 
 
+def _setup_logging(pipeline_config: PipelineConfig) -> None:
+    """
+    Set up logging for the pivot pipeline if not already configured.
+
+    Args:
+        pipeline_config: Pipeline configuration
+    """
+    import logging
+
+    # Check if logging is already configured
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        # Logging already configured, don't override
+        return
+
+    # Set up logging to temp directory
+    from ngramkit.ngram_acquire.logger import setup_logger
+    from datetime import datetime
+
+    log_dir = pipeline_config.tmp_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    log_file = setup_logger(
+        db_path=str(log_dir),
+        filename_prefix="pivot_pipeline",
+        console=True,
+        rotate=True,
+        max_bytes=100_000_000,
+        backup_count=5,
+        force=False  # Don't override if already configured
+    )
+
+    # Log initial context
+    logger = logging.getLogger(__name__)
+    logger.info("=" * 80)
+    logger.info("Pivot Pipeline")
+    logger.info(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Source DB: {pipeline_config.src_db}")
+    logger.info(f"Destination DB: {pipeline_config.dst_db}")
+    logger.info(f"Log file: {log_file}")
+    logger.info("=" * 80)
+
+
 def run_pivot_pipeline(pipeline_config: PipelineConfig) -> None:
     """
     Main entry point for the ngram pivot pipeline.
@@ -543,5 +586,157 @@ def run_pivot_pipeline(pipeline_config: PipelineConfig) -> None:
     Args:
         pipeline_config: Configuration for pipeline execution
     """
+    # Set up logging if not already configured
+    _setup_logging(pipeline_config)
+
     orchestrator = PivotOrchestrator(pipeline_config)
     orchestrator.run()
+
+
+def build_pivoted_db(
+    pipeline_config: Optional[PipelineConfig] = None,
+    # Path construction parameters (used if pipeline_config not provided)
+    ngram_size: Optional[int] = None,
+    repo_release_id: Optional[str] = None,
+    repo_corpus_id: Optional[str] = None,
+    db_path_stub: Optional[str] = None,
+    # Pipeline execution parameters
+    num_workers: Optional[int] = None,
+    mode: Optional[str] = None,
+    # Work unit partitioning
+    use_smart_partitioning: Optional[bool] = None,
+    num_initial_work_units: Optional[int] = None,
+    cache_partitions: Optional[bool] = None,
+    use_cached_partitions: Optional[bool] = None,
+    samples_per_worker: Optional[int] = None,
+    work_unit_claim_order: Optional[str] = None,
+    # Progress and flushing
+    flush_interval_s: Optional[float] = None,
+    progress_every_s: Optional[float] = None,
+    # Ingestion configuration
+    enable_ingest: Optional[bool] = None,
+    num_ingest_readers: Optional[int] = None,
+    ingest_buffer_shards: Optional[int] = None,
+    ingest_mode: Optional[str] = None,
+    compact_after_ingest: Optional[bool] = None,
+    # Database profiles
+    reader_profile: Optional[str] = None,
+    writer_disable_wal: Optional[bool] = None,
+) -> str:
+    """
+    Convenience wrapper for the ngram pivot pipeline.
+
+    Can be called in two ways:
+    1. With a PipelineConfig object (for advanced usage)
+    2. With path stub parameters (convenience wrapper like download_and_ingest_to_rocksdb)
+
+    Args:
+        pipeline_config: Pre-configured PipelineConfig (if provided with paths, other parameters are ignored)
+        ngram_size: N-gram size (1-5) - required if pipeline_config not provided
+        repo_release_id: Release date in YYYYMMDD format (e.g., "20200217") - required if pipeline_config not provided
+        repo_corpus_id: Corpus identifier (e.g., "eng", "eng-us") - required if pipeline_config not provided
+        db_path_stub: Base directory for database (will be expanded) - required if pipeline_config not provided
+        num_workers: Number of parallel workers (default: cpu_count() - 1 or num_initial_work_units, whichever is lower)
+        mode: "restart" (wipe all), "resume" (continue), or "reprocess" (wipe DB, keep cache)
+        use_smart_partitioning: Use density-based partitioning for better load balancing
+        num_initial_work_units: Initial number of work units (default: num_workers)
+        cache_partitions: Cache smart partitioning results
+        use_cached_partitions: Use cached partitions if available
+        samples_per_worker: Reservoir size per sampling worker
+        work_unit_claim_order: "sequential" or "random"
+        flush_interval_s: How often to flush buffer and check for splits
+        progress_every_s: Progress reporting interval
+        enable_ingest: Whether to ingest shards into final DB
+        num_ingest_readers: Number of parallel shard reader processes
+        ingest_buffer_shards: Number of shards buffered per reader
+        ingest_mode: "write_batch" or "direct_sst"
+        compact_after_ingest: Perform full compaction after ingestion
+        reader_profile: Database read profile
+        writer_disable_wal: Disable WAL for writers
+
+    Returns:
+        Path to the pivoted database directory
+    """
+    from typing import Optional
+
+    # Check if we have a complete pipeline_config with paths
+    has_complete_pipeline_config = (
+        pipeline_config is not None and
+        hasattr(pipeline_config, 'src_db') and
+        hasattr(pipeline_config, 'dst_db') and
+        hasattr(pipeline_config, 'tmp_dir') and
+        pipeline_config.src_db is not None and
+        pipeline_config.dst_db is not None and
+        pipeline_config.tmp_dir is not None
+    )
+
+    # If we have a complete pipeline_config with all required paths, use it directly
+    if has_complete_pipeline_config:
+        run_pivot_pipeline(pipeline_config)
+        return str(pipeline_config.dst_db)
+
+    # Otherwise, we need path stub parameters to construct the config
+    if ngram_size is None or repo_release_id is None or repo_corpus_id is None or db_path_stub is None:
+        raise ValueError(
+            "Either provide a complete pipeline_config with paths (src_db, dst_db, tmp_dir), "
+            "or provide all path stub parameters (ngram_size, repo_release_id, repo_corpus_id, db_path_stub)"
+        )
+
+    from ngramkit.ngram_acquire.db.build_path import build_db_path
+
+    # Construct paths using same logic as download function
+    base_path = Path(build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)).parent
+
+    # Construct derived paths
+    src_db = base_path / f"{ngram_size}grams_processed.db"
+    dst_db = base_path / f"{ngram_size}grams_pivoted.db"
+    tmp_dir = base_path / "pivoting_tmp"
+
+    # Determine default num_workers if not specified
+    if num_workers is None:
+        import os
+        cpu_count = os.cpu_count() or 1
+        default_workers = max(1, cpu_count - 1)
+        if num_initial_work_units is not None:
+            num_workers = min(default_workers, num_initial_work_units)
+        else:
+            num_workers = default_workers
+
+    # Create pipeline config, only passing non-None parameters to use PipelineConfig defaults
+    config_kwargs = {
+        'src_db': src_db,
+        'dst_db': dst_db,
+        'tmp_dir': tmp_dir,
+        'num_workers': num_workers,
+    }
+
+    # Add optional parameters only if explicitly provided
+    optional_params = {
+        'mode': mode,
+        'use_smart_partitioning': use_smart_partitioning,
+        'num_initial_work_units': num_initial_work_units,
+        'cache_partitions': cache_partitions,
+        'use_cached_partitions': use_cached_partitions,
+        'samples_per_worker': samples_per_worker,
+        'work_unit_claim_order': work_unit_claim_order,
+        'flush_interval_s': flush_interval_s,
+        'progress_every_s': progress_every_s,
+        'enable_ingest': enable_ingest,
+        'num_ingest_readers': num_ingest_readers,
+        'ingest_buffer_shards': ingest_buffer_shards,
+        'ingest_mode': ingest_mode,
+        'compact_after_ingest': compact_after_ingest,
+        'reader_profile': reader_profile,
+        'writer_disable_wal': writer_disable_wal,
+    }
+
+    for key, value in optional_params.items():
+        if value is not None:
+            config_kwargs[key] = value
+
+    constructed_pipeline_config = PipelineConfig(**config_kwargs)
+
+    # Run the pipeline
+    run_pivot_pipeline(constructed_pipeline_config)
+
+    return str(dst_db)

@@ -43,44 +43,43 @@ class PipelineSetup:
             'src_db': self.pipeline_config.src_db,
             'dst_db': self.pipeline_config.dst_db,
             'tmp_dir': tmp_dir,
-            'base': tmp_dir,
             'work_tracker': tmp_dir / "work_tracker.db",
             'output_dir': tmp_dir / "shards",
         }
+
+        # Store partition cache in parent directory (not in tmp_dir) so it survives restarts
+        # The cache is based on source DB characteristics, not processing state
+        self.temp_paths['cache_dir'] = tmp_dir.parent / ".partition_cache"
+        self.temp_paths['base'] = self.temp_paths['cache_dir']  # Used by PartitionCache
 
     def _handle_mode(self) -> None:
         """Handle different execution modes (restart/resume/reprocess).
 
         Mode behavior:
-            - "restart": Wipes output DB and temp directory (including cache)
+            - "restart": Wipes output DB and temp directory (but NOT cache directory)
             - "resume": Preserves all existing state
-            - "reprocess": Wipes output DB but preserves temp directory (cache)
+            - "reprocess": Wipes output DB but preserves temp directory (and cache)
         """
         mode = self.pipeline_config.mode
         tmp_dir = self.temp_paths['tmp_dir']
         dst_db = self.temp_paths['dst_db']
 
-        if mode == "restart":
-            # Clean restart: delete everything and start fresh
+        # Clean destination DB for restart/reprocess modes
+        if mode in ("restart", "reprocess"):
             if dst_db.exists():
                 shutil.rmtree(dst_db, ignore_errors=True)
+
+        # Ensure parent directory exists for dst_db
+        dst_db.parent.mkdir(parents=True, exist_ok=True)
+
+        # Clean temp directory only for restart mode (reprocess preserves cache and work tracker)
+        if mode == "restart":
             if tmp_dir.exists():
                 shutil.rmtree(tmp_dir, ignore_errors=True)
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            self.temp_paths['output_dir'].mkdir(parents=True, exist_ok=True)
 
-        elif mode == "reprocess":
-            # Reprocess: keep work tracker but reset status
-            if dst_db.exists():
-                shutil.rmtree(dst_db, ignore_errors=True)
-            # Keep tmp_dir for work tracker
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            self.temp_paths['output_dir'].mkdir(parents=True, exist_ok=True)
+        # Create temp directories
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        self.temp_paths['output_dir'].mkdir(parents=True, exist_ok=True)
 
-        elif mode == "resume":
-            # Resume: keep everything, just create if missing
-            tmp_dir.mkdir(parents=True, exist_ok=True)
-            self.temp_paths['output_dir'].mkdir(parents=True, exist_ok=True)
-
-        else:
-            raise ValueError(f"Invalid mode: {mode}")
+        # Create cache directory (survives restarts, outside of tmp_dir)
+        self.temp_paths['cache_dir'].mkdir(parents=True, exist_ok=True)

@@ -30,7 +30,7 @@ class PipelineConfig:
     # Work unit partitioning
     use_smart_partitioning: bool = True  # Use density-based partitioning (slower startup, better balance)
     num_sampling_workers: Optional[int] = None  # Parallel workers for sampling (default: min(num_units, 40))
-    samples_per_worker: int = 10000  # Reservoir size per sampling worker (higher = more accurate)
+    samples_per_worker: int = 50_000  # Reservoir size per sampling worker (higher = more accurate)
     cache_partitions: bool = True  # Cache smart partitioning results to avoid re-sampling
     use_cached_partitions: bool = True  # Use cached partitions if available (otherwise resample)
 
@@ -43,7 +43,7 @@ class PipelineConfig:
     writer_disable_wal: bool = True
 
     # Ingest configuration (runs as separate stage after workers complete)
-    ingest_mode: Literal["write_batch", "direct_sst"] = "write_batch"  # Ingestion strategy
+    ingest_mode: Literal["write_batch", "direct_sst"] = "direct_sst"  # Ingestion strategy
     ingest_read_profile: str = 'read:packed24'
     ingest_write_profile: str = 'write:packed24'
     ingest_disable_wal: bool = True

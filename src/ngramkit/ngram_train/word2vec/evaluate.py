@@ -19,7 +19,7 @@ from tqdm import tqdm
 from ngramkit.utilities.display import truncate_path_to_fit
 from .w2v_model import W2VModel
 
-__all__ = ["evaluate_models"]
+__all__ = ["evaluate_models", "evaluate_word2vec_models"]
 
 LINE_WIDTH = 100
 
@@ -445,3 +445,128 @@ def evaluate_models(
         run_similarity=run_similarity,
         run_analogy=run_analogy
     )
+
+
+def _setup_logging(log_dir):
+    """
+    Set up logging for the evaluation pipeline if not already configured.
+
+    Args:
+        log_dir: Directory to store log files
+    """
+    # Check if logging is already configured
+    root_logger = logging.getLogger()
+    if root_logger.hasHandlers():
+        # Logging already configured, don't override
+        return
+
+    # Set up logging to log directory
+    from ngramkit.ngram_acquire.logger import setup_logger
+
+    log_file = setup_logger(
+        db_path=str(log_dir),
+        filename_prefix="word2vec_evaluation",
+        console=True,
+        rotate=True,
+        max_bytes=100_000_000,
+        backup_count=5,
+        force=False  # Don't override if already configured
+    )
+
+    # Log initial context
+    logger = logging.getLogger(__name__)
+    logger.info("=" * 80)
+    logger.info("Word2Vec Evaluation Pipeline")
+    logger.info(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Log file: {log_file}")
+    logger.info("=" * 80)
+
+
+def evaluate_word2vec_models(
+    ngram_size=None,
+    repo_release_id=None,
+    repo_corpus_id=None,
+    db_path_stub=None,
+    dir_suffix=None,
+    save_mode='append',
+    similarity_dataset=None,
+    analogy_dataset=None,
+    workers=None,
+    run_similarity=True,
+    run_analogy=True
+):
+    """
+    Convenience wrapper for evaluating Word2Vec models using path stub parameters.
+
+    This function mirrors the interface of build_word2vec_models,
+    taking simple path parameters instead of requiring manual path construction.
+
+    Args:
+        ngram_size (int): N-gram size (e.g., 5 for 5grams) - required
+        repo_release_id (str): Release date in YYYYMMDD format (e.g., "20200217") - required
+        repo_corpus_id (str): Corpus identifier (e.g., "eng", "eng-fiction") - required
+        db_path_stub (str): Base directory for data (e.g., "/scratch/edk202/NLP_corpora/Google_Books/") - required
+        dir_suffix (str): Suffix for model/log directories (e.g., 'test', 'final') - required
+        save_mode (str): 'append' to add to existing results, 'overwrite' to replace (default: 'append')
+        similarity_dataset (str, optional): Path to similarity evaluation dataset
+        analogy_dataset (str, optional): Path to analogy evaluation dataset
+        workers (int, optional): Number of parallel workers (default: CPU count)
+        run_similarity (bool): Whether to run similarity evaluation (default: True)
+        run_analogy (bool): Whether to run analogy evaluation (default: True)
+
+    Returns:
+        str: Path to the evaluation results CSV file
+
+    Example:
+        >>> evaluate_word2vec_models(
+        ...     ngram_size=5,
+        ...     repo_release_id='20200217',
+        ...     repo_corpus_id='eng-fiction',
+        ...     db_path_stub='/scratch/edk202/NLP_corpora/Google_Books/',
+        ...     dir_suffix='final',
+        ...     run_similarity=True,
+        ...     run_analogy=True,
+        ...     workers=100
+        ... )
+    """
+    # Validate required parameters
+    if ngram_size is None or repo_release_id is None or repo_corpus_id is None or db_path_stub is None:
+        raise ValueError(
+            "All path stub parameters are required: "
+            "ngram_size, repo_release_id, repo_corpus_id, db_path_stub"
+        )
+
+    if dir_suffix is None:
+        raise ValueError("dir_suffix parameter is required (e.g., 'test', 'final')")
+
+    # Construct paths from stub parameters
+    from ngramkit.ngram_acquire.db.build_path import build_db_path
+    from pathlib import Path
+
+    base_path = Path(build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)).parent
+
+    # Construct model path (replaces NLP_corpora with NLP_models)
+    from .config import construct_model_path
+    model_base = construct_model_path(str(base_path))
+
+    # Set up logging internally
+    log_dir = os.path.join(model_base, f"logs_{dir_suffix}", "evaluation")
+    os.makedirs(log_dir, exist_ok=True)
+    _setup_logging(log_dir)
+
+    # Call the main evaluation function
+    evaluate_models(
+        model_dir=model_base,
+        dir_suffix=dir_suffix,
+        eval_dir=model_base,
+        save_mode=save_mode,
+        similarity_dataset=similarity_dataset,
+        analogy_dataset=analogy_dataset,
+        workers=workers,
+        run_similarity=run_similarity,
+        run_analogy=run_analogy
+    )
+
+    # Return evaluation results file path
+    eval_file = os.path.join(model_base, f"evaluation_results_{dir_suffix}.csv")
+    return eval_file
