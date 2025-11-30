@@ -15,6 +15,7 @@ from setproctitle import setproctitle
 from ..config import FilterConfig, PipelineConfig
 from ..filters.processor_factory import build_processor
 from ..filters.core_cy import METADATA_PREFIX
+from ..year_binning import bin_year_records
 from .progress import Counters, increment_counter
 from .write_buffer import WriteBuffer
 from ngramkit.common_db.api import open_db, range_scan
@@ -119,6 +120,7 @@ def worker_process(
                     processor,
                     worker_config,
                     pipeline_config,
+                    filter_config,
                     local_counters,
                     work_tracker,
                     counters
@@ -227,6 +229,7 @@ def _process_work_unit(
         processor,
         config: WorkerConfig,
         pipeline_config: PipelineConfig,
+        filter_config: FilterConfig,
         local_counters: Optional[dict] = None,
         work_tracker: Optional[WorkTracker] = None,
         counters: Optional[Counters] = None,
@@ -288,6 +291,7 @@ def _process_work_unit(
                 buffer,
                 config,
                 pipeline_config,
+                filter_config,
                 local_counters,
                 work_tracker,
                 counters
@@ -321,6 +325,7 @@ def _process_key_range(
         buffer: WriteBuffer,
         config: WorkerConfig,
         pipeline_config: PipelineConfig,
+        filter_config: FilterConfig,
         local_counters: Optional[dict] = None,
         work_tracker: Optional[WorkTracker] = None,
         counters: Optional[Counters] = None,
@@ -400,6 +405,10 @@ def _process_key_range(
         # Prepare for buffering
         processed_key_bytes = _ensure_bytes(processed_key)
         value_bytes = _ensure_bytes(value)
+
+        # Apply year binning if configured
+        if filter_config.bin_size > 1:
+            value_bytes = bin_year_records(value_bytes, filter_config.bin_size)
 
         since_flush['enqueued'] += 1
 

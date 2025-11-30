@@ -592,6 +592,7 @@ class PipelineOrchestrator:
             spell_check=spell_check,
             spell_check_language=spell_check_language,
             year_range=year_range,
+            bin_size=self.filter_config.bin_size,
         )
         elapsed = time.perf_counter() - start_time
 
@@ -649,6 +650,8 @@ def build_processed_db(
     whitelist_top_n: Optional[int] = None,
     # Always-include tokens configuration (used if filter_config not provided)
     always_include: Optional[Set[str]] = None,
+    # Year binning configuration (used if filter_config not provided)
+    bin_size: int = 1,
     # Pipeline execution parameters
     num_workers: Optional[int] = None,
     mode: Optional[str] = None,
@@ -694,6 +697,7 @@ def build_processed_db(
         whitelist_min_count: Minimum count threshold for whitelist tokens (default: 1)
         whitelist_top_n: Limit to top N tokens from whitelist (used if filter_config not provided)
         always_include: Set of tokens to always preserve regardless of whitelist (e.g., {"working-class", "middle-class", "nuclear"})
+        bin_size: Aggregate years into bins (1 = annual data, 5 = 5-year bins, etc.)
         num_workers: Number of parallel workers (default: cpu_count() - 1 or num_initial_work_units, whichever is lower)
         mode: "restart" (wipe all), "resume" (continue), or "reprocess" (wipe DB, keep cache)
         use_smart_partitioning: Use density-based partitioning for better load balancing
@@ -720,7 +724,7 @@ def build_processed_db(
     # Construct FilterConfig if not provided
     if filter_config is None:
         # If filter parameters provided, use them; otherwise use defaults
-        if stop_set is not None or lemma_gen is not None or whitelist_path is not None or always_include is not None:
+        if stop_set is not None or lemma_gen is not None or whitelist_path is not None or always_include is not None or bin_size != 1:
             filter_config = FilterConfig(
                 stop_set=stop_set,
                 lemma_gen=lemma_gen,
@@ -728,6 +732,7 @@ def build_processed_db(
                 whitelist_min_count=whitelist_min_count,
                 whitelist_top_n=whitelist_top_n,
                 always_include=_to_bytes_set(always_include) if always_include else None,
+                bin_size=bin_size,
             )
         else:
             filter_config = FilterConfig()

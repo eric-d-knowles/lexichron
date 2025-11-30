@@ -56,6 +56,10 @@ def print_pipeline_header(
     dst_path_str = truncate_path_to_fit(temp_paths['dst_db'], "Target DB:            ")
     tmp_path_str = truncate_path_to_fit(temp_paths['tmp_dir'], "Temp directory:       ")
 
+    # Get bin size from filter config
+    bin_size = getattr(filter_config, "bin_size", 1)
+    bin_desc = "annual data" if bin_size == 1 else f"{bin_size}-year bins"
+
     lines = [
         "",
         "N-GRAM FILTER PIPELINE",
@@ -88,6 +92,10 @@ def print_pipeline_header(
         "Worker Configuration",
         "─" * LINE_WIDTH,
         f"Flush interval:       {flush_interval}s",
+        "",
+        "Temporal Binning",
+        "─" * LINE_WIDTH,
+        f"Bin size:             {bin_size} ({bin_desc})",
         "",
     ]
 

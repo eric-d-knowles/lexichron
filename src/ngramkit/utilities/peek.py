@@ -110,7 +110,7 @@ def format_value(data: bytes, encoding: str) -> str:
         else:
             return f"<unknown format: {len(data)} bytes>"
     elif encoding == "summary":
-        # Aggregate across all years to show totals (packed24 format)
+        # Aggregate across all years/bins to show totals (packed24 format)
         try:
             if len(data) % 24 == 0:
                 num_records = len(data) // 24
@@ -125,7 +125,7 @@ def format_value(data: bytes, encoding: str) -> str:
                     year_range.append(year)
                 if year_range:
                     min_year, max_year = min(year_range), max(year_range)
-                    return f"Total: {total_count:,} occurrences in {total_volumes:,} volumes ({min_year}-{max_year}, {num_records} years)"
+                    return f"Total: {total_count:,} occurrences in {total_volumes:,} volumes ({min_year}-{max_year}, {num_records} bins)"
                 else:
                     return "No data"
             else:

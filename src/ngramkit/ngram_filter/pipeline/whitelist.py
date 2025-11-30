@@ -153,6 +153,7 @@ def _rank_all_counter(
         spell_check: bool = False,
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
+        bin_size: int = 1,
 ) -> List[Tuple[Union[str, bytes], int]]:
     """Use Counter for better performance on frequency operations.
 
@@ -162,6 +163,7 @@ def _rank_all_counter(
         spell_check: If True, only include correctly spelled words
         spell_check_language: Language for spell checking (default: en_US)
         year_range: Optional (start_year, end_year) tuple - only include ngrams present in all years
+        bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
     """
     spell_checker = _create_spell_checker(spell_check_language) if spell_check else None
 
@@ -180,7 +182,7 @@ def _rank_all_counter(
         for k, v in _iter_db_items(db):
             # Apply year range filter if enabled
             if year_range is not None:
-                if not _check_year_coverage(v, year_range):
+                if not _check_year_coverage(v, year_range, bin_size):
                     continue
 
             # Apply spell check filter if enabled
@@ -193,31 +195,59 @@ def _rank_all_counter(
     return counter.most_common()
 
 
-def _check_year_coverage(value_bytes: bytes, year_range: tuple[int, int]) -> bool:
-    """Check if an ngram has data for all years in the specified range.
+def _check_year_coverage(value_bytes: bytes, year_range: tuple[int, int], bin_size: int = 1) -> bool:
+    """Check if an ngram has data for all years/bins in the specified range.
 
     Args:
         value_bytes: Packed records (<QQQ format)
         year_range: (start_year, end_year) inclusive range
+        bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
 
     Returns:
-        True if ngram appears in all years within range, False otherwise
+        True if ngram appears in all years/bins within range, False otherwise
     """
     if len(value_bytes) < TUPLE_SIZE:
         return False
 
     start_year, end_year = year_range
-    required_years = set(range(start_year, end_year + 1))
-    years_present = set()
 
-    usable = (len(value_bytes) // TUPLE_SIZE) * TUPLE_SIZE
-    for (year, _match, _vol) in struct.iter_unpack(FMT, value_bytes[:usable]):
-        years_present.add(year)
-        # Early exit if we've found all required years
-        if required_years.issubset(years_present):
-            return True
+    # For binned data, we need to check bin coverage
+    # A bin at year Y covers [Y, Y+bin_size), so it overlaps with [start, end] if:
+    # Y < end_year+1 AND Y+bin_size > start_year
+    if bin_size > 1:
+        from ngramkit.ngram_filter.year_binning import get_bin_start
 
-    return required_years.issubset(years_present)
+        # Calculate which bins overlap with our year range
+        # A bin starting at Y covers years [Y, Y+bin_size)
+        start_bin = get_bin_start(start_year, bin_size)
+        end_bin = get_bin_start(end_year, bin_size)
+        required_bins = set(range(start_bin, end_bin + bin_size, bin_size))
+        bins_present = set()
+
+        usable = (len(value_bytes) // TUPLE_SIZE) * TUPLE_SIZE
+        for (year, _match, _vol) in struct.iter_unpack(FMT, value_bytes[:usable]):
+            # Check if this bin overlaps with our year range
+            # Bin covers [year, year+bin_size), range is [start_year, end_year]
+            if year < end_year + 1 and year + bin_size > start_year:
+                bins_present.add(year)
+                # Early exit if we've found all required bins
+                if required_bins.issubset(bins_present):
+                    return True
+
+        return required_bins.issubset(bins_present)
+    else:
+        # Original annual logic
+        required_years = set(range(start_year, end_year + 1))
+        years_present = set()
+
+        usable = (len(value_bytes) // TUPLE_SIZE) * TUPLE_SIZE
+        for (year, _match, _vol) in struct.iter_unpack(FMT, value_bytes[:usable]):
+            years_present.add(year)
+            # Early exit if we've found all required years
+            if required_years.issubset(years_present):
+                return True
+
+        return required_years.issubset(years_present)
 
 
 def _top_k_optimized(
@@ -228,6 +258,7 @@ def _top_k_optimized(
         spell_check: bool = False,
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
+        bin_size: int = 1,
 ) -> List[Tuple[Union[str, bytes], int]]:
     """Streaming top-K via min-heap (RAM ~ O(K)) with optimizations.
 
@@ -238,6 +269,7 @@ def _top_k_optimized(
         spell_check: If True, only include correctly spelled words in top K
         spell_check_language: Language for spell checking (default: en_US)
         year_range: Optional (start_year, end_year) tuple - only include ngrams present in all years
+        bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
     """
     if k <= 0:
         return []
@@ -260,7 +292,7 @@ def _top_k_optimized(
         for kbytes, vbytes in _iter_db_items(db):
             # Apply year range filter if enabled
             if year_range is not None:
-                if not _check_year_coverage(vbytes, year_range):
+                if not _check_year_coverage(vbytes, year_range, bin_size):
                     continue
 
             tot = _total_matches(vbytes)
@@ -295,6 +327,7 @@ def write_whitelist_streaming(
         spell_check: bool = False,
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
+        bin_size: int = 1,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc) using streaming.
@@ -310,6 +343,7 @@ def write_whitelist_streaming(
         spell_check: If True, only include correctly spelled words
         spell_check_language: Language for spell checking (default: en_US)
         year_range: Optional (start_year, end_year) tuple - only include ngrams present in all years
+        bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
     """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -322,7 +356,8 @@ def write_whitelist_streaming(
                 db_or_path, top, decode=decode,
                 spell_check=spell_check,
                 spell_check_language=spell_check_language,
-                year_range=year_range
+                year_range=year_range,
+                bin_size=bin_size
             )
         else:
             # Use streaming approach with Counter for better performance
@@ -330,7 +365,8 @@ def write_whitelist_streaming(
                 db_or_path, decode=decode,
                 spell_check=spell_check,
                 spell_check_language=spell_check_language,
-                year_range=year_range
+                year_range=year_range,
+                bin_size=bin_size
             )
 
         for token, total in items:
@@ -354,6 +390,7 @@ def write_whitelist(
         spell_check: bool = False,
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
+        bin_size: int = 1,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc).
@@ -370,11 +407,12 @@ def write_whitelist(
         spell_check: If True, only include correctly spelled words
         spell_check_language: Language for spell checking (default: en_US)
         year_range: Optional (start_year, end_year) tuple - only include ngrams present in all years
+        bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
     """
     return write_whitelist_streaming(
         db_or_path, dest, top=top, decode=decode, sep=sep,
         spell_check=spell_check, spell_check_language=spell_check_language,
-        year_range=year_range
+        year_range=year_range, bin_size=bin_size
     )
 
 

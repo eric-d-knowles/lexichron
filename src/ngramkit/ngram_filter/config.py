@@ -30,6 +30,9 @@ class FilterConfig:
     # Always-include tokens configuration (tokens to preserve regardless of whitelist)
     always_include: Optional[Set[bytes]] = None  # Set of tokens to always include (e.g., b"working-class", b"nuclear")
 
+    # Year binning configuration
+    bin_size: int = 1  # Aggregate years into bins (1 = annual data, 5 = 5-year bins, etc.)
+
 
 # Pipeline orchestration options
 @dataclass(frozen=True)
