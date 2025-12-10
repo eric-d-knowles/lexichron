@@ -1,13 +1,33 @@
 #!/bin/bash
 #
 # Build script for ngram-kit Apptainer container
-# This script uses srun to allocate a compute node to avoid OOM on login nodes.
+# This script uses sbatch to run on a compute node.
 #
 
 set -e
 
 DEFINITION_FILE="environment.def"
 OUTPUT_IMAGE="ngram-kit.sif"
+ACCOUNT_ARG=""
+
+# Prompt for account if needed (e.g., for NYU Torch cluster)
+read -p "Enter SLURM account name (press Enter to skip): " ACCOUNT_INPUT
+read -p "Enter CPUs: " CPUS_INPUT
+read -p "Enter memory in G: " MEMG_INPUT
+echo
+
+if [ -n "$ACCOUNT_INPUT" ]; then
+    ACCOUNT_ARG="--account=$ACCOUNT_INPUT"
+    echo "Using account: $ACCOUNT_INPUT"
+fi
+if [ -n "$CPUS_INPUT" ]; then
+    CPUS_ARG="--cpus-per-task=$CPUS_INPUT"
+    echo "Using CPUs: $CPUS_INPUT"
+fi
+if [ -n "$MEMG_INPUT" ]; then
+    MEM_ARG="--mem=${MEMG_INPUT}G"
+    echo "Using memory: ${MEMG_INPUT}G"
+fi
 
 # Check if definition file exists
 if [ ! -f "$DEFINITION_FILE" ]; then
@@ -21,16 +41,59 @@ if [ -f "$OUTPUT_IMAGE" ]; then
     rm -f "$OUTPUT_IMAGE"
 fi
 
-echo "Building Apptainer container on compute node..."
+echo
+echo "Submitting Apptainer build job to compute node..."
 echo "This may take 15-30 minutes depending on network speed."
 echo ""
 
-# Use srun to run the build on a compute node
-# Adjust --mem, --cpus-per-task, and --time as needed for your cluster
-srun --mem=32G --cpus-per-task=8 --time=01:00:00 --pty \
-    apptainer build --fakeroot "$OUTPUT_IMAGE" "$DEFINITION_FILE"
+# Submit as batch job
+JOBID=$(sbatch $ACCOUNT_ARG $CPUS_ARG $MEM_ARG --time=01:00:00 \
+    --output=apptainer-build-%j.out \
+    --job-name=apptainer-build \
+    <<EOF | awk '{print $NF}'
+#!/bin/bash
+set -e
+cd $(pwd)
+apptainer build --fakeroot "$OUTPUT_IMAGE" "$DEFINITION_FILE"
+EOF
+)
+
+OUTPUT_FILE="apptainer-build-${JOBID}.out"
+
+echo "Job submitted with ID: $JOBID"
+echo "Output file: $OUTPUT_FILE"
+echo ""
+echo "Waiting for job to start..."
+
+# Wait for output file to be created
+while [ ! -f "$OUTPUT_FILE" ]; do
+    sleep 1
+done
+
+echo "Job started! Showing output:"
+echo "=========================================="
+
+# Tail the file while job is running
+tail -f "$OUTPUT_FILE" &
+TAIL_PID=$!
+
+# Monitor job status
+while true; do
+    JOB_STATE=$(squeue -j $JOBID -h -o %T 2>/dev/null || echo "COMPLETED")
+    if [[ "$JOB_STATE" != "RUNNING" && "$JOB_STATE" != "PENDING" ]]; then
+        break
+    fi
+    sleep 2
+done
+
+# Kill the tail process
+kill $TAIL_PID 2>/dev/null
+
+# Show any remaining output
+cat "$OUTPUT_FILE"
 
 echo ""
+echo "=========================================="
 echo "Build complete! Container image: $OUTPUT_IMAGE"
 echo ""
 echo "Test with:"
