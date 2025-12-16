@@ -53,7 +53,8 @@ def set_info(corpus_path, dir_suffix):
 
     Args:
         corpus_path (str): Full path to corpus directory containing the database.
-                          e.g., '/scratch/edk202/NLP_corpora/Google_Books/20200217/eng/5gram_files'
+                          For ngrams: '/scratch/edk202/NLP_corpora/Google_Books/20200217/eng/5gram_files'
+                          For Davies: '/scratch/edk202/NLP_corpora/COHA'
         dir_suffix (str): Suffix for model and log directories.
 
     Returns:
@@ -61,16 +62,23 @@ def set_info(corpus_path, dir_suffix):
     """
     start_time = datetime.now()
 
-    # Extract ngram size from corpus path (e.g., '5gram_files' -> 5)
+    # Check if this is an ngram corpus or a Davies corpus
     basename = os.path.basename(corpus_path)
-    if 'gram_files' not in basename:
-        raise ValueError(
-            f"corpus_path must end with 'Xgram_files' but got: {corpus_path}"
-        )
-    ngram_size = basename.replace('gram_files', '')
+    if 'gram_files' in basename:
+        # Ngram corpus: Extract ngram size from corpus path (e.g., '5gram_files' -> 5)
+        ngram_size = basename.replace('gram_files', '')
+        db_path = os.path.join(corpus_path, f"{ngram_size}grams_pivoted.db")
+    else:
+        # Davies corpus: Look for filtered database in subdirectory
+        corpus_name = basename
+        db_path = os.path.join(corpus_path, f"{corpus_name}_filtered")
 
-    # Database path
-    db_path = os.path.join(corpus_path, f"{ngram_size}grams_pivoted.db")
+        # Verify database exists
+        if not os.path.exists(db_path):
+            raise ValueError(
+                f"Database not found at {db_path}. "
+                f"For Davies corpora, expected '{corpus_name}_filtered' subdirectory."
+            )
 
     # Construct parallel model path
     model_base = construct_model_path(corpus_path)

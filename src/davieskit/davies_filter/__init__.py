@@ -15,9 +15,12 @@ Key components:
 
 from .core import filter_davies_corpus
 from .config import FilterConfig, PipelineConfig
+from .whitelist import write_whitelist, load_whitelist
 
 __all__ = [
     "filter_davies_corpus",
     "FilterConfig",
     "PipelineConfig",
+    "write_whitelist",
+    "load_whitelist",
 ]

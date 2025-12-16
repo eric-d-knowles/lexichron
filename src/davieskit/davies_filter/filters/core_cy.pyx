@@ -66,15 +66,18 @@ cpdef bytes process_sentence(
     int  min_len = 3,
     object stop_set = None,
     object lemma_gen = None,
+    object whitelist = None,
     bytearray outbuf = None
 ):
     """
     Process a sentence (space-separated tokens):
-      tokenize -> lower -> alpha -> shorts -> stops -> lemmas
+      tokenize -> lower -> whitelist (if enabled) -> alpha -> shorts -> stops -> lemmas
 
     Returns b"" if all tokens become <UNK> or fewer than 2 tokens remain.
 
     Unlike ngram processing, Davies sentences have no POS tags embedded.
+
+    If whitelist is provided, tokens not in whitelist become <UNK> (checked after lowercasing).
     """
     cdef Py_ssize_t N = sentence.__len__()
     if N == 0:
@@ -86,6 +89,7 @@ cpdef bytes process_sentence(
     cdef bint do_alpha  = opt_alpha
     cdef bint do_shorts = opt_shorts
     cdef bint do_stops  = (opt_stops and stop_set is not None)
+    cdef bint do_whitelist = (whitelist is not None)
 
     # prep output buffer
     if outbuf is None:
@@ -129,6 +133,11 @@ cpdef bytes process_sentence(
         # Lowercase first
         if do_lower:
             tok_b = tok_b.lower()
+
+        # Whitelist filter (after lowercasing, before other filters)
+        if not is_unk and do_whitelist:
+            if tok_b not in whitelist:
+                is_unk = 1
 
         # Alpha filter
         if do_alpha:

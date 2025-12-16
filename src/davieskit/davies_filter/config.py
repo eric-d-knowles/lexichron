@@ -13,7 +13,7 @@ class FilterConfig:
     """
     Configuration for Davies sentence filtering.
 
-    Similar to ngram FilterConfig but simpler (no whitelist, no POS tags).
+    Similar to ngram FilterConfig but simpler (no POS tags).
     """
     lowercase: bool = True
     alpha_only: bool = True
@@ -23,6 +23,7 @@ class FilterConfig:
     min_len: int = 3
     stop_set: Optional[Set[str]] = None
     lemma_gen: Any = None  # Lemmatizer instance
+    whitelist: Optional[Set[bytes]] = None  # Whitelist of allowed tokens (bytes)
 
 
 @dataclass(frozen=True)

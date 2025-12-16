@@ -6,47 +6,86 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Dict
 from datetime import datetime, timedelta
 from concurrent.futures import ProcessPoolExecutor, as_completed
+
+from tqdm import tqdm
 
 from ngramkit.common_db.api import open_db
 from ngramkit.utilities.display import format_banner, format_bytes
 
-from .reader import discover_text_files, extract_year_from_filename, read_text_file
+from .reader import discover_text_files, extract_year_from_filename, read_text_file_with_genre
 from .tokenizer import tokenize_sentences
-from .writer import SentenceBatchWriter
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["ingest_davies_corpus"]
 
+# Try to import setproctitle (optional dependency)
+try:
+    import setproctitle as _setproctitle
+except ImportError:
+    _setproctitle = None
+
 
 def process_single_file(
     zip_path: Path,
     year: int,
-) -> Tuple[str, int, int]:
+    worker_id: int = 0,
+    track_genre: bool = True,
+) -> Tuple[str, int, int, Dict, Dict[str, int]]:
     """
-    Process a single text file: read, tokenize, return sentences.
+    Process a single text file: read, tokenize, accumulate sentence counts.
 
-    This function runs in a worker process.
+    This function runs in a worker process and returns sentence counts to be merged
+    into the main database.
 
     Args:
         zip_path: Path to zip file
         year: Year for this file
+        worker_id: Worker identifier for process naming
+        track_genre: If True, include genre in keys
 
     Returns:
-        Tuple of (filename, sentence_count, error_count)
+        Tuple of (filename, sentence_count, error_count, sentence_data, genre_stats)
+        where sentence_data is Dict[(genre, year, sentence_str)] -> count (if track_genre)
+                            or Dict[(year, sentence_str)] -> count (if not track_genre)
+        and genre_stats is Dict[genre] -> count
     """
+    from collections import defaultdict
+
+    # Set process title if available (helps with process monitoring)
+    if _setproctitle is not None:
+        try:
+            _setproctitle.setproctitle(f"dava:worker[{worker_id:03d}]")
+        except Exception:
+            pass
+
     sentence_count = 0
     error_count = 0
+    sentence_data: Dict = defaultdict(int)
+    genre_stats: Dict[str, int] = defaultdict(int)
 
     try:
-        # Read documents from zip file
-        for doc_year, text in read_text_file(zip_path, year):
+        # Read documents from zip file with genre
+        for doc_year, text, genre in read_text_file_with_genre(zip_path, year):
             try:
                 # Tokenize into sentences
                 for tokens in tokenize_sentences(text):
+                    sentence_str = ' '.join(tokens)
+
+                    if track_genre:
+                        # Track genre in key: (genre, year, sentence_str)
+                        genre_key = genre if genre is not None else 'unknown'
+                        sentence_data[(genre_key, doc_year, sentence_str)] += 1
+                        genre_stats[genre_key] += 1
+                    else:
+                        # No genre in key: (year, sentence_str)
+                        sentence_data[(doc_year, sentence_str)] += 1
+                        if genre:
+                            genre_stats[genre] += 1
+
                     sentence_count += 1
             except Exception as e:
                 logger.warning(f"Error tokenizing document in {zip_path.name}: {e}")
@@ -56,7 +95,7 @@ def process_single_file(
         logger.error(f"Error processing {zip_path.name}: {e}")
         error_count += 1
 
-    return zip_path.name, sentence_count, error_count
+    return zip_path.name, sentence_count, error_count, sentence_data, genre_stats
 
 
 def _perform_compaction(db, db_path: Path) -> None:
@@ -112,7 +151,8 @@ def ingest_davies_corpus(
     db_path_stub: str,
     workers: Optional[int] = None,
     write_batch_size: int = 100_000,
-    compact_after_ingest: bool = False,
+    compact_after: bool = False,
+    track_genre: bool = True,
 ) -> None:
     """
     Main pipeline: read Davies corpus text files and ingest into RocksDB.
@@ -120,17 +160,27 @@ def ingest_davies_corpus(
     Orchestrates the complete Davies acquisition workflow:
     1. Discovers text files in corpus directory
     2. Opens/creates RocksDB in pivoted format
-    3. Reads and tokenizes text files
-    4. Writes sentences directly to pivoted DB: (year, tokens) -> ()
+    3. Reads and tokenizes text files (optionally with genre information)
+    4. Writes sentences to pivoted DB:
+       - If track_genre=True: (genre, year, tokens) -> ()
+       - If track_genre=False: (year, tokens) -> ()
     5. Optionally performs post-ingestion compaction
 
     Args:
         db_path_stub: Base path containing corpus name (e.g., "/path/to/COHA")
         workers: Number of concurrent workers (default: cpu_count - 1)
         write_batch_size: Number of sentences per batch write
-        compact_after_ingest: If True, perform full compaction after ingestion
+        compact_after: If True, perform full compaction after ingestion
+        track_genre: If True, include genre in keys (default: True)
     """
-    logger.info("Starting Davies corpus acquisition pipeline")
+    # Set main process title if available
+    if _setproctitle is not None:
+        try:
+            _setproctitle.setproctitle("dava:main")
+        except Exception:
+            pass
+
+    logger.info("Starting Davies corpus acquisition pipeline with genre support")
     start_time = datetime.now()
 
     # Extract corpus name from db_path_stub
@@ -140,8 +190,8 @@ def ingest_davies_corpus(
     # Corpus path is the same as db_path_stub
     corpus_path = db_path_stub_obj
 
-    # Database path is db_path_stub/db
-    db_path = db_path_stub_obj / "db"
+    # Database path is db_path_stub/{corpus_name}
+    db_path = db_path_stub_obj / corpus_name
 
     # Validate corpus path
     corpus_path = Path(corpus_path)
@@ -198,6 +248,7 @@ def ingest_davies_corpus(
     print(f"Text files found:     {len(file_year_pairs)}")
     print(f"Workers:              {workers}")
     print(f"Batch size:           {write_batch_size:,}")
+    print(f"Genre tracking:       {'Enabled' if track_genre else 'Disabled'}")
     print()
     print(format_banner("Processing Files"))
     sys.stdout.flush()
@@ -205,43 +256,73 @@ def ingest_davies_corpus(
     # Open database and create writer
     logger.info("Opening database...")
     with open_db(db_path, profile="write:packed24", create_if_missing=True) as db:
-        writer = SentenceBatchWriter(db, batch_size=write_batch_size)
+        # Choose writer based on genre tracking
+        if track_genre:
+            from .writer import SentenceBatchWriterWithGenre
+            writer = SentenceBatchWriterWithGenre(db, batch_size=write_batch_size)
+        else:
+            from .writer import SentenceBatchWriter
+            writer = SentenceBatchWriter(db, batch_size=write_batch_size)
 
         total_sentences = 0
         total_errors = 0
         files_processed = 0
+        genre_stats = {}
 
-        # Process files sequentially for now (easier to track progress)
-        # TODO: Add parallel processing later
-        for text_file, year in file_year_pairs:
-            try:
-                # Read and tokenize documents
-                file_sentences = 0
-                for doc_year, text in read_text_file(text_file, year):
-                    for tokens in tokenize_sentences(text):
-                        writer.add(year, tokens)
-                        file_sentences += 1
+        # Process files in parallel with progress bar
+        with tqdm(
+            total=len(file_year_pairs),
+            desc="Files Processed",
+            unit="files",
+            ncols=100,
+            bar_format='{desc}: {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]'
+        ) as pbar:
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                # Submit all files for processing with worker IDs
+                future_to_file = {
+                    executor.submit(process_single_file, text_file, year, worker_id, track_genre): (text_file, year)
+                    for worker_id, (text_file, year) in enumerate(file_year_pairs)
+                }
 
-                total_sentences += file_sentences
-                files_processed += 1
+                # Process completed futures as they finish
+                for future in as_completed(future_to_file):
+                    text_file, year = future_to_file[future]
+                    try:
+                        filename, sentence_count, error_count, sentence_data, file_genre_stats = future.result()
 
-                # Print progress every 5 files
-                if files_processed % 5 == 0:
-                    print(f"  Processed {files_processed}/{len(file_year_pairs)} files "
-                          f"({total_sentences:,} sentences)")
-                    sys.stdout.flush()
+                        # Write sentences to database
+                        if track_genre:
+                            for (genre, year, sentence_str), count in sentence_data.items():
+                                tokens = sentence_str.split()
+                                for _ in range(count):
+                                    writer.add(year, tokens, genre)
+                        else:
+                            for (year, sentence_str), count in sentence_data.items():
+                                tokens = sentence_str.split()
+                                for _ in range(count):
+                                    writer.add(year, tokens)
 
-            except Exception as e:
-                logger.error(f"Error processing {text_file.name}: {e}")
-                total_errors += 1
-                continue
+                        # Update totals
+                        total_sentences += sentence_count
+                        files_processed += 1
+
+                        # Merge genre stats
+                        for genre, count in file_genre_stats.items():
+                            genre_stats[genre] = genre_stats.get(genre, 0) + count
+
+                    except Exception as e:
+                        logger.error(f"Error processing {text_file.name}: {e}")
+                        total_errors += 1
+                    finally:
+                        # Update progress bar
+                        pbar.update(1)
 
         # Flush remaining sentences
         logger.info("Flushing remaining sentences...")
         writer.close()
 
         # Optional post-ingestion compaction
-        if compact_after_ingest:
+        if compact_after:
             _perform_compaction(db, db_path)
 
     # Print completion summary
@@ -256,8 +337,16 @@ def ingest_davies_corpus(
     print(f"Total sentences written:  {total_sentences:,}")
     print(f"Database path:            {db_path}")
     print()
+    if track_genre and genre_stats:
+        print("Genre breakdown:")
+        for genre, count in sorted(genre_stats.items()):
+            print(f"  {genre:10s} {count:,} sentences")
+        print()
     print(f"End Time: {end_time:%Y-%m-%d %H:%M:%S}")
     print(f"Total Runtime: {elapsed}")
     print()
 
-    logger.info(f"Acquisition complete: {total_sentences:,} sentences written")
+    if track_genre:
+        logger.info(f"Acquisition complete: {total_sentences:,} sentences written with genre metadata")
+    else:
+        logger.info(f"Acquisition complete: {total_sentences:,} sentences written")

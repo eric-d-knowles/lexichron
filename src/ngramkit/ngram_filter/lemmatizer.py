@@ -80,16 +80,15 @@ class SpacyLemmatizer:
         """
         Lemmatize a single word given its POS tag.
 
-        Uses a hybrid approach:
-        1. Try lookup table first (avoids "other" → "oth" errors)
-        2. If word not in lookup table, fall back to rule-based lemmatization
+        Uses lookup table only to avoid morphological truncation errors.
+        If word is not in lookup table, returns the word unchanged.
 
         Args:
             word: The word to lemmatize
             pos: spaCy POS tag (NOUN, VERB, ADJ, ADV, etc.)
 
         Returns:
-            The lemmatized form of the word
+            The lemmatized form of the word, or the original word if not in lookup
 
         Note: This creates a Doc for each word, which has overhead.
         For better performance, consider using a caching wrapper or
@@ -104,15 +103,9 @@ class SpacyLemmatizer:
             doc = self.nlp.get_pipe("lemmatizer_lookup")(doc)
             return doc[0].lemma_
 
-        # Word not in lookup table, fall back to rule-based lemmatization with POS tag
-        doc = Doc(self.nlp.vocab, words=[word], pos=[pos])
-        # Set morphology to avoid incorrect suffix stripping on edge cases
-        if pos == "ADJ":
-            doc[0].set_morph("Degree=Pos")
-        elif pos == "VERB":
-            doc[0].set_morph("VerbForm=Inf")
-        doc = self.rule_lemmatizer(doc)
-        return doc[0].lemma_
+        # Word not in lookup table, return unchanged to avoid morphological truncation
+        # (e.g., "business" → "busines", "success" → "succes")
+        return word
 
 
 class CachedSpacyLemmatizer(SpacyLemmatizer):
@@ -152,14 +145,8 @@ class CachedSpacyLemmatizer(SpacyLemmatizer):
             doc = self.nlp.get_pipe("lemmatizer_lookup")(doc)
             return doc[0].lemma_
 
-        # Word not in lookup table, fall back to rule-based with morphology
-        doc = Doc(self.nlp.vocab, words=[word], pos=[pos])
-        if pos == "ADJ":
-            doc[0].set_morph("Degree=Pos")
-        elif pos == "VERB":
-            doc[0].set_morph("VerbForm=Inf")
-        doc = self.rule_lemmatizer(doc)
-        return doc[0].lemma_
+        # Word not in lookup table, return unchanged to avoid morphological truncation
+        return word
 
     def lemmatize(self, word: str, pos: str = "NOUN") -> str:
         """Lemmatize with caching."""

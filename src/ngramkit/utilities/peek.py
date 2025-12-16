@@ -4,6 +4,36 @@ import struct
 import re
 
 
+def parse_davies_key(key_str: str) -> bytes:
+    """
+    Parse a human-readable Davies key string like "[fic][2000] quick" into bytes.
+
+    Args:
+        key_str: String in format "[genre][year] text", "[genre][year]", etc.
+
+    Returns:
+        Encoded key bytes (4-byte genre + 8-byte year + text)
+    """
+    # Match pattern: [genre][year] optional_text
+    match = re.match(r'\[([a-z]+)\]\[(\d+)\]\s*(.*)', key_str)
+    if match:
+        genre = match.group(1)
+        year = int(match.group(2))
+        text = match.group(3)
+
+        # Encode genre as 4-byte fixed-width field
+        genre_bytes = genre.encode('utf-8')[:4].ljust(4, b'\x00')
+        # Encode year as 8-byte little-endian unsigned long
+        year_bytes = struct.pack('<Q', year)
+        # Encode text
+        text_bytes = text.encode('utf-8') if text else b''
+
+        return genre_bytes + year_bytes + text_bytes
+    else:
+        # Not Davies format, return None to signal fallback
+        return None
+
+
 def parse_pivot_key(key_str: str) -> bytes:
     """
     Parse a human-readable pivot key string like "[2000] quick" or "[2000]" into bytes.
@@ -33,12 +63,17 @@ def normalize_key(key: Union[str, bytes]) -> bytes:
     Normalize key input to bytes, handling both strings and bytes.
 
     Args:
-        key: Either bytes or a string (will parse as pivot key if starts with [year])
+        key: Either bytes or a string (will parse as Davies or pivot key)
 
     Returns:
         Key as bytes
     """
     if isinstance(key, str):
+        # Try Davies format first ([genre][year] text)
+        davies_key = parse_davies_key(key)
+        if davies_key is not None:
+            return davies_key
+        # Fall back to pivot format ([year] text)
         return parse_pivot_key(key)
     return key
 
@@ -64,8 +99,37 @@ def format_key(data: bytes, encoding: str) -> str:
                 return f"<invalid pivot key: {len(data)} bytes>"
         except struct.error as e:
             return f"<pack error: {e}>"
+    elif encoding == "davies":
+        # Decode Davies key: 4 bytes genre + 8 bytes year + sentence text
+        try:
+            if len(data) >= 12:
+                genre_bytes = data[:4]
+                genre = genre_bytes.rstrip(b'\x00').decode('utf-8')
+                year = struct.unpack('<Q', data[4:12])[0]
+                sentence = data[12:]
+                try:
+                    sentence_str = sentence.decode('utf-8')
+                    return f"[{genre}][{year}] {sentence_str}"
+                except UnicodeDecodeError:
+                    return f"[{genre}][{year}] <binary: {sentence.hex()[:40]}{'...' if len(sentence) > 20 else ''}>"
+            else:
+                return f"<invalid davies key: {len(data)} bytes>"
+        except (struct.error, UnicodeDecodeError) as e:
+            return f"<decode error: {e}>"
     elif encoding == "auto":
-        # Auto-detect: if first 4 bytes look like a reasonable year, assume pivot format
+        # Auto-detect format
+        # Try Davies format first (4-byte genre + 8-byte year + text)
+        if len(data) >= 12:
+            try:
+                genre_bytes = data[:4]
+                genre = genre_bytes.rstrip(b'\x00').decode('utf-8')
+                year = struct.unpack('<Q', data[4:12])[0]
+                # Check if genre looks like text and year is reasonable
+                if genre.isalpha() and 1000 <= year <= 2100:
+                    return format_key(data, "davies")
+            except:
+                pass
+        # Try pivot format (4-byte year + text)
         if len(data) >= 4:
             try:
                 year = struct.unpack('>I', data[:4])[0]
@@ -172,7 +236,7 @@ def format_value(data: bytes, encoding: str) -> str:
 
 def db_head(db_path: str, n: int = 10, key_format: str = "auto", value_format: str = "auto"):
     """Show first N key-value pairs from RocksDB"""
-    with open_db(db_path, mode="r", profile="read") as db:
+    with open_db(db_path, mode="r", profile="read:packed24") as db:
         print(f"First {n} key-value pairs:")
         print("─" * 100)
         count = 0
@@ -287,7 +351,7 @@ def db_get(db_path: str, key: Union[str, bytes], value_format: str = "auto") -> 
     # Normalize key to bytes
     key_bytes = normalize_key(key)
 
-    with open_db(db_path, mode="r", profile="read") as db:
+    with open_db(db_path, mode="r", profile="read:packed24") as db:
         try:
             result = db.get(key_bytes)
             if result is not None:

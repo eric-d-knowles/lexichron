@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "discover_text_files",
     "extract_year_from_filename",
+    "extract_genre_from_filename",
     "read_text_file",
+    "read_text_file_with_genre",
 ]
 
 
@@ -86,6 +88,32 @@ def extract_year_from_filename(
     raise ValueError(f"Could not extract year from filename: {filename}")
 
 
+def extract_genre_from_filename(filename: str) -> Optional[str]:
+    """
+    Extract genre code from Davies corpus text filename.
+
+    Davies text files follow the pattern: {genre}_{year}_{doc_id}.txt
+    Examples: mag_1815_552651.txt, nf_1816_747562.txt, fic_1920_123456.txt
+
+    Args:
+        filename: Filename to parse (e.g., "mag_1815_552651.txt")
+
+    Returns:
+        Genre code (e.g., "mag", "nf", "fic") or None if pattern doesn't match
+
+    Example:
+        >>> extract_genre_from_filename("mag_1815_552651.txt")
+        'mag'
+        >>> extract_genre_from_filename("fic_1920_123456.txt")
+        'fic'
+    """
+    # Pattern: genre_year_docid.txt
+    match = re.match(r'^([a-z]+)_\d{4}_\d+\.txt$', filename)
+    if match:
+        return match.group(1)
+    return None
+
+
 def read_text_file(
     zip_path: Path,
     year: int,
@@ -135,6 +163,69 @@ def read_text_file(
                     # Only yield if there's actual content
                     if content.strip():
                         yield year, content
+
+                except Exception as e:
+                    logger.warning(f"Error reading {txt_file} from {zip_path.name}: {e}")
+                    continue
+
+    except Exception as e:
+        logger.error(f"Error opening {zip_path}: {e}")
+        raise
+
+
+def read_text_file_with_genre(
+    zip_path: Path,
+    year: int,
+) -> Iterator[Tuple[int, str, Optional[str]]]:
+    """
+    Read and yield document text with genre metadata from a Davies corpus zip file.
+
+    Each zip contains multiple text documents with filenames like genre_year_docid.txt.
+    This function yields the text content of each document along with its year and genre.
+
+    Args:
+        zip_path: Path to zip file
+        year: Year associated with this file (for fallback)
+
+    Yields:
+        Tuples of (year, document_text, genre_code)
+
+    Example:
+        >>> for year, text, genre in read_text_file_with_genre(Path("text_1810s.zip"), 1810):
+        ...     print(f"Year {year}, Genre {genre}: {len(text)} chars")
+        Year 1815, Genre mag: 66444 chars
+    """
+    logger.debug(f"Reading {zip_path.name} (year={year})")
+
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Get all .txt files in the archive
+            txt_files = [f for f in zf.namelist() if f.endswith('.txt')]
+
+            if not txt_files:
+                logger.warning(f"No .txt files found in {zip_path.name}")
+                return
+
+            for txt_file in txt_files:
+                try:
+                    # Extract genre from filename
+                    genre = extract_genre_from_filename(Path(txt_file).name)
+
+                    # Read file content
+                    with zf.open(txt_file) as f:
+                        content = f.read().decode('utf-8', errors='replace')
+
+                    # Skip document ID markers (e.g., "@@552651")
+                    # These appear at the start of COHA text files
+                    if content.startswith('@@'):
+                        # Remove the marker line
+                        lines = content.split('\n', 1)
+                        if len(lines) > 1:
+                            content = lines[1]
+
+                    # Only yield if there's actual content
+                    if content.strip():
+                        yield year, content, genre
 
                 except Exception as e:
                     logger.warning(f"Error reading {txt_file} from {zip_path.name}: {e}")

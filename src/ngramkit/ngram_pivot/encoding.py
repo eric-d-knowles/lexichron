@@ -80,15 +80,22 @@ def decode_year_stats(value: bytes) -> Tuple[int, int]:
     Decode year statistics from packed value.
 
     Args:
-        value: 16-byte packed value
+        value: Packed value (16 or 24 bytes)
+               16 bytes: (occurrences, documents) - ngram format
+               24 bytes: (year, occurrences, documents) - Davies format
 
     Returns:
         Tuple of (occurrences, documents)
     """
-    if len(value) != 16:
-        raise ValueError(f"Expected 16-byte value, got {len(value)} bytes")
-
-    return struct.unpack('<QQ', value)
+    if len(value) == 16:
+        # Ngram format: (occurrences, documents)
+        return struct.unpack('<QQ', value)
+    elif len(value) == 24:
+        # Davies format: (year, occurrences, documents) - skip year, return rest
+        year, occurrences, documents = struct.unpack('<QQQ', value)
+        return (occurrences, documents)
+    else:
+        raise ValueError(f"Expected 16 or 24 byte value, got {len(value)} bytes")
 
 
 def decode_packed24_records(value: bytes) -> List[Tuple[int, int, int]]:

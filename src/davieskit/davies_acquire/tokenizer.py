@@ -60,6 +60,7 @@ def tokenize_sentence(sentence: str) -> List[str]:
     Tokenize a single sentence into words.
 
     Uses simple whitespace splitting with some cleanup.
+    Filters out COHA markup symbols like @ and other standalone punctuation.
 
     Args:
         sentence: Sentence text
@@ -78,8 +79,8 @@ def tokenize_sentence(sentence: str) -> List[str]:
     # Remove empty tokens and clean up
     tokens = [t for t in tokens if t]
 
-    # Remove standalone punctuation
-    tokens = [t for t in tokens if not re.match(r'^[.!?,;:"\'\-]+$', t)]
+    # Remove standalone punctuation and COHA markup symbols (@)
+    tokens = [t for t in tokens if not re.match(r'^[.!?,;:"\'\-@]+$', t)]
 
     return tokens
 
