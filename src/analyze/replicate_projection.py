@@ -29,8 +29,12 @@ noise reduction that averaging buys is reflected in the estimate.
 
 from __future__ import annotations
 
+import multiprocessing
+import gc
+import os
 import re
 import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -254,6 +258,60 @@ def require_one_per_year(catalog: pd.DataFrame) -> Dict[int, Path]:
 # 3. The replicate path
 # --------------------------------------------------------------------------
 
+def _drop_page_cache(path: Union[str, Path]) -> None:
+    """Advise the kernel to evict this file's page cache (Linux, best-effort).
+
+    Each replica is mmap'd once and never revisited, but the page cache it
+    populates otherwise lingers until reclaimed under pressure. At ensemble
+    scale (thousands of ~35MB files) that pins a cgroup's memory.current near
+    memory.max even with no real leak (anon/RSS stays flat; only page cache
+    grows) -- confirmed via /sys/fs/cgroup/.../memory.stat showing `file` in
+    the tens of GB vs. `anon` in the low GB. POSIX_FADV_DONTNEED lets the
+    kernel drop those pages immediately instead of waiting for reclaim.
+    """
+    try:
+        fd = os.open(str(path), os.O_RDONLY)
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        finally:
+            os.close(fd)
+    except (OSError, AttributeError):
+        pass
+
+
+def _project_replicate_worker(
+    *,
+    path: str,
+    year: int,
+    replicate: str,
+    all_words: Sequence[str],
+    token_contrasts: Sequence[tuple],
+    method: str,
+    ensure_sign_positive: Optional[Union[bool, List[str]]],
+    method_kwargs: Dict[str, object],
+) -> Tuple[Tuple[int, str], Optional[Dict[str, float]], Optional[np.ndarray], Optional[str]]:
+    """Worker for one replicate projection, safe for process pools."""
+    key = (int(year), str(replicate))
+    model = None
+    try:
+        model = W2VModel(path)
+        row, dimension, _ = project_one_model(
+            model,
+            all_words,
+            token_contrasts,
+            method=method,
+            ensure_sign_positive=ensure_sign_positive,
+            **method_kwargs,
+        )
+        return key, row, dimension, None
+    except Exception as exc:  # noqa: BLE001
+        return key, None, None, str(exc)
+    finally:
+        del model
+        gc.collect()
+        _drop_page_cache(path)
+
+
 def compute_projection_over_replicates(
     model_dir: Union[str, Path],
     token_contrasts: Sequence[tuple],
@@ -267,6 +325,8 @@ def compute_projection_over_replicates(
     glob_pattern: str = "*.kv",
     recursive: bool = True,
     ensure_sign_positive: Optional[Union[bool, List[str]]] = True,
+    n_jobs: int = 1,
+    mp_start_method: Optional[str] = None,
     verbose: bool = True,
     **method_kwargs,
 ) -> Dict[str, object]:
@@ -291,6 +351,13 @@ def compute_projection_over_replicates(
         'catalog'         : the full discovery frame
         'dimensions'      : (year, replicate) -> fitted dimension vector
         'error_models'    : (year, replicate) -> error string
+
+    Parallelism
+    -----------
+    Set ``n_jobs`` > 1 to process replicates in parallel via
+    ``ProcessPoolExecutor``. ``n_jobs=1`` keeps the original serial behavior.
+    On Linux the default start method is used unless ``mp_start_method`` is
+    passed explicitly (e.g. ``"spawn"`` for stricter process isolation).
     """
     catalog = discover_models(
         model_dir, glob_pattern=glob_pattern,
@@ -333,21 +400,61 @@ def compute_projection_over_replicates(
     dimensions: Dict[Tuple[int, str], np.ndarray] = {}
     error_models: Dict[Tuple[int, str], str] = {}
 
-    for rec in catalog.itertuples(index=False):
-        key = (int(rec.year), str(rec.replicate))
-        try:
-            model = W2VModel(str(rec.path))
-            row, dimension, _ = project_one_model(
-                model, all_words, token_contrasts,
-                method=method, ensure_sign_positive=ensure_sign_positive,
-                **method_kwargs,
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be >= 1")
+
+    records = list(catalog.itertuples(index=False))
+
+    # Each replicate is a distinct mmap'd .kv file (tens of MB). Serial mode
+    # keeps peak RSS near one model; process mode spreads work across workers.
+    if n_jobs == 1:
+        for rec in records:
+            key, row, dimension, err = _project_replicate_worker(
+                path=str(rec.path),
+                year=int(rec.year),
+                replicate=str(rec.replicate),
+                all_words=all_words,
+                token_contrasts=token_contrasts,
+                method=method,
+                ensure_sign_positive=ensure_sign_positive,
+                method_kwargs=method_kwargs,
             )
-            rows[key] = row
-            dimensions[key] = dimension
-        except Exception as exc:  # noqa: BLE001
-            error_models[key] = str(exc)
-            if verbose:
-                print(f"   ⚠️ {key}: {exc}")
+            if err is not None:
+                error_models[key] = err
+                if verbose:
+                    print(f"   ⚠️ {key}: {err}")
+            else:
+                rows[key] = row  # type: ignore[assignment]
+                dimensions[key] = dimension  # type: ignore[assignment]
+    else:
+        ctx = (multiprocessing.get_context(mp_start_method)
+               if mp_start_method else None)
+        if verbose:
+            print(f"   Parallel workers: {n_jobs}")
+        with ProcessPoolExecutor(max_workers=n_jobs, mp_context=ctx) as ex:
+            futures = [
+                ex.submit(
+                    _project_replicate_worker,
+                    path=str(rec.path),
+                    year=int(rec.year),
+                    replicate=str(rec.replicate),
+                    all_words=all_words,
+                    token_contrasts=token_contrasts,
+                    method=method,
+                    ensure_sign_positive=ensure_sign_positive,
+                    method_kwargs=method_kwargs,
+                )
+                for rec in records
+            ]
+            for fut in as_completed(futures):
+                key, row, dimension, err = fut.result()
+                if err is not None:
+                    error_models[key] = err
+                    if verbose:
+                        print(f"   ⚠️ {key}: {err}")
+                else:
+                    rows[key] = row  # type: ignore[assignment]
+                    dimensions[key] = dimension  # type: ignore[assignment]
 
     if not rows:
         raise RuntimeError("Every replicate failed; see error_models.")

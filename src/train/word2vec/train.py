@@ -161,7 +161,13 @@ def train_models(
         temp_dir=None,
         debug_sample=0,
         debug_interval=0,
-        genre_focus: Optional[List[str]] = None
+        genre_focus: Optional[List[str]] = None,
+        noise_enabled=False,
+        noise_resampling="poisson_counts",
+        n_corpus_replicates=1,
+        n_seed_repeats=1,
+        noise_seed=None,
+        noise_error_space="unit",
 ):
     """
     Train Word2Vec models for multiple years from RocksDB.
@@ -217,6 +223,41 @@ def train_models(
         genre_focus (list): Optional list of genres for Davies corpora (e.g., ['fic']).
                            Used to locate the correct filtered database (e.g., COHA_fic_filtered).
                            If None, looks for plain corpus database (e.g., COHA_filtered).
+                noise_enabled (bool): If True, train a noise ensemble instead of a single
+                                                         model per grid cell -- n_corpus_replicates x
+                                                         n_seed_repeats Word2Vec fits per (year, hyperparameter
+                                                         cell), used to proxy embedding measurement error.
+                                                         Written to a separate `model_dir/_noise/` subtree;
+                                                         does not affect or overwrite ordinary model output.
+                                                         Requires use_corpus_file=True. Default: False.
+                noise_resampling (str): Corpus-resampling method for noise ensembles. One of:
+                                                             - 'seed_only': No corpus perturbation; every corpus
+                                                                 replicate is identical, so n_corpus_replicates
+                                                                 must be 1 and all variation comes from
+                                                                 n_seed_repeats (training/optimizer noise only).
+                                                             - 'poisson_counts': Independently Poisson-resample
+                                                                 each n-gram's occurrence/document counts per
+                                                                 corpus replicate (corpus-sampling noise).
+                                                             - 'document_bootstrap': Not yet implemented (the
+                                                                 pivoted n-gram database does not retain
+                                                                 per-document identity).
+                                                             Default: 'poisson_counts'.
+                n_corpus_replicates (int): Number of distinct corpus replicates (B) per
+                                                                    (year, hyperparameter cell) when noise_enabled=True.
+                                                                    Must be 1 when noise_resampling='seed_only'.
+                                                                    Default: 1.
+                n_seed_repeats (int): Number of Word2Vec training seeds (S) per corpus
+                                                         replicate when noise_enabled=True. Default: 1.
+                noise_seed (int): Required top-level seed when noise_enabled=True. All
+                                                 per-replicate corpus-resampling and training seeds are
+                                                 deterministically derived from
+                                                 (noise_seed, year, corpus_replicate[, seed_repeat]).
+                                                 Default: None.
+                noise_error_space (str): 'unit' (directional/cosine-space noise, the
+                                                                intended eventual default for downstream noise
+                                                                statistics) or 'raw'. Recorded in ensemble
+                                                                manifests; not yet consumed by this module.
+                                                                Default: 'unit'.
     """
     # Generate default suffix if not provided
     if dir_suffix is None:
@@ -230,9 +271,46 @@ def train_models(
     approach = ensure_iterable(approach)
     epochs = ensure_iterable(epochs)
 
+    noise_config = validate_noise_config(
+        noise_enabled=noise_enabled,
+        noise_resampling=noise_resampling,
+        n_corpus_replicates=n_corpus_replicates,
+        n_seed_repeats=n_seed_repeats,
+        noise_seed=noise_seed,
+        use_corpus_file=use_corpus_file,
+        noise_error_space=noise_error_space,
+    )
+
     start_time, db_path, model_dir, log_dir = set_info(
         corpus_path, dir_suffix, genre_focus
     )
+
+    if noise_config is not None:
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
+        _setup_logging(log_dir)
+        train_noise_ensemble(
+            db_path=db_path,
+            model_dir=model_dir,
+            log_dir=log_dir,
+            years=years,
+            year_step=year_step,
+            weight_by=weight_by,
+            vector_size=vector_size,
+            window=window,
+            min_count=min_count,
+            approach=approach,
+            epochs=epochs,
+            noise_config=noise_config,
+            max_parallel_models=max_parallel_models,
+            max_corpus_workers=max_corpus_workers,
+            workers_per_model=workers_per_model,
+            unk_mode=unk_mode,
+            temp_dir=temp_dir,
+            reuse_corpus_files=reuse_corpus_files,
+            mode=mode,
+        )
+        return model_dir
 
     # Handle directory management based on mode
     if mode == 'restart':
@@ -706,16 +784,6 @@ def build_word2vec_models(
     if years is None:
         raise ValueError("years parameter is required (tuple of start_year, end_year)")
 
-    noise_config = validate_noise_config(
-        noise_enabled=noise_enabled,
-        noise_resampling=noise_resampling,
-        n_corpus_replicates=n_corpus_replicates,
-        n_seed_repeats=n_seed_repeats,
-        noise_seed=noise_seed,
-        use_corpus_file=use_corpus_file,
-        noise_error_space=noise_error_space,
-    )
-
     # Construct corpus path from stub parameters
     from ngramprep.ngram_acquire.db.build_path import build_db_path
     from pathlib import Path
@@ -740,32 +808,6 @@ def build_word2vec_models(
     os.makedirs(log_dir, exist_ok=True)
     _setup_logging(log_dir)
 
-    if noise_config is not None:
-        _, db_path, model_dir, _ = set_info(corpus_path, dir_suffix, genre_focus=None)
-        os.makedirs(model_dir, exist_ok=True)
-        train_noise_ensemble(
-            db_path=db_path,
-            model_dir=model_dir,
-            log_dir=log_dir,
-            years=years,
-            year_step=year_step,
-            weight_by=weight_by,
-            vector_size=vector_size,
-            window=window,
-            min_count=min_count,
-            approach=approach,
-            epochs=epochs,
-            noise_config=noise_config,
-            max_parallel_models=max_parallel_models,
-            max_corpus_workers=max_corpus_workers,
-            workers_per_model=workers_per_model,
-            unk_mode=unk_mode,
-            temp_dir=temp_dir,
-            reuse_corpus_files=reuse_corpus_files,
-            mode=mode,
-        )
-        return model_dir
-
     # Call the main training function
     train_models(
         corpus_path=corpus_path,
@@ -788,7 +830,13 @@ def build_word2vec_models(
         reuse_corpus_files=reuse_corpus_files,
         temp_dir=temp_dir,
         debug_sample=debug_sample,
-        debug_interval=debug_interval
+        debug_interval=debug_interval,
+        noise_enabled=noise_enabled,
+        noise_resampling=noise_resampling,
+        n_corpus_replicates=n_corpus_replicates,
+        n_seed_repeats=n_seed_repeats,
+        noise_seed=noise_seed,
+        noise_error_space=noise_error_space,
     )
 
     # Return model directory path

@@ -12,7 +12,8 @@ v2 (July 2026): counts-only schema, no v1 compatibility.
     Asian identifiable only from 1988 (RACE 650, split 651/652 in 2003);
     Black = RACE 200, valid all years. Multiracial 8xx excluded by default.
   - CSV helpers are v2-only and raise on old-schema files.
-  - Default fetch variables include EMPSTAT and AGE.
+  - Default fetch variables include both OCC (original source classification) and
+    OCC2010 (IPUMS harmonized classification), plus EMPSTAT and AGE.
 
 Workflows:
 1. **Raw aggregation**: Convert already-downloaded IPUMS extracts
@@ -22,7 +23,10 @@ Workflows:
 2. **Web fetch + aggregation**: Retrieve data from the IPUMS API, download
    extracts, and aggregate them in one step via
    `fetch_and_aggregate_ipums_professions_csv()`.
-3. **Static prestige scores**: `fetch_prestige_crosswalk()` /
+3. **Occupation harmonization audit**: `build_occ_crosswalk_audit()` preserves
+   the empirical OCC -> OCC2010 mapping under the exact production universe;
+   `summarize_target_occ_sources()` restricts it to the panel targets.
+4. **Static prestige scores**: `fetch_prestige_crosswalk()` /
    `aggregate_prestige_by_label()` / `add_prestige_to_panel()` (unchanged).
 
 The IPUMS API requires `ipumspy` (pip install ipumspy) and an IPUMS API key
@@ -69,8 +73,29 @@ ASIAN_IDENTIFIABLE_FROM = 1988  # RACE 650 (Asian/PI) introduced; 651/652 split 
 # IPUMS CPS HISPAN: 0 not Hispanic | 100-612 Hispanic origins | 901/902 missing/NIU
 
 DEFAULT_FETCH_VARIABLES = [
-    "YEAR", "SEX", "RACE", "HISPAN", "OCC2010", "ASECWT", "EMPSTAT", "AGE",
+    "YEAR",
+    "SEX",
+    "RACE",
+    "HISPAN",
+    "OCC",
+    "OCC2010",
+    "ASECWT",
+    "EMPSTAT",
+    "AGE",
 ]
+
+
+# Original CPS occupation-classification regimes represented in the ASEC files.
+# These labels describe the source OCC coding system, not OCC2010.
+OCC_CLASSIFICATION_REGIMES = [
+    ("1960", 1968, 1970),
+    ("1970", 1971, 1982),
+    ("1980", 1983, 1991),
+    ("1990", 1992, 2002),
+    ("2000", 2003, 2010),
+    ("2010", 2011, 2019),
+]
+
 
 LABEL_STOPWORDS = {
     "and", "or", "of", "the", "a", "an", "for", "to", "in", "on", "at", "by", "with",
@@ -268,6 +293,513 @@ def _resolve_occupation_labels(df, occupation_code_col, occupation_label_col, oc
         "Need occupation labels to build label1-label5 columns. "
         "Provide `occupation_label_col` in extract or `occupation_map_file`."
     )
+
+
+# ── Shared universe + occupation-harmonization audit helpers ──────────────────
+
+def _apply_employed_age_universe(
+    df,
+    empstat_col="EMPSTAT",
+    employed_codes=(10, 12),
+    age_col="AGE",
+    min_age=16,
+    strict=False,
+):
+    """Apply the production employed/age universe and return audit counts.
+
+    Parameters
+    ----------
+    df : DataFrame
+        Person-level IPUMS extract.
+
+    empstat_col, employed_codes
+        Employment-status restriction.  The production default is EMPSTAT in
+        (10, 12), i.e. currently employed.
+
+    age_col, min_age
+        Age restriction.  The production default is AGE >= 16.
+
+    strict : bool
+        If False (production-compatible behavior), a missing requested column
+        triggers a loud warning and that filter is skipped.
+        If True (recommended for harmonization audits), missing requested
+        columns raise ValueError so the audit cannot silently use a different
+        universe from the production series.
+
+    Returns
+    -------
+    filtered_df : DataFrame
+    audit : dict
+        n_start, n_after_emp, n_after_age
+    """
+    out = df.copy()
+    n_start = len(out)
+
+    if empstat_col:
+        if empstat_col in out.columns:
+            emp = pd.to_numeric(out[empstat_col], errors="coerce")
+            out = out[emp.isin(employed_codes)].copy()
+        elif strict:
+            raise ValueError(
+                f"Universe filter requested (empstat_col={empstat_col!r}) "
+                "but the column is absent."
+            )
+        else:
+            warnings.warn(
+                f"Universe filter requested (empstat_col={empstat_col!r}) but the "
+                f"column is absent from this extract — proceeding UNFILTERED. "
+                f"Output is not comparable to EMPSTAT-filtered runs.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    n_after_emp = len(out)
+
+    if age_col and min_age is not None:
+        if age_col in out.columns:
+            age = pd.to_numeric(out[age_col], errors="coerce")
+            out = out[age >= min_age].copy()
+        elif strict:
+            raise ValueError(
+                f"Age floor requested (age_col={age_col!r}, min_age={min_age}) "
+                "but the column is absent."
+            )
+        else:
+            warnings.warn(
+                f"Age floor requested (age_col={age_col!r}, min_age={min_age}) "
+                f"but the column is absent — proceeding without it.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+    n_after_age = len(out)
+
+    return out, {
+        "n_start": n_start,
+        "n_after_emp": n_after_emp,
+        "n_after_age": n_after_age,
+    }
+
+
+def _occ_regime_for_year(year):
+    """Return the source OCC classification regime for an ASEC year."""
+    if pd.isna(year):
+        return pd.NA
+
+    year = int(year)
+
+    for regime, start, end in OCC_CLASSIFICATION_REGIMES:
+        if start <= year <= end:
+            return regime
+
+    return pd.NA
+
+
+def build_occ_crosswalk_audit(
+    extract_file,
+    years=None,
+    year_col="YEAR",
+    occ_col="OCC",
+    occ2010_col="OCC2010",
+    sex_col="SEX",
+    weight_col="ASECWT",
+    empstat_col="EMPSTAT",
+    employed_codes=(10, 12),
+    age_col="AGE",
+    min_age=16,
+    female_codes=(2,),
+    strict_universe=True,
+    verbose=True,
+):
+    """Build an empirical OCC -> OCC2010 audit table from CPS ASEC microdata.
+
+    This function is diagnostic only: it does not alter the production
+    OCC2010-based profession CSVs.
+
+    It applies the same EMPSTAT/AGE universe as the production aggregator and
+    then summarizes the observed mapping from the original source-classification
+    OCC code to IPUMS OCC2010.
+
+    Parameters
+    ----------
+    extract_file : str or Path
+        Raw multi-year IPUMS CPS ASEC extract containing both OCC and OCC2010.
+
+    years : iterable of int or None
+        Optional year restriction.
+
+    strict_universe : bool
+        True by default.  If EMPSTAT or AGE is unavailable, raise rather than
+        silently generating an audit on a different population.
+
+    Returns
+    -------
+    detail : DataFrame
+        YEAR x OCC x OCC2010 mapping cells with weighted and unweighted counts.
+
+    regime : DataFrame
+        The same mapping collapsed within source-classification regime.  Includes
+        mapping shares in both directions and simple graph-degree diagnostics:
+
+        share_of_occ
+            Fraction of a source OCC code's weighted observations assigned to
+            this OCC2010 code within the regime.
+
+        share_of_occ2010
+            Fraction of an OCC2010 code's weighted observations supplied by this
+            source OCC code within the regime.
+
+        n_occ2010_per_occ / n_occ_per_occ2010
+            Number of empirically observed mapping partners on each side.
+
+        mapping_structure
+            '1:1', 'occ_split', 'occ2010_merge', or 'many_to_many'.
+
+    Notes
+    -----
+    These empirical mappings identify candidate split/merge problems.  They do
+    not, by themselves, prove that two source-code unions are substantively
+    identical across Census classification regimes; official crosswalk
+    documentation is still required before calling a repair exact.
+    """
+    df = _read_ipums_extract(extract_file)
+
+    required = [year_col, occ_col, occ2010_col, sex_col, weight_col]
+    missing = [col for col in required if col not in df.columns]
+    if missing:
+        raise ValueError(f"Extract missing required columns: {missing}")
+
+    df[year_col] = pd.to_numeric(df[year_col], errors="coerce")
+
+    if years is not None:
+        years = {int(y) for y in years}
+        df = df[df[year_col].isin(years)].copy()
+
+    if df.empty:
+        raise ValueError("No rows available after year restriction")
+
+    df, universe_audit = _apply_employed_age_universe(
+        df,
+        empstat_col=empstat_col,
+        employed_codes=employed_codes,
+        age_col=age_col,
+        min_age=min_age,
+        strict=strict_universe,
+    )
+
+    if df.empty:
+        raise ValueError("No rows available after universe filtering")
+
+    df["_occ"] = pd.to_numeric(df[occ_col], errors="coerce")
+    df["_occ2010"] = pd.to_numeric(df[occ2010_col], errors="coerce")
+    df["_weight"] = pd.to_numeric(df[weight_col], errors="coerce")
+    sex = pd.to_numeric(df[sex_col], errors="coerce")
+
+    df["_is_woman"] = sex.isin(female_codes)
+    df["_women_weight"] = df["_weight"].where(df["_is_woman"], 0.0)
+
+    df = df[
+        df[year_col].notna()
+        & df["_occ"].notna()
+        & df["_occ2010"].notna()
+        & df["_weight"].notna()
+        & (df["_weight"] > 0)
+    ].copy()
+
+    if df.empty:
+        raise ValueError("No valid OCC/OCC2010 weighted rows remain for audit")
+
+    detail = (
+        df.groupby([year_col, "_occ", "_occ2010"], as_index=False)
+        .agg(
+            weighted_n=("_weight", "sum"),
+            weighted_women=("_women_weight", "sum"),
+            unweighted_n=("_weight", "size"),
+            unweighted_women=("_is_woman", "sum"),
+        )
+        .rename(
+            columns={
+                year_col: "year",
+                "_occ": "occ",
+                "_occ2010": "occ2010",
+            }
+        )
+    )
+
+    detail["year"] = detail["year"].astype(int)
+    detail["occ"] = detail["occ"].astype(int)
+    detail["occ2010"] = detail["occ2010"].astype(int)
+    detail["women_prop"] = detail["weighted_women"] / detail["weighted_n"]
+    detail["regime"] = detail["year"].map(_occ_regime_for_year)
+
+    unmapped_years = sorted(
+        detail.loc[detail["regime"].isna(), "year"].unique().tolist()
+    )
+    if unmapped_years:
+        warnings.warn(
+            f"No OCC classification regime configured for years {unmapped_years}; "
+            "those rows remain in detail but are excluded from regime summary.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    detail_for_regime = detail.dropna(subset=["regime"]).copy()
+
+    regime = (
+        detail_for_regime.groupby(["regime", "occ", "occ2010"], as_index=False)
+        .agg(
+            weighted_n=("weighted_n", "sum"),
+            weighted_women=("weighted_women", "sum"),
+            unweighted_n=("unweighted_n", "sum"),
+            unweighted_women=("unweighted_women", "sum"),
+            first_year=("year", "min"),
+            last_year=("year", "max"),
+            n_years=("year", "nunique"),
+        )
+    )
+
+    regime["women_prop"] = regime["weighted_women"] / regime["weighted_n"]
+
+    occ_total = regime.groupby(["regime", "occ"])["weighted_n"].transform("sum")
+    occ2010_total = regime.groupby(["regime", "occ2010"])["weighted_n"].transform("sum")
+
+    regime["share_of_occ"] = regime["weighted_n"] / occ_total
+    regime["share_of_occ2010"] = regime["weighted_n"] / occ2010_total
+
+    regime["n_occ2010_per_occ"] = (
+        regime.groupby(["regime", "occ"])["occ2010"].transform("nunique")
+    )
+    regime["n_occ_per_occ2010"] = (
+        regime.groupby(["regime", "occ2010"])["occ"].transform("nunique")
+    )
+
+    def _mapping_structure(row):
+        n_right = int(row["n_occ2010_per_occ"])
+        n_left = int(row["n_occ_per_occ2010"])
+        if n_right == 1 and n_left == 1:
+            return "1:1"
+        if n_right > 1 and n_left == 1:
+            return "occ_split"
+        if n_right == 1 and n_left > 1:
+            return "occ2010_merge"
+        return "many_to_many"
+
+    regime["mapping_structure"] = regime.apply(_mapping_structure, axis=1)
+
+    regime_order = {
+        regime_name: i
+        for i, (regime_name, _, _) in enumerate(OCC_CLASSIFICATION_REGIMES)
+    }
+    regime["_order"] = regime["regime"].map(regime_order)
+
+    regime = (
+        regime.sort_values(["_order", "occ2010", "occ"])
+        .drop(columns="_order")
+        .reset_index(drop=True)
+    )
+
+    detail = (
+        detail.sort_values(["year", "occ2010", "occ"])
+        .reset_index(drop=True)
+    )
+
+    if verbose:
+        print("OCC -> OCC2010 audit")
+        print(
+            f"  Universe: {universe_audit['n_start']:,} rows"
+            f" -> {universe_audit['n_after_emp']:,} after EMPSTAT"
+            f" -> {universe_audit['n_after_age']:,} after AGE"
+        )
+        print(
+            f"  Valid audit rows: {len(df):,}"
+            f" | year-level mapping cells: {len(detail):,}"
+            f" | regime mapping cells: {len(regime):,}"
+        )
+        print(
+            "  Mapping structures: "
+            + ", ".join(
+                f"{k}={v:,}"
+                for k, v in regime["mapping_structure"].value_counts().items()
+            )
+        )
+
+    return detail, regime
+
+
+def summarize_target_occ_sources(
+    regime_audit,
+    occupation_map_file,
+    targets,
+    collapse=None,
+    code_col="code",
+    label_col="label",
+):
+    """Restrict an OCC/OCC2010 regime audit to the panel's lexical targets.
+
+    The OCC2010 map is tokenized with the exact same label logic used by the
+    production aggregator.  Each target therefore selects the OCC2010 titles
+    that would feed that panel unit under current label matching.
+
+    Parameters
+    ----------
+    regime_audit : DataFrame
+        Second return value of build_occ_crosswalk_audit().
+
+    occupation_map_file : str or Path
+        OCC2010 code -> title CSV used by the production aggregation.
+
+    targets : iterable of str
+        Canonical panel targets, e.g. occupations.
+
+    collapse : dict or None
+        Optional canonical -> list-of-labels mapping, using the same semantics
+        as build_panel.  Example:
+            {'examiner': ['examiner', 'appraiser', 'investigator']}
+
+    Returns
+    -------
+    detail : DataFrame
+        Regime-level OCC -> OCC2010 mapping rows relevant to each target, with
+        the matched OCC2010 title and token labels attached.
+
+    summary : DataFrame
+        One row per target x source-classification regime.  Includes tuples of
+        contributing OCC and OCC2010 codes plus weighted/unweighted totals and
+        female composition.
+
+    Notes
+    -----
+    This is a candidate-generation diagnostic.  A changing number or identity
+    of source OCC codes is a reason to inspect a classification boundary, not
+    proof that the target is discontinuous.
+    """
+    required = {
+        "regime", "occ", "occ2010", "weighted_n", "weighted_women",
+        "unweighted_n", "unweighted_women",
+    }
+    missing = sorted(required - set(regime_audit.columns))
+    if missing:
+        raise ValueError(f"regime_audit missing required columns: {missing}")
+
+    map_df = pd.read_csv(occupation_map_file)
+    map_missing = [c for c in (code_col, label_col) if c not in map_df.columns]
+    if map_missing:
+        raise ValueError(
+            f"occupation_map_file missing required columns: {map_missing}"
+        )
+
+    map_df = map_df[[code_col, label_col]].copy()
+    map_df["occ2010"] = pd.to_numeric(map_df[code_col], errors="coerce")
+    map_df["Occupation"] = map_df[label_col].astype("string").str.strip()
+    map_df = map_df.dropna(subset=["occ2010", "Occupation"]).copy()
+    map_df["occ2010"] = map_df["occ2010"].astype(int)
+    map_df = map_df.drop_duplicates(subset=["occ2010"])
+
+    label_cols = [f"label{i}" for i in range(1, 6)]
+    label_df = pd.DataFrame(
+        map_df["Occupation"]
+        .map(lambda x: _tokenize_occupation(x, max_tokens=5))
+        .tolist(),
+        columns=label_cols,
+        index=map_df.index,
+    )
+    map_df = pd.concat(
+        [map_df[["occ2010", "Occupation"]], label_df],
+        axis=1,
+    )
+
+    collapse = collapse or {}
+    target_rows = []
+
+    for target in targets:
+        members = list(collapse.get(target, [target]))
+        if target not in members:
+            members = [target] + members
+        members = list(dict.fromkeys(members))
+
+        mask = map_df[label_cols].isin(set(members)).any(axis=1)
+        matched = map_df.loc[mask].copy()
+        if matched.empty:
+            continue
+
+        matched["target"] = target
+        matched["target_members"] = [tuple(members)] * len(matched)
+        target_rows.append(matched)
+
+    if not target_rows:
+        empty_detail = pd.DataFrame(
+            columns=[
+                "target", "target_members", "regime", "occ", "occ2010",
+                "Occupation", *label_cols,
+            ]
+        )
+        empty_summary = pd.DataFrame(
+            columns=[
+                "target", "regime", "occ_codes", "occ2010_codes",
+                "n_occ_codes", "n_occ2010_codes", "weighted_n",
+                "weighted_women", "women_prop", "unweighted_n",
+                "unweighted_women",
+            ]
+        )
+        return empty_detail, empty_summary
+
+    target_map = pd.concat(target_rows, ignore_index=True)
+
+    detail = regime_audit.merge(
+        target_map,
+        on="occ2010",
+        how="inner",
+        validate="many_to_many",
+    )
+
+    summary_rows = []
+    for (target, regime), g in detail.groupby(["target", "regime"], sort=False):
+        weighted_n = float(g["weighted_n"].sum())
+        weighted_women = float(g["weighted_women"].sum())
+        unweighted_n = int(g["unweighted_n"].sum())
+        unweighted_women = int(g["unweighted_women"].sum())
+
+        summary_rows.append({
+            "target": target,
+            "regime": regime,
+            "occ_codes": tuple(sorted(g["occ"].astype(int).unique().tolist())),
+            "occ2010_codes": tuple(sorted(g["occ2010"].astype(int).unique().tolist())),
+            "n_occ_codes": int(g["occ"].nunique()),
+            "n_occ2010_codes": int(g["occ2010"].nunique()),
+            "weighted_n": weighted_n,
+            "weighted_women": weighted_women,
+            "women_prop": (
+                weighted_women / weighted_n
+                if weighted_n > 0 else np.nan
+            ),
+            "unweighted_n": unweighted_n,
+            "unweighted_women": unweighted_women,
+            "mapping_structures": tuple(
+                sorted(g["mapping_structure"].dropna().unique().tolist())
+            ),
+        })
+
+    summary = pd.DataFrame(summary_rows)
+
+    regime_order = {
+        regime_name: i
+        for i, (regime_name, _, _) in enumerate(OCC_CLASSIFICATION_REGIMES)
+    }
+    summary["_order"] = summary["regime"].map(regime_order)
+    summary = (
+        summary.sort_values(["target", "_order"])
+        .drop(columns="_order")
+        .reset_index(drop=True)
+    )
+
+    detail["_order"] = detail["regime"].map(regime_order)
+    detail = (
+        detail.sort_values(["target", "_order", "occ2010", "occ"])
+        .drop(columns="_order")
+        .reset_index(drop=True)
+    )
+
+    return detail, summary
 
 
 # ── IPUMS API client ──────────────────────────────────────────────────────────
@@ -613,33 +1145,18 @@ def aggregate_ipums_professions_csv(
     if df.empty:
         raise ValueError("No rows available after filtering extract")
 
-    n_start = len(df)
-
     # ── Universe filter (EMPSTAT / AGE) ──────────────────────────────────
-    if empstat_col:
-        if empstat_col in df.columns:
-            emp = pd.to_numeric(df[empstat_col], errors="coerce")
-            df = df[emp.isin(employed_codes)].copy()
-        else:
-            warnings.warn(
-                f"Universe filter requested (empstat_col={empstat_col!r}) but the "
-                f"column is absent from this extract — proceeding UNFILTERED. "
-                f"Output is not comparable to EMPSTAT-filtered runs.",
-                UserWarning,
-            )
-    n_after_emp = len(df)
-
-    if age_col and min_age:
-        if age_col in df.columns:
-            age = pd.to_numeric(df[age_col], errors="coerce")
-            df = df[age >= min_age].copy()
-        else:
-            warnings.warn(
-                f"Age floor requested (age_col={age_col!r}, min_age={min_age}) "
-                f"but the column is absent — proceeding without it.",
-                UserWarning,
-            )
-    n_after_age = len(df)
+    df, universe_audit = _apply_employed_age_universe(
+        df,
+        empstat_col=empstat_col,
+        employed_codes=employed_codes,
+        age_col=age_col,
+        min_age=min_age,
+        strict=False,
+    )
+    n_start = universe_audit["n_start"]
+    n_after_emp = universe_audit["n_after_emp"]
+    n_after_age = universe_audit["n_after_age"]
 
     if df.empty:
         raise ValueError("No rows available after universe filtering")

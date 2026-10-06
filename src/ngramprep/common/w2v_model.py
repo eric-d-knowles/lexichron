@@ -573,7 +573,8 @@ class W2VModel:
             'all_variance_explained': all_variance_explained
         }
 
-    def compute_meandiff_dimension(self, token_contrasts, verbose=False):
+    def compute_meandiff_dimension(self, token_contrasts, verbose=False,
+                                   normalize_anchors=True):
         """
         Compute a semantic dimension via mean of contrast pair difference vectors.
 
@@ -581,13 +582,40 @@ class W2VModel:
             token_contrasts (list of tuples): List of (token1, token2) pairs defining contrasts.
                 Example: [('he', 'she'), ('him', 'her'), ('man', 'woman'), ...]
             verbose (bool): If True, prints summary to console. Default False.
+            normalize_anchors (bool): If True (default), L2-normalize each
+                anchor vector before differencing, so every contrast pair
+                contributes equally to the mean. If False, raw vectors are
+                differenced and high-norm -- in word2vec, typically
+                high-frequency -- pairs dominate the resulting direction.
+
+                WHY THIS DEFAULTS TO TRUE. A mean is not scale-invariant, so
+                anchor magnitudes act as pair weights. This is the ONLY place
+                in the projection pipeline where vector magnitude can change a
+                result: every other vector reaches the output through
+                `project_onto_dimension`, which is a cosine and divides the
+                magnitude out. Consequently, normalizing only the anchors is
+                bit-identical to normalizing the whole model, and this setting
+                is an exact no-op on models that were already normalized (the
+                `norm_and_align` directories).
+
+                It exists because model directories differ: normalized models
+                and raw ones would otherwise yield different axes for the same
+                contrast set, which silently makes projections from a raw
+                replica tree incomparable with projections from a normalized
+                production directory. Leave it True unless you specifically
+                want the frequency-weighted axis.
 
         Returns:
-            dict: dimension, component_loadings, n_pairs.
+            dict: dimension, component_loadings, n_pairs, normalize_anchors.
 
         Raises:
             ValueError: If no valid contrast pairs found in vocabulary.
         """
+        def _anchor(token):
+            v = self.model[token]
+            if not normalize_anchors:
+                return v
+            return v / (np.linalg.norm(v) + 1e-10)
         if isinstance(token_contrasts, list):
             pairs = token_contrasts
         elif isinstance(token_contrasts, dict):
@@ -603,7 +631,7 @@ class W2VModel:
             if isinstance(pair, (tuple, list)) and len(pair) == 2:
                 token1, token2 = pair
                 if token1 in self.vocab and token2 in self.vocab:
-                    diff = self.model[token2] - self.model[token1]
+                    diff = _anchor(token2) - _anchor(token1)
                     difference_vectors.append(diff)
                     valid_pairs.append(pair)
                 else:
@@ -624,7 +652,7 @@ class W2VModel:
 
         component_loadings = {}
         for pair in valid_pairs:
-            diff_vec = self.model[pair[1]] - self.model[pair[0]]
+            diff_vec = _anchor(pair[1]) - _anchor(pair[0])
             diff_norm = diff_vec / (np.linalg.norm(diff_vec) + 1e-10)
             cosine_sim = np.dot(diff_norm, dimension)
             component_loadings[f"{pair[0]}→{pair[1]}"] = cosine_sim
@@ -644,7 +672,8 @@ class W2VModel:
         return {
             'dimension': dimension,
             'component_loadings': component_loadings,
-            'n_pairs': len(valid_pairs)
+            'n_pairs': len(valid_pairs),
+            'normalize_anchors': normalize_anchors,
         }
 
     def project_onto_dimension(self, word, dimension):
