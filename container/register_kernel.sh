@@ -66,11 +66,19 @@ VERSION="${BASENAME#lexichron-}"                     # 0.2.0 (or the basename if
 # ---------------------------------------------------------------------------
 # Bind mounts: $HOME is bound by Apptainer automatically; add data roots.
 # ---------------------------------------------------------------------------
+# Paths the site already binds system-wide (apptainer.conf "bind path") are
+# skipped, since re-binding them only produces a warning on every start.
+SYSTEM_BINDS="$(apptainer exec --no-home --contain "$IMAGE" cat /proc/mounts 2>/dev/null | awk '{print $2}' || true)"
+
 BINDS=()
 for d in /scratch /vast /gpfs /work /project /projects /data "${EXTRA_BINDS[@]}"; do
-    if [ -d "$d" ]; then
-        case " ${BINDS[*]-} " in *" $d "*) ;; *) BINDS+=("$d") ;; esac
+    [ -d "$d" ] || continue
+    case " ${BINDS[*]-} " in *" $d "*) continue ;; esac
+    if printf '%s\n' "$SYSTEM_BINDS" | grep -qx "$d"; then
+        echo "  (skipping $d: already bound by the site configuration)"
+        continue
     fi
+    BINDS+=("$d")
 done
 
 BIND_ARGS=()
