@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
 # register_kernel.sh
 #
-# Register a lexichron container image as a Jupyter kernel, so the notebooks
-# in notebooks/ can be run against the image from JupyterLab, Positron or
-# VS Code without installing anything in a conda environment.
+# Register this lexichron container image as a Jupyter kernel, so the
+# notebooks in notebooks/ can be run against the image from JupyterLab,
+# Positron or VS Code without installing anything in a conda environment.
 #
-# Usage:
-#   bash register_kernel.sh /path/to/lexichron-0.2.0.sif [--bind /dir ...] [--name NAME]
+# This script is shipped INSIDE the image and is run through Apptainer:
+#
+#   apptainer run --app register-kernel lexichron-0.2.0.sif [options]
 #
 # Options:
 #   --bind DIR     Additional host directory to make visible inside the
 #                  container. May be repeated. Common cluster data roots
-#                  (/scratch, /vast, /gpfs, /work, /project, /data) are bound
-#                  automatically if they exist on this machine.
+#                  (/scratch, /vast, /gpfs, /work, /project, /projects, /data)
+#                  are bound automatically when they exist on the host and
+#                  are not already bound by the site configuration.
 #   --name NAME    Kernel identifier (default: derived from the image file
 #                  name, e.g. "lexichron-0.2.0").
 #   --display NAME Display name in the kernel menu
 #                  (default: "Python (lexichron 0.2.0)").
 #
-# Afterwards, restart Jupyter and pick the kernel from the kernel menu.
+# Afterwards, restart Jupyter (or reload the VS Code / Positron window) and
+# pick the kernel from the kernel menu.
 
 set -euo pipefail
 
 usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
-[ $# -ge 1 ] || usage
-
-IMAGE="$1"; shift
 EXTRA_BINDS=()
 KERNEL_NAME=""
 DISPLAY_NAME=""
@@ -42,16 +42,12 @@ while [ $# -gt 0 ]; do
 done
 
 # ---------------------------------------------------------------------------
-# Checks
+# Which image are we running from? Apptainer sets this for every container.
 # ---------------------------------------------------------------------------
-if ! command -v apptainer >/dev/null 2>&1; then
-    echo "Error: 'apptainer' not found on PATH. On many clusters: module load apptainer"
-    exit 1
-fi
-
-IMAGE="$(readlink -f "$IMAGE")"
-if [ ! -f "$IMAGE" ]; then
-    echo "Error: image not found: $IMAGE"
+IMAGE="${APPTAINER_CONTAINER:-${SINGULARITY_CONTAINER:-}}"
+if [ -z "$IMAGE" ]; then
+    echo "Error: this script must be run inside the lexichron image:"
+    echo "  apptainer run --app register-kernel lexichron-<version>.sif"
     exit 1
 fi
 
@@ -64,25 +60,20 @@ VERSION="${BASENAME#lexichron-}"                     # 0.2.0 (or the basename if
 [ -n "$DISPLAY_NAME" ] || DISPLAY_NAME="Python (lexichron ${VERSION})"
 
 # ---------------------------------------------------------------------------
-# Bind mounts: $HOME is bound by Apptainer automatically; add data roots.
+# Bind mounts. Paths the site binds system-wide are visible in /proc/mounts
+# right now; re-binding those only produces a warning at every kernel start,
+# so they are recorded and skipped. Everything else is decided on the host at
+# kernel start, by the small wrapper written into the kernelspec, so a data
+# root that exists on the host is bound and one that does not is ignored.
 # ---------------------------------------------------------------------------
-# Paths the site already binds system-wide (apptainer.conf "bind path") are
-# skipped, since re-binding them only produces a warning on every start.
-SYSTEM_BINDS="$(apptainer exec --no-home --contain "$IMAGE" cat /proc/mounts 2>/dev/null | awk '{print $2}' || true)"
-
-BINDS=()
+SYSTEM_BOUND=""
 for d in /scratch /vast /gpfs /work /project /projects /data "${EXTRA_BINDS[@]}"; do
-    [ -d "$d" ] || continue
-    case " ${BINDS[*]-} " in *" $d "*) continue ;; esac
-    if printf '%s\n' "$SYSTEM_BINDS" | grep -qx "$d"; then
-        echo "  (skipping $d: already bound by the site configuration)"
-        continue
+    if awk '{print $2}' /proc/mounts | grep -qx "$d"; then
+        SYSTEM_BOUND="$SYSTEM_BOUND $d"
     fi
-    BINDS+=("$d")
 done
 
-BIND_ARGS=()
-for d in "${BINDS[@]}"; do BIND_ARGS+=("--bind" "$d"); done
+CANDIDATES="/scratch /vast /gpfs /work /project /projects /data ${EXTRA_BINDS[*]-}"
 
 # ---------------------------------------------------------------------------
 # Write the kernelspec
@@ -90,13 +81,23 @@ for d in "${BINDS[@]}"; do BIND_ARGS+=("--bind" "$d"); done
 KERNEL_DIR="${JUPYTER_DATA_DIR:-$HOME/.local/share/jupyter}/kernels/${KERNEL_NAME}"
 mkdir -p "$KERNEL_DIR"
 
-python3 - "$KERNEL_DIR/kernel.json" "$IMAGE" "$DISPLAY_NAME" "${BIND_ARGS[@]}" <<'EOF'
+python3 - "$KERNEL_DIR/kernel.json" "$IMAGE" "$DISPLAY_NAME" "$CANDIDATES" "$SYSTEM_BOUND" <<'EOF'
 import json, sys
-out, image, display, *bind_args = sys.argv[1:]
-argv = ["apptainer", "exec", *bind_args, image,
-        "python", "-m", "ipykernel_launcher", "-f", "{connection_file}"]
+out, image, display, candidates, system_bound = sys.argv[1:]
+
+# Runs on the HOST each time the kernel starts.
+launcher = f"""
+img={json.dumps(image)}
+binds=""
+for d in {candidates}; do
+  case " {system_bound} " in *" $d "*) continue ;; esac
+  [ -d "$d" ] && binds="$binds --bind $d"
+done
+exec apptainer exec $binds "$img" python -m ipykernel_launcher -f "$1"
+""".strip()
+
 spec = {
-    "argv": argv,
+    "argv": ["bash", "-c", launcher, "lexichron-kernel", "{connection_file}"],
     "display_name": display,
     "language": "python",
     "metadata": {"debugger": True},
@@ -107,9 +108,10 @@ with open(out, "w") as fh:
 EOF
 
 echo "Registered kernel '${KERNEL_NAME}' -> ${KERNEL_DIR}/kernel.json"
-echo "  image:        ${IMAGE}"
-echo "  display name: ${DISPLAY_NAME}"
-echo "  bind mounts:  ${BINDS[*]:-(none beyond \$HOME)}"
+echo "  image:          ${IMAGE}"
+echo "  display name:   ${DISPLAY_NAME}"
+echo "  bound by site:  ${SYSTEM_BOUND:-(none)}"
+echo "  bound on start: ${CANDIDATES} (whichever exist on this machine)"
 echo ""
 echo "Restart Jupyter (or reload the window in Positron/VS Code) and select"
 echo "'${DISPLAY_NAME}' from the kernel menu."

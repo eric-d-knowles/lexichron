@@ -26,6 +26,7 @@ From: python:3.11-slim-bookworm
 # The build is run from the repository root, so "." is the source tree.
 %files
     . /opt/lexichron-src
+    container/register_kernel.sh /opt/lexichron/register_kernel.sh
 
 %post
     set -eu
@@ -69,6 +70,7 @@ From: python:3.11-slim-bookworm
     find /opt/lexichron-src/src -type d -name build -prune -exec rm -rf {} +
 
     python -m pip install --no-cache-dir /opt/lexichron-src
+    chmod 755 /opt/lexichron/register_kernel.sh
 
     # Notebook execution without a browser (used for batch runs via nbconvert).
     python -m pip install --no-cache-dir nbconvert
@@ -139,6 +141,23 @@ EOF
 
 %test
     python -c "import ngramprep, daviesprep, train, analyze; print('lexichron import OK')"
+    bash -n /opt/lexichron/register_kernel.sh
+
+# -----------------------------------------------------------------------------
+# App: register this image as a Jupyter kernel
+#   apptainer run --app register-kernel lexichron-<version>.sif [--bind DIR ...]
+# -----------------------------------------------------------------------------
+%apprun register-kernel
+    exec bash /opt/lexichron/register_kernel.sh "$@"
+
+%apphelp register-kernel
+    Register this image as a Jupyter kernel for JupyterLab, Positron or VS Code:
+
+        apptainer run --app register-kernel lexichron-<version>.sif
+
+    Options: --bind DIR (repeatable), --name NAME, --display "NAME".
+    Then restart Jupyter / reload the editor window and pick
+    "Python (lexichron <version>)" from the kernel menu.
 
 %help
     lexichron: scalable tools for temporal linguistic analysis.
@@ -148,5 +167,8 @@ EOF
 
         apptainer exec --bind /scratch lexichron.sif python my_script.py
 
-    To use the image as a Jupyter kernel, run the register_kernel.sh script
-    shipped with the repository (container/register_kernel.sh).
+    To use the image as a Jupyter kernel (no clone of the repository needed):
+
+        apptainer run --app register-kernel lexichron.sif
+
+    Then pick "Python (lexichron <version>)" from the kernel menu.

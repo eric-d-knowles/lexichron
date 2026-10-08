@@ -126,15 +126,15 @@ your home directory.
 **2. Register it as a Jupyter kernel:**
 
 ```bash
-bash container/register_kernel.sh /scratch/$USER/containers/lexichron-0.1.0.sif
+apptainer run --app register-kernel /scratch/$USER/containers/lexichron-0.1.0.sif
 ```
 
-The script writes a kernelspec that starts the kernel inside the container,
-binding your home directory and the usual cluster data roots (`/scratch`,
-`/vast`, `/gpfs`, `/work`, `/project`, `/data`) if they exist. Add other
-directories with `--bind /path`. You only need the `container/` directory from
-this repository for this step; the notebooks in `notebooks/` are the same
-either way.
+This writes a kernelspec that starts the kernel inside the container. Your
+home directory and the usual cluster data roots (`/scratch`, `/vast`, `/gpfs`,
+`/work`, `/project`, `/projects`, `/data`) are made visible automatically when
+they exist; add other directories with `--bind /path`. Nothing from this
+repository needs to be downloaded for this step: the notebooks in `notebooks/`
+are the only files you need, and they are the same either way.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
 *Python (lexichron 0.1.0)* from the kernel menu.
@@ -158,6 +158,7 @@ Notes on the container route:
   logs) must point at bind-mounted host directories such as `/scratch`.
 - Each image is pinned to one lexichron version. To use a different version,
   pull its image and register it as a separate kernel.
+- `apptainer run-help lexichron-0.1.0.sif` prints a short usage summary.
 - To build the image yourself instead of pulling it, run
   `apptainer build lexichron.sif container/lexichron.def` from the repository
   root (requires `--fakeroot` or root privileges on most systems).
