@@ -13,6 +13,8 @@ While `lexichron` can be tuned to run on systems with fewer CPUs and less RAM, t
 - [Workflow](#workflow)
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
+  - [Container installation](#container-installation)
+  - [Standard installation (conda)](#standard-installation-conda)
 - [Quick Start](#quick-start)
 - [Output Files](#output-files)
 - [Advanced: Monitoring and Architecture](#advanced-monitoring-and-architecture)
@@ -97,7 +99,70 @@ The toolkit provides two parallel pipelines for different data sources:
 
 ## Installation
 
-### Standard installation
+There are two ways to install lexichron:
+
+- **Container (recommended for users):** pull a prebuilt Apptainer image that
+  contains lexichron and every dependency, then run the notebooks against it.
+  Nothing to compile, no conda environment, no setup script.
+- **Conda (for developers):** install from source into a conda environment.
+  Use this if you plan to modify the code.
+
+### Container installation
+
+Each release of lexichron is published as an Apptainer image at
+`ghcr.io/eric-d-knowles/lexichron`. The image version is the lexichron version.
+
+**1. Pull the image** (once; on many clusters you first need `module load apptainer`):
+
+```bash
+mkdir -p /scratch/$USER/containers && cd /scratch/$USER/containers
+apptainer pull lexichron-0.1.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.1.0
+```
+
+Replace `0.1.0` with the version you want; `latest` always points at the most
+recent release. Keep the image on a large filesystem (it is several GB), not in
+your home directory.
+
+**2. Register it as a Jupyter kernel:**
+
+```bash
+bash container/register_kernel.sh /scratch/$USER/containers/lexichron-0.1.0.sif
+```
+
+The script writes a kernelspec that starts the kernel inside the container,
+binding your home directory and the usual cluster data roots (`/scratch`,
+`/vast`, `/gpfs`, `/work`, `/project`, `/data`) if they exist. Add other
+directories with `--bind /path`. You only need the `container/` directory from
+this repository for this step; the notebooks in `notebooks/` are the same
+either way.
+
+**3. Open a notebook** in JupyterLab, Positron or VS Code and select
+*Python (lexichron 0.1.0)* from the kernel menu.
+
+To run Python directly instead of through a notebook:
+
+```bash
+apptainer exec --bind /scratch lexichron-0.1.0.sif python my_script.py
+```
+
+and to execute a notebook unattended inside a Slurm job:
+
+```bash
+apptainer exec --bind /scratch lexichron-0.1.0.sif \
+    jupyter nbconvert --to notebook --execute --output run.ipynb notebooks/unigrams_workflow.ipynb
+```
+
+Notes on the container route:
+
+- The image is read-only. All output paths (`db_path_stub`, model directories,
+  logs) must point at bind-mounted host directories such as `/scratch`.
+- Each image is pinned to one lexichron version. To use a different version,
+  pull its image and register it as a separate kernel.
+- To build the image yourself instead of pulling it, run
+  `apptainer build lexichron.sif container/lexichron.def` from the repository
+  root (requires `--fakeroot` or root privileges on most systems).
+
+### Standard installation (conda)
 
 Clone the repository, navigate into it, activate your project's conda environment, and
 install:

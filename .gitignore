@@ -34,3 +34,8 @@ ipums_api_downloads/
 
 # BLS scraped data (large data files)
 bls_scraped/
+
+# Compiled Cython extensions and in-tree build output
+*.so
+*.o
+src/**/build/

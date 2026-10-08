@@ -1,0 +1,152 @@
+Bootstrap: docker
+From: python:3.11-slim-bookworm
+
+# =============================================================================
+# lexichron Apptainer image
+#
+# Builds lexichron from the repository checkout this file lives in, together
+# with every runtime dependency that the conda route otherwise installs by
+# hand (scripts/setup_nlp_resources.sh): the Enchant C library, Hunspell
+# dictionaries, spaCy language models and the NLTK Swadesh corpus. The result
+# is a sealed, read-only environment; data paths must be bind-mounted at run
+# time (see container/register_kernel.sh and the README).
+#
+# Build locally from the repository root:
+#   apptainer build lexichron.sif container/lexichron.def
+#
+# The GitHub Actions workflow in .github/workflows/container.yml builds this
+# same file on every version tag and publishes it to ghcr.io.
+# =============================================================================
+
+%labels
+    Author Eric D. Knowles
+    Project lexichron
+    Source https://github.com/eric-d-knowles/lexichron
+
+# The build is run from the repository root, so "." is the source tree.
+%files
+    . /opt/lexichron-src
+
+%post
+    set -eu
+    export DEBIAN_FRONTEND=noninteractive
+
+    # -------------------------------------------------------------------------
+    # System packages
+    #   build-essential  : g++ for the Cython extensions (removed afterwards)
+    #   enchant-2        : spell-checking library used via pyenchant
+    #   hunspell-*       : the same dictionary set setup_nlp_resources.sh fetches
+    #   libgomp1         : OpenMP runtime for numpy/scipy/gensim wheels
+    # -------------------------------------------------------------------------
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        build-essential \
+        git \
+        ca-certificates \
+        libgomp1 \
+        enchant-2 \
+        libenchant-2-2 \
+        hunspell-en-us \
+        hunspell-en-gb \
+        hunspell-ru \
+        hunspell-fr \
+        hunspell-de-de \
+        hunspell-es \
+        hunspell-it \
+        hunspell-pt-pt \
+        hunspell-pt-br \
+        hunspell-nl
+
+    # -------------------------------------------------------------------------
+    # Python: lexichron and its dependencies
+    # -------------------------------------------------------------------------
+    python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+    # Remove any compiled artifacts that may have been checked in, so the
+    # extensions are always built fresh against this image's Python.
+    find /opt/lexichron-src/src -name '*.so' -delete
+    find /opt/lexichron-src/src -name '*.o' -delete
+    find /opt/lexichron-src/src -type d -name build -prune -exec rm -rf {} +
+
+    python -m pip install --no-cache-dir /opt/lexichron-src
+
+    # Notebook execution without a browser (used for batch runs via nbconvert).
+    python -m pip install --no-cache-dir nbconvert
+
+    # -------------------------------------------------------------------------
+    # spaCy models (the list in src/ngramprep/__init__.py). Baking them in
+    # means the import-time auto-download never runs inside the image, which
+    # matters on compute nodes without outbound network access.
+    # -------------------------------------------------------------------------
+    for model in en_core_web_sm zh_core_web_sm fr_core_news_sm de_core_news_sm \
+                 it_core_news_sm ru_core_news_sm es_core_news_sm; do
+        python -m spacy download "$model"
+    done
+
+    # -------------------------------------------------------------------------
+    # NLTK Swadesh list (model alignment)
+    # -------------------------------------------------------------------------
+    mkdir -p /usr/local/share/nltk_data
+    python -c "import nltk; nltk.download('swadesh', download_dir='/usr/local/share/nltk_data')"
+
+    # -------------------------------------------------------------------------
+    # Sanity checks: fail the build if any resource is missing.
+    # -------------------------------------------------------------------------
+    export PYENCHANT_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libenchant-2.so.2
+    export NLTK_DATA=/usr/local/share/nltk_data
+    python - <<'EOF'
+import enchant, rocks_shim, spacy, gensim
+from nltk.corpus import swadesh
+langs = sorted(enchant.list_languages())
+for required in ["en_US", "ru_RU", "fr_FR", "de_DE", "es_ES", "it_IT"]:
+    assert required in langs, f"missing hunspell dictionary {required}: {langs}"
+assert swadesh.words("en")[:1]
+import ngramprep.ngram_filter.filters.core_cy
+import ngramprep.utilities.count_items
+import daviesprep.davies_filter.filters.core_cy
+print("enchant languages:", langs)
+print("all runtime resources present")
+EOF
+
+    # -------------------------------------------------------------------------
+    # Slim down: the compiler is only needed at build time.
+    # -------------------------------------------------------------------------
+    apt-get purge -y build-essential git
+    apt-get autoremove -y
+    apt-get clean
+    rm -rf /var/lib/apt/lists/* /opt/lexichron-src /root/.cache
+
+%environment
+    export LC_ALL=C.UTF-8
+    export LANG=C.UTF-8
+    # pyenchant: point at the system Enchant library and dictionary directory
+    export PYENCHANT_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libenchant-2.so.2
+    export DICPATH=/usr/share/hunspell
+    export NLTK_DATA=/usr/local/share/nltk_data
+    # Keep BLAS from oversubscribing when the pipelines spawn worker processes
+    export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}
+    export OPENBLAS_NUM_THREADS=${OPENBLAS_NUM_THREADS:-1}
+    export MKL_NUM_THREADS=${MKL_NUM_THREADS:-1}
+    # Never write caches inside the (read-only) image
+    export XDG_CACHE_HOME=${XDG_CACHE_HOME:-/tmp/lexichron-cache}
+    export MPLCONFIGDIR=${MPLCONFIGDIR:-/tmp/lexichron-cache/matplotlib}
+
+%runscript
+    # `apptainer run lexichron.sif` behaves like `python`:
+    #   apptainer run lexichron.sif script.py
+    #   apptainer run lexichron.sif -m jupyter nbconvert --execute nb.ipynb
+    exec python "$@"
+
+%test
+    python -c "import ngramprep, daviesprep, train, analyze; print('lexichron import OK')"
+
+%help
+    lexichron: scalable tools for temporal linguistic analysis.
+
+    This image contains lexichron and all of its runtime dependencies.
+    Data directories on the host must be bind-mounted, e.g.:
+
+        apptainer exec --bind /scratch lexichron.sif python my_script.py
+
+    To use the image as a Jupyter kernel, run the register_kernel.sh script
+    shipped with the repository (container/register_kernel.sh).
