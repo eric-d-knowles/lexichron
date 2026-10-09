@@ -1,5 +1,5 @@
 Bootstrap: docker
-From: python:3.11-slim-bookworm
+From: public.ecr.aws/docker/library/python:3.11-slim-bookworm
 
 # =============================================================================
 # lexichron Apptainer image
