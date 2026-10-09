@@ -13,6 +13,7 @@ import rocks_shim as rs
 
 from ngramprep.ngram_acquire.worker import process_and_ingest_file, DEFAULT_CHUNK_ENTRIES
 from ngramprep.ngram_acquire.batch_writer import ChunkIngestor
+from ngramprep.ngram_acquire.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,7 @@ def process_files(
         spool_dir: Optional[str] = None,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         write_batch_size: Optional[int] = None,  # accepted for compatibility; chunk_entries governs
+        progress: Optional[ProgressReporter] = None,
 ) -> Tuple[List[str], List[str], int, int, int]:
     """
     Process files concurrently and ingest results into RocksDB.
@@ -50,6 +52,7 @@ def process_files(
         spool_dir: Directory for chunk files (default: a fresh temp directory)
         chunk_entries: Entries per chunk file
         write_batch_size: Ignored (kept so older callers do not break)
+        progress: Optional reporter updated as files start, finish or fail
 
     Returns:
         Tuple of (success_msgs, failure_msgs, total_entries_written,
@@ -108,6 +111,8 @@ def process_files(
                         except StopIteration:
                             return
                         idx += 1
+                        if progress:
+                            progress.file_started(PurePosixPath(url).name)
                         fut = executor.submit(
                             process_and_ingest_file,
                             url,
@@ -137,15 +142,23 @@ def process_files(
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
                                 logger.info("Processed: %s", filename)
+                                if progress:
+                                    progress.file_done(filename, entries=_entries,
+                                                       chunks=len(chunk_paths),
+                                                       uncompressed_bytes=uncompressed_bytes)
                             else:
                                 ChunkIngestor.discard(chunk_paths)
                                 failure_msgs.append(result_msg)
+                                if progress:
+                                    progress.file_failed(filename, result_msg)
 
                         except Exception as exc:
                             ChunkIngestor.discard(chunk_paths)
                             msg = f"ERROR: {filename} - {exc}"
                             failure_msgs.append(msg)
                             logger.error(msg)
+                            if progress:
+                                progress.file_failed(filename, msg)
                         finally:
                             pbar.update(1)
 

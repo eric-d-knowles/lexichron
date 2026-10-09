@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import Any, Callable, Dict
 
 from lexichron import __version__
@@ -57,6 +58,16 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
         print(_format_call(func, kwargs))
         return 0
 
+    # Progress document for this run, next to the project file, so that
+    # `lexichron ui` and other tools can watch it.
+    import inspect
+    from datetime import datetime
+    if "progress_path" in inspect.signature(func).parameters and "progress_path" not in kwargs:
+        run_dir = (Path(args.project).resolve().parent / ".lexichron" / "runs"
+                   / f"{datetime.now():%Y%m%d_%H%M%S}_{stage}")
+        kwargs["progress_path"] = str(run_dir / "progress.json")
+        print(f"Progress: {kwargs['progress_path']}", flush=True)
+
     # Logging is left to the stage: each pipeline writes a log file next to
     # its output and keeps the console to its banner, progress and warnings.
     print(f"lexichron {__version__}: running stage '{stage}'", flush=True)
@@ -77,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", metavar="STAGE")
     sub.required = True
 
+    ui = sub.add_parser("ui", help="Open the terminal user interface",
+                        description="Open the terminal user interface (requires the 'ui' extra).")
+    ui.add_argument("ui_args", nargs=argparse.REMAINDER, help="arguments for the UI (project file, --stage)")
+    ui.set_defaults(stage=None, command="ui")
+
     for stage, (_, help_text) in STAGES.items():
         p = sub.add_parser(stage, help=help_text, description=help_text)
         p.add_argument("project", help="project YAML file")
@@ -96,6 +112,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.command == "ui":
+        try:
+            from lexichron.ui.app import main as ui_main
+        except ImportError as exc:  # textual missing
+            parser.exit(1, f"lexichron ui: the terminal UI needs the 'ui' extra "
+                           f"(pip install 'lexichron[ui]'): {exc}\n")
+        return ui_main(args.ui_args)
     try:
         return _run_stage(args.stage, args)
     except ConfigError as exc:

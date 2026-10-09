@@ -27,6 +27,9 @@ dependencies = [
     "rocks-shim @ https://github.com/eric-d-knowles/rocks-shim/releases/download/0.3.0/rocks_shim-0.3.0-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl ; platform_system == 'Linux'",
 ]
 
+[project.optional-dependencies]
+ui = ["textual>=0.80"]
+
 [project.scripts]
 lexichron = "lexichron.cli:main"
 

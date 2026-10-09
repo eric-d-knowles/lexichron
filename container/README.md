@@ -11,6 +11,12 @@ This file covers how the image is produced.
   path) and `register-kernel`, which `new-project` calls to write the
   kernelspec and which can also be run on its own to get a kernel for the
   bare image (`apptainer run --app register-kernel lexichron.sif`).
+- `host_bridge.sh` — a shell loop that runs on the *host* beside `lexichron ui`
+  and executes a short allow-list of Slurm commands (`sbatch`, `squeue`,
+  `sacct`, `scancel`, `sinfo`) on request, via files in
+  `<project>/.lexichron/bridge/`. The UI inside the container writes a request,
+  the bridge writes the answer. `new_project.sh` writes the
+  `.venv/lexichron-ui` launcher that starts both.
 - `register_kernel.sh`, `new_project.sh` — the scripts behind those apps. They
   are copied into the image at `/opt/lexichron/` and are meant to run *inside*
   it; they are not run from the repository.
