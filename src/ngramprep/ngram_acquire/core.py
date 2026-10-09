@@ -46,7 +46,7 @@ def download_and_ingest_to_rocksdb(
         random_seed: Optional[int] = None,
         write_batch_size: int = DEFAULT_WRITE_BATCH_SIZE,
         open_type: str = "read",
-        compact_after_ingest: bool = False,
+        compact_after_ingest: bool = True,
         archive_path_stub: Optional[str] = None,
         combined_bigrams: Optional[set] = None,
 ) -> None:
@@ -74,7 +74,11 @@ def download_and_ingest_to_rocksdb(
         random_seed: Optional seed for randomizing file processing order
         write_batch_size: Number of entries per batch write
         open_type: RocksDB profile ("read", "write", "read:packed24", "write:packed24")
-        compact_after_ingest: If True, perform full compaction after ingestion
+        compact_after_ingest: If True (default), perform full compaction after
+            ingestion. Each processed file is flushed to its own SST file for
+            durability and auto-compaction is off in the write profile, so
+            compaction is what folds those files together and applies pending
+            merges; skip it only for a quick partial run.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
         combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"})
     """
