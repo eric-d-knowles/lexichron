@@ -129,7 +129,8 @@ Keep the image on a large filesystem (it is roughly 700 MB), not in your home
 directory.
 
 **2. Create a project environment.** Choose a directory for your project (your
-notebooks and outputs will live there) and run:
+notebooks and outputs will live there). It can be empty or an existing project,
+such as a fresh clone of a repository. Run:
 
 ```bash
 apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics
@@ -138,7 +139,9 @@ apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /s
 This creates a Python environment in `gender-semantics/.venv` that inherits
 lexichron and all of its dependencies from the image, and registers a Jupyter
 kernel for it. If the directory contains a `requirements.txt`, those packages
-are installed too. Your home directory and the usual cluster data roots
+are installed too, so an existing project is set up in the same single step.
+Re-running the command on a directory that already has a `.venv` keeps the
+environment and refreshes the kernel and launcher. Your home directory and the usual cluster data roots
 (`/scratch`, `/vast`, `/gpfs`, `/work`, `/project`, `/projects`, `/data`) are
 made visible inside the container automatically when they exist; add other
 directories with `--bind /path`, and set environment variables for the project
