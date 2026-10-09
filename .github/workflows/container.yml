@@ -7,7 +7,8 @@ name: Build container image
 #     move the "latest" tag to it. The tag must match the version declared in
 #     pyproject.toml, otherwise the build fails early.
 #   - Manual run (Actions tab -> "Run workflow"): publish the current commit as
-#     ghcr.io/<owner>/lexichron:dev for testing, without touching "latest".
+#     ghcr.io/<owner>/lexichron:<tag> (default "dev") for testing, without
+#     touching "latest". Use a distinct tag to keep several test images.
 #
 # Users pull with:
 #   apptainer pull lexichron-0.2.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.2.0
@@ -17,6 +18,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag to publish for this manual build (never 'latest')"
+        default: "dev"
+        required: false
 
 permissions:
   contents: read
@@ -51,7 +57,13 @@ jobs:
             echo "version=${TAG_VERSION}" >> "$GITHUB_OUTPUT"
             echo "publish_latest=true" >> "$GITHUB_OUTPUT"
           else
-            echo "version=dev" >> "$GITHUB_OUTPUT"
+            TAG="${{ github.event.inputs.tag }}"
+            TAG="${TAG:-dev}"
+            if [[ "${TAG}" == "latest" || "${TAG}" =~ ^[0-9] ]]; then
+              echo "::error::manual builds may not publish 'latest' or a version-like tag; use a git tag for releases"
+              exit 1
+            fi
+            echo "version=${TAG}" >> "$GITHUB_OUTPUT"
             echo "publish_latest=false" >> "$GITHUB_OUTPUT"
           fi
           echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/lexichron" >> "$GITHUB_OUTPUT"
@@ -64,12 +76,20 @@ jobs:
       - name: Build image
         run: |
           set -eu
-          apptainer build --fakeroot lexichron.sif container/lexichron.def
+          # --notest: the %test section runs as its own step below so that a
+          # failure there is reported with annotations.
+          apptainer build --fakeroot --notest lexichron.sif container/lexichron.def 2>&1 | tee build.log
+          test "${PIPESTATUS[0]}" -eq 0 || { grep -iE "error|failed" build.log | tail -20 | sed 's/^/::error::/'; exit 1; }
           ls -lh lexichron.sif
 
       - name: Run image self-test
         run: |
-          apptainer test lexichron.sif
+          set -o pipefail
+          if ! apptainer test lexichron.sif 2>&1 | tee test.log; then
+            # Surface the failing test names and assertion lines as annotations
+            grep -E "^(FAILED|ERROR) |Error:|AssertionError|assert " test.log | head -30 | sed 's/^/::error::/'
+            exit 1
+          fi
           apptainer exec lexichron.sif python -c "import enchant; print(sorted(enchant.list_languages()))"
 
       - name: Report image contents

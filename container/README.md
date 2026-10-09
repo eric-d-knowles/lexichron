@@ -34,7 +34,10 @@ Each image is pinned to one lexichron version; a fix means a new release.
 ## Testing unreleased code
 
 Actions → "Build container image" → Run workflow (any branch). This publishes
-`ghcr.io/eric-d-knowles/lexichron:dev` without touching `latest`. The `.sif`
+`ghcr.io/eric-d-knowles/lexichron:dev` without touching `latest`; the optional
+`tag` input publishes under another name instead (e.g. `streaming`), so two
+test images can coexist. From the command line:
+`gh workflow run container.yml --ref <branch> -f tag=<name>`. The `.sif`
 is also attached to the run as an artifact for seven days.
 
 `dev` and `latest` are moving tags, and Apptainer caches pulls by tag. To

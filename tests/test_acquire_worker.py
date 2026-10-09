@@ -27,7 +27,18 @@ def _unpack(blob):
     return [tuple(v[i:i + 3]) for i in range(0, n, 3)]
 
 
-def test_worker_sums_colliding_tagged_variants(monkeypatch):
+from ngramprep.ngram_acquire.spool import read_chunk
+
+
+def _collect(chunk_paths):
+    out = {}
+    for p in chunk_paths:
+        for k, v in read_chunk(p):
+            out[k.decode()] = v
+    return out
+
+
+def test_worker_sums_colliding_tagged_variants(monkeypatch, tmp_path):
     payload = _gz([
         "working_NOUN class_NOUN in_ADP\t1990,500,80\t2000,600,90",
         "working_NOUN class_VERB in_ADP\t1990,20,5",
@@ -38,19 +49,32 @@ def test_worker_sums_colliding_tagged_variants(monkeypatch):
         lambda url, session=None: _FakeResponse(payload),
     )
 
-    msg, data, nbytes = worker_mod.process_and_ingest_file(
+    msg, chunks, nbytes, entries = worker_mod.process_and_ingest_file(
         "http://example/3-00000-of-00001.gz", 1,
         filter_pred=None, log_file_path=None,
-        combined_bigrams={"working class"},
+        combined_bigrams={"working class"}, spool_dir=str(tmp_path),
     )
 
     assert msg.startswith("SUCCESS")
+    data = _collect(chunks)
     assert set(data) == {"working-class_NOUN in_ADP", "other_NOUN thing_NOUN here_ADV"}
     assert _unpack(data["working-class_NOUN in_ADP"]) == [(1990, 520, 85), (2000, 600, 90)]
-    assert nbytes > 0
+    assert nbytes > 0 and entries == 2
 
 
-def test_worker_without_combining_keeps_variants_separate(monkeypatch):
+def test_worker_splits_into_chunks_and_bounds_memory(monkeypatch, tmp_path):
+    payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(1000)])
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries",
+                        lambda url, session=None: _FakeResponse(payload))
+    msg, chunks, _, entries = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=300)
+    assert msg.startswith("SUCCESS")
+    assert len(chunks) == 4 and entries == 1000          # 300+300+300+100
+    assert len(_collect(chunks)) == 1000
+    assert not list(tmp_path.glob("*.part"))
+
+
+def test_worker_without_combining_keeps_variants_separate(monkeypatch, tmp_path):
     payload = _gz([
         "working_NOUN class_NOUN in_ADP\t1990,500,80",
         "working_NOUN class_VERB in_ADP\t1990,20,5",
@@ -59,8 +83,9 @@ def test_worker_without_combining_keeps_variants_separate(monkeypatch):
         worker_mod, "stream_download_with_retries",
         lambda url, session=None: _FakeResponse(payload),
     )
-    _, data, _ = worker_mod.process_and_ingest_file("http://example/f.gz", 1)
-    assert len(data) == 2
+    _, chunks, _, entries = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, spool_dir=str(tmp_path))
+    assert entries == 2 and len(_collect(chunks)) == 2
 
 
 class _DroppingResponse:
@@ -86,7 +111,7 @@ class _DroppingResponse:
     def close(self): pass
 
 
-def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch):
+def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch, tmp_path):
     payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(2000)])
     calls = {"n": 0}
 
@@ -97,22 +122,28 @@ def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch):
         return _FakeResponse(payload)
 
     monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
-    msg, data, _ = worker_mod.process_and_ingest_file("http://example/f.gz", 1)
+    msg, chunks, _, entries = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=500)
     assert msg.startswith("SUCCESS")
     assert calls["n"] == 2
-    assert len(data) == 2000
+    # The failed attempt's partial chunks were discarded: no double counting.
+    assert entries == 2000 and len(chunks) == 4
+    assert len(_collect(chunks)) == 2000
+    assert sorted(tmp_path.iterdir()) == sorted(map(type(tmp_path), chunks))
 
 
-def test_worker_gives_up_after_max_attempts(monkeypatch):
+def test_worker_gives_up_after_max_attempts(monkeypatch, tmp_path):
     payload = _gz(["a_NOUN\t1990,1,1"])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _DroppingResponse(payload, drop_after=0))
-    msg, data, nbytes = worker_mod.process_and_ingest_file("http://example/f.gz", 1, max_attempts=2)
+    msg, chunks, nbytes, entries = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, max_attempts=2, spool_dir=str(tmp_path))
     assert msg == "NETWORK_ERROR: f.gz"
-    assert data == {} and nbytes == 0
+    assert chunks == [] and nbytes == 0 and entries == 0
+    assert not list(tmp_path.iterdir())
 
 
-def test_session_is_closed_when_worker_creates_it(monkeypatch):
+def test_session_is_closed_when_worker_creates_it(monkeypatch, tmp_path):
     import requests
     closed = {"n": 0}
     class S:
@@ -121,5 +152,5 @@ def test_session_is_closed_when_worker_creates_it(monkeypatch):
     payload = _gz(["a_NOUN\t1990,1,1"])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _FakeResponse(payload))
-    worker_mod.process_and_ingest_file("http://example/f.gz", 1)
+    worker_mod.process_and_ingest_file("http://example/f.gz", 1, spool_dir=str(tmp_path))
     assert closed["n"] == 1

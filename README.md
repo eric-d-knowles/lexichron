@@ -98,8 +98,11 @@ There are two parallel pipelines, one per data source:
 ## System Requirements
 
 - HPC cluster or workstation with multiple CPU cores (30+ cores recommended)
-- Large amount of RAM (80+ GB recommended)
-- Fast local storage (NVMe SSD recommended)
+- RAM: acquisition needs roughly 3 GB plus a few hundred MB per worker
+  (parsed data is streamed through on-disk chunks); filtering and training
+  benefit from more, and 80+ GB is comfortable for 5-gram work
+- Fast local storage (NVMe SSD recommended), including a few GB of node-local
+  temp space (`$TMPDIR`) for the acquisition spool
 - Several TB of disk space for processing and storing very large corpora
 - Settings can be tuned for smaller machines at the cost of speed
 

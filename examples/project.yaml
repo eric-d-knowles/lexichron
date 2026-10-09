@@ -19,8 +19,9 @@ acquire:
   workers: 45
   overwrite_db: false
   random_seed: 321
-  write_batch_size: 25000
   open_type: write:packed24
   compact_after_ingest: false
+  # chunk_entries: 200000     # entries per spooled chunk; lower on small allocations
+  # spool_dir: /tmp            # where chunks are spooled (node-local disk is ideal)
   # file_range: [0, 10]        # process only files 0-9 (for a quick test)
   # combined_bigrams: [human being, human beings]   # hyphenated into single tokens

@@ -17,6 +17,7 @@ from ngramprep.ngram_acquire.coordinator import (
     randomize_file_order,
 )
 from ngramprep.ngram_acquire.executor import process_files
+from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES
 from ngramprep.ngram_acquire.reporter import print_pipeline_header, print_final_summary
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
 from ngramprep.ngram_acquire.utils.cleanup import safe_db_cleanup
@@ -56,6 +57,8 @@ def download_and_ingest_to_rocksdb(
         compact_after_ingest: bool = True,
         archive_path_stub: Optional[str] = None,
         combined_bigrams: Optional[set] = None,
+        chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
+        spool_dir: Optional[str] = None,
 ) -> None:
     """
     Main pipeline: discover, download, parse, and ingest ngram files into RocksDB.
@@ -81,7 +84,7 @@ def download_and_ingest_to_rocksdb(
             Default False: an existing database is resumed, skipping files
             already marked as processed.
         random_seed: Optional seed for randomizing file processing order
-        write_batch_size: Number of entries per batch write
+        write_batch_size: Deprecated; chunk_entries now governs batch size.
         open_type: RocksDB profile; "write:packed24" (default) is the bulk-ingest
             profile with the merge operator the pipeline relies on.
         compact_after_ingest: If True (default), perform full compaction after
@@ -91,6 +94,13 @@ def download_and_ingest_to_rocksdb(
             merges; skip it only for a quick partial run.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
         combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"})
+        chunk_entries: Entries per spooled chunk. Workers stream parsed entries
+            to chunk files on disk instead of holding a whole shard in memory;
+            peak memory is roughly (workers + 1) x one chunk of packed values.
+            Lower this on small allocations; raise it on large nodes.
+        spool_dir: Where chunk files are written (default: the system temp
+            directory, e.g. $TMPDIR; node-local storage is ideal). Needs room
+            for about workers x 2 chunks.
 
     Raises:
         AcquisitionError: If any file failed after retries. The summary is
@@ -184,7 +194,7 @@ def download_and_ingest_to_rocksdb(
             files_to_get=len(file_urls_to_use),
             files_to_skip=files_to_skip,
             workers=workers,
-            write_batch_size=write_batch_size,
+            write_batch_size=chunk_entries,
             ngram_size=ngram_size,
             ngram_type=ngram_type,
             overwrite_db=overwrite_db,
@@ -198,8 +208,9 @@ def download_and_ingest_to_rocksdb(
             workers=workers,
             db=db,
             filter_pred=filter_pred,
-            write_batch_size=write_batch_size,
             combined_bigrams=combined_bigrams,
+            spool_dir=spool_dir,
+            chunk_entries=chunk_entries,
         )
         # Database is automatically flushed by context manager on exit
 
