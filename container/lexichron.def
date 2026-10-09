@@ -27,6 +27,7 @@ From: python:3.11-slim-bookworm
 %files
     . /opt/lexichron-src
     container/register_kernel.sh /opt/lexichron/register_kernel.sh
+    container/new_project.sh /opt/lexichron/new_project.sh
 
 %post
     set -eu
@@ -34,7 +35,8 @@ From: python:3.11-slim-bookworm
 
     # -------------------------------------------------------------------------
     # System packages
-    #   build-essential  : g++ for the Cython extensions (removed afterwards)
+    #   build-essential  : g++ for the Cython extensions, and kept so that project
+#                      environments can pip-install packages that build from source
     #   enchant-2        : spell-checking library used via pyenchant
     #   hunspell-*       : the same dictionary set setup_nlp_resources.sh fetches
     #   libgomp1         : OpenMP runtime for numpy/scipy/gensim wheels
@@ -70,7 +72,7 @@ From: python:3.11-slim-bookworm
     find /opt/lexichron-src/src -type d -name build -prune -exec rm -rf {} +
 
     python -m pip install --no-cache-dir /opt/lexichron-src
-    chmod 755 /opt/lexichron/register_kernel.sh
+    chmod 755 /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh
 
     # Notebook execution without a browser (used for batch runs via nbconvert).
     python -m pip install --no-cache-dir nbconvert
@@ -111,10 +113,8 @@ print("all runtime resources present")
 EOF
 
     # -------------------------------------------------------------------------
-    # Slim down: the compiler is only needed at build time.
+    # Clean up (the compiler and git stay, for project environments)
     # -------------------------------------------------------------------------
-    apt-get purge -y build-essential git
-    apt-get autoremove -y
     apt-get clean
     rm -rf /var/lib/apt/lists/* /opt/lexichron-src /root/.cache
 
@@ -141,7 +141,11 @@ EOF
 
 %test
     python -c "import ngramprep, daviesprep, train, analyze; print('lexichron import OK')"
-    bash -n /opt/lexichron/register_kernel.sh
+    bash -n /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh
+    # A project environment can be created and sees lexichron through the image
+    python -m venv --system-site-packages /tmp/lexichron-test-venv
+    /tmp/lexichron-test-venv/bin/python -c "import ngramprep; print('venv sees lexichron')"
+    rm -rf /tmp/lexichron-test-venv
 
 # -----------------------------------------------------------------------------
 # App: register this image as a Jupyter kernel
@@ -159,6 +163,24 @@ EOF
     Then restart Jupyter / reload the editor window and pick
     "Python (lexichron <version>)" from the kernel menu.
 
+# -----------------------------------------------------------------------------
+# App: create a project environment (venv on top of the image) plus its kernel
+#   apptainer run --app new-project lexichron-<version>.sif /path/to/project
+# -----------------------------------------------------------------------------
+%apprun new-project
+    exec bash /opt/lexichron/new_project.sh "$@"
+
+%apphelp new-project
+    Create a project environment: a virtual environment in <project>/.venv that
+    inherits lexichron from this image and takes your own packages, plus a
+    Jupyter kernel for it:
+
+        apptainer run --app new-project lexichron-<version>.sif /path/to/project
+
+    Then pick "Python (<project> | lexichron <version>)" from the kernel menu
+    and install packages with  %pip install <package>  in a notebook, or with
+        apptainer exec lexichron-<version>.sif /path/to/project/.venv/bin/pip install <package>
+
 %help
     lexichron: scalable tools for temporal linguistic analysis.
 
@@ -171,4 +193,9 @@ EOF
 
         apptainer run --app register-kernel lexichron.sif
 
-    Then pick "Python (lexichron <version>)" from the kernel menu.
+    To create a project environment that adds your own packages on top:
+
+        apptainer run --app new-project lexichron.sif /path/to/project
+
+    Then pick the kernel from the kernel menu. Each app has its own help:
+    apptainer run-help --app new-project lexichron.sif

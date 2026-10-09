@@ -139,6 +139,37 @@ are the only files you need, and they are the same either way.
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
 *Python (lexichron 0.1.0)* from the kernel menu.
 
+#### Project environments
+
+The image itself is read-only, so to add your own packages alongside lexichron,
+create a *project environment*: a Python virtual environment in your project
+directory that inherits lexichron and all of its dependencies from the image.
+
+```bash
+apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics
+```
+
+This creates `gender-semantics/.venv` and registers a kernel named
+*Python (gender-semantics | lexichron 0.1.0)*. Open a notebook on that kernel
+and install packages the usual way:
+
+```python
+%pip install rpy2 pymc
+```
+
+or from a shell:
+
+```bash
+apptainer exec lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics/.venv/bin/pip install rpy2 pymc
+```
+
+Packages land in the project's `.venv` and persist. Each project gets its own
+environment; `.venv/bin/pip freeze --local` lists what you added. Install on a
+login node if compute nodes have no internet access. The environment is tied to
+the image's Python version (3.11): if a future image moves to a newer Python,
+run `new-project` again and reinstall from your frozen list; the script tells
+you when this is needed.
+
 To run Python directly instead of through a notebook:
 
 ```bash

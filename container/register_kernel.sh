@@ -19,6 +19,9 @@
 #                  name, e.g. "lexichron-0.2.0").
 #   --display NAME Display name in the kernel menu
 #                  (default: "Python (lexichron 0.2.0)").
+#   --python PATH  Python interpreter to run inside the container (default:
+#                  the image's own). Used by the new-project app to point a
+#                  kernel at a project's virtual environment.
 #
 # Afterwards, restart Jupyter (or reload the VS Code / Positron window) and
 # pick the kernel from the kernel menu.
@@ -30,12 +33,14 @@ usage() { sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 EXTRA_BINDS=()
 KERNEL_NAME=""
 DISPLAY_NAME=""
+PYTHON="python"
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --bind)    EXTRA_BINDS+=("$2"); shift 2 ;;
         --name)    KERNEL_NAME="$2"; shift 2 ;;
         --display) DISPLAY_NAME="$2"; shift 2 ;;
+        --python)  PYTHON="$2"; shift 2 ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -67,13 +72,25 @@ VERSION="${BASENAME#lexichron-}"                     # 0.2.0 (or the basename if
 # root that exists on the host is bound and one that does not is ignored.
 # ---------------------------------------------------------------------------
 SYSTEM_BOUND=""
+MOUNTS="$(awk '{print $2}' /proc/mounts)"
 for d in /scratch /vast /gpfs /work /project /projects /data "${EXTRA_BINDS[@]}"; do
-    if awk '{print $2}' /proc/mounts | grep -qx "$d"; then
-        SYSTEM_BOUND="$SYSTEM_BOUND $d"
-    fi
+    # Already visible if it, or a parent of it, is a mount point in here.
+    p="$d"
+    while [ "$p" != "/" ]; do
+        if printf '%s\n' "$MOUNTS" | grep -qx "$p"; then
+            SYSTEM_BOUND="$SYSTEM_BOUND $d"
+            break
+        fi
+        p="$(dirname "$p")"
+    done
 done
 
-CANDIDATES="/scratch /vast /gpfs /work /project /projects /data ${EXTRA_BINDS[*]-}"
+CANDIDATES=""
+for d in /scratch /vast /gpfs /work /project /projects /data "${EXTRA_BINDS[@]}"; do
+    case " $CANDIDATES " in *" $d "*) continue ;; esac
+    CANDIDATES="$CANDIDATES $d"
+done
+CANDIDATES="${CANDIDATES# }"
 
 # ---------------------------------------------------------------------------
 # Write the kernelspec
@@ -81,19 +98,20 @@ CANDIDATES="/scratch /vast /gpfs /work /project /projects /data ${EXTRA_BINDS[*]
 KERNEL_DIR="${JUPYTER_DATA_DIR:-$HOME/.local/share/jupyter}/kernels/${KERNEL_NAME}"
 mkdir -p "$KERNEL_DIR"
 
-python3 - "$KERNEL_DIR/kernel.json" "$IMAGE" "$DISPLAY_NAME" "$CANDIDATES" "$SYSTEM_BOUND" <<'EOF'
+python3 - "$KERNEL_DIR/kernel.json" "$IMAGE" "$DISPLAY_NAME" "$CANDIDATES" "$SYSTEM_BOUND" "$PYTHON" <<'EOF'
 import json, sys
-out, image, display, candidates, system_bound = sys.argv[1:]
+out, image, display, candidates, system_bound, python = sys.argv[1:]
 
 # Runs on the HOST each time the kernel starts.
 launcher = f"""
 img={json.dumps(image)}
+py={json.dumps(python)}
 binds=""
 for d in {candidates}; do
   case " {system_bound} " in *" $d "*) continue ;; esac
   [ -d "$d" ] && binds="$binds --bind $d"
 done
-exec apptainer exec $binds "$img" python -m ipykernel_launcher -f "$1"
+exec apptainer exec $binds "$img" "$py" -m ipykernel_launcher -f "$1"
 """.strip()
 
 spec = {
@@ -109,6 +127,7 @@ EOF
 
 echo "Registered kernel '${KERNEL_NAME}' -> ${KERNEL_DIR}/kernel.json"
 echo "  image:          ${IMAGE}"
+echo "  python:         ${PYTHON}"
 echo "  display name:   ${DISPLAY_NAME}"
 echo "  bound by site:  ${SYSTEM_BOUND:-(none)}"
 echo "  bound on start: ${CANDIDATES} (whichever exist on this machine)"
