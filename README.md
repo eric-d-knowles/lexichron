@@ -123,37 +123,29 @@ Replace `0.1.0` with the version you want (`latest` is the newest release).
 Keep the image on a large filesystem (it is roughly 700 MB), not in your home
 directory.
 
-**2. Set up a Jupyter kernel.** Pick one of the two:
-
-*(a) A project environment (recommended).* This creates a Python virtual
-environment in your project directory that inherits lexichron and all of its
-dependencies from the image and into which you can install your own packages,
-and registers a kernel for it:
+**2. Create a project environment.** Choose a directory for your project (your
+notebooks and outputs will live there) and run:
 
 ```bash
 apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
-*(b) The image alone.* If you only need lexichron and nothing else:
-
-```bash
-apptainer run --app register-kernel /scratch/$USER/containers/lexichron-0.1.0.sif
-```
-
-Either way, your home directory and the usual cluster data roots (`/scratch`,
-`/vast`, `/gpfs`, `/work`, `/project`, `/projects`, `/data`) are made visible
-inside the container automatically when they exist; add other directories with
-`--bind /path`. Nothing from this repository needs to be downloaded for this
-step: the notebooks in `notebooks/` are the only files you need.
+This creates a Python environment in `gender-semantics/.venv` that inherits
+lexichron and all of its dependencies from the image, and registers a Jupyter
+kernel for it. Your home directory and the usual cluster data roots
+(`/scratch`, `/vast`, `/gpfs`, `/work`, `/project`, `/projects`, `/data`) are
+made visible inside the container automatically when they exist; add other
+directories with `--bind /path`. Nothing from this repository needs to be
+downloaded for this step; copy whichever notebooks from `notebooks/` you want
+into your project directory.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.1.0)* (or *Python (lexichron 0.1.0)*)
-from the kernel menu. If the kernel is not listed, reload the editor window.
+*Python (gender-semantics | lexichron 0.1.0)* from the kernel menu. If the
+kernel is not listed, reload the editor window.
 
-#### Project environments
+#### Adding packages to a project
 
-Option (a) above creates `gender-semantics/.venv`. Open a notebook on the
-project's kernel and install packages the usual way:
+Open a notebook on the project's kernel and install packages the usual way:
 
 ```python
 %pip install rpy2 pymc
@@ -190,7 +182,9 @@ Notes on the container route:
 - The image is read-only. All output paths (`db_path_stub`, model directories,
   logs) must point at bind-mounted host directories such as `/scratch`.
 - Each image is pinned to one lexichron version. To use a different version,
-  pull its image and register it as a separate kernel.
+  pull its image and run `new-project` with it (the project's environment is
+  tied to the image's Python version, so it may need to be recreated; the
+  command tells you if so).
 - `apptainer run-help lexichron-0.1.0.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 

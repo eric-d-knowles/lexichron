@@ -7,7 +7,10 @@ This file covers how the image is produced.
 
 - `lexichron.def` — Apptainer definition. Builds lexichron from the repository
   checkout and bakes in Enchant, Hunspell dictionaries, spaCy models and the
-  NLTK Swadesh list. Defines two apps, `register-kernel` and `new-project`.
+  NLTK Swadesh list. Defines two apps: `new-project` (the documented user
+  path) and `register-kernel`, which `new-project` calls to write the
+  kernelspec and which can also be run on its own to get a kernel for the
+  bare image (`apptainer run --app register-kernel lexichron.sif`).
 - `register_kernel.sh`, `new_project.sh` — the scripts behind those apps. They
   are copied into the image at `/opt/lexichron/` and are meant to run *inside*
   it; they are not run from the repository.
