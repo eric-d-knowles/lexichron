@@ -119,39 +119,43 @@ mkdir -p /scratch/$USER/containers && cd /scratch/$USER/containers
 apptainer pull lexichron-0.1.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.1.0
 ```
 
-Replace `0.1.0` with the version you want; `latest` always points at the most
-recent release. Keep the image on a large filesystem (it is several GB), not in
-your home directory.
+Replace `0.1.0` with the version you want. Keep the image on a large
+filesystem (it is roughly 700 MB), not in your home directory. Versioned tags
+never change; `latest` (newest release) and `dev` (newest commit) move, so to
+re-pull one of those run `apptainer cache clean` first, or Apptainer will hand
+you the cached copy.
 
-**2. Register it as a Jupyter kernel:**
+**2. Set up a Jupyter kernel.** Pick one of the two:
 
-```bash
-apptainer run --app register-kernel /scratch/$USER/containers/lexichron-0.1.0.sif
-```
-
-This writes a kernelspec that starts the kernel inside the container. Your
-home directory and the usual cluster data roots (`/scratch`, `/vast`, `/gpfs`,
-`/work`, `/project`, `/projects`, `/data`) are made visible automatically when
-they exist; add other directories with `--bind /path`. Nothing from this
-repository needs to be downloaded for this step: the notebooks in `notebooks/`
-are the only files you need, and they are the same either way.
-
-**3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (lexichron 0.1.0)* from the kernel menu.
-
-#### Project environments
-
-The image itself is read-only, so to add your own packages alongside lexichron,
-create a *project environment*: a Python virtual environment in your project
-directory that inherits lexichron and all of its dependencies from the image.
+*(a) A project environment (recommended).* This creates a Python virtual
+environment in your project directory that inherits lexichron and all of its
+dependencies from the image and into which you can install your own packages,
+and registers a kernel for it:
 
 ```bash
 apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
-This creates `gender-semantics/.venv` and registers a kernel named
-*Python (gender-semantics | lexichron 0.1.0)*. Open a notebook on that kernel
-and install packages the usual way:
+*(b) The image alone.* If you only need lexichron and nothing else:
+
+```bash
+apptainer run --app register-kernel /scratch/$USER/containers/lexichron-0.1.0.sif
+```
+
+Either way, your home directory and the usual cluster data roots (`/scratch`,
+`/vast`, `/gpfs`, `/work`, `/project`, `/projects`, `/data`) are made visible
+inside the container automatically when they exist; add other directories with
+`--bind /path`. Nothing from this repository needs to be downloaded for this
+step: the notebooks in `notebooks/` are the only files you need.
+
+**3. Open a notebook** in JupyterLab, Positron or VS Code and select
+*Python (gender-semantics | lexichron 0.1.0)* (or *Python (lexichron 0.1.0)*)
+from the kernel menu. If the kernel is not listed, reload the editor window.
+
+#### Project environments
+
+Option (a) above creates `gender-semantics/.venv`. Open a notebook on the
+project's kernel and install packages the usual way:
 
 ```python
 %pip install rpy2 pymc
