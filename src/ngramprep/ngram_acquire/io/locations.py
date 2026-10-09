@@ -5,8 +5,9 @@ import re
 from typing import Tuple
 
 BASE_URL = "https://storage.googleapis.com/books/ngrams/books"
+SUPPORTED_RELEASES = ("20200217",)
 
-__all__ = ["BASE_URL", "build_location_info"]
+__all__ = ["BASE_URL", "SUPPORTED_RELEASES", "build_location_info"]
 
 
 def build_location_info(
@@ -20,10 +21,8 @@ def build_location_info(
     Returns a URL that can be fetched (either HTML index or GCS XML listing)
     and a regex pattern that matches against filenames.
 
-    Handles three release versions:
-    - V3 (20200217): GCS XML API with prefix for "{n}-{shard}-of-{total}.gz"
-    - V2 (20120701): HTML index with "googlebooks-{corpus}-all-{n}gram-{date}-{letter}.gz"
-    - V1 (20090715): HTML index with "googlebooks-{corpus}-all-{n}gram-{date}-{num}.csv.zip"
+    Supports the V3 release (20200217): GCS XML API listing with files named
+    "{n}-{shard}-of-{total}.gz", one line per n-gram with all years on it.
 
     Args:
         ngram_size: N-gram size (1-5)
@@ -36,7 +35,7 @@ def build_location_info(
         - filename_pattern: Regex that matches just the filename (not full URL)
 
     Raises:
-        ValueError: If parameters are invalid or release version unknown
+        ValueError: If parameters are invalid or the release is not supported
 
     Examples:
         >>> url, pattern = build_location_info(1, "20200217", "eng")
@@ -61,34 +60,18 @@ def build_location_info(
             f"repo_corpus_id must contain only [A-Za-z0-9-], got {repo_corpus_id!r}"
         )
 
-    # Build URL and pattern based on release version
-    if repo_release_id == "20200217":
-        # V3: GCS bucket XML API listing
-        # Files named: "1-00012-of-00024.gz"
-        prefix = f"ngrams/books/{repo_release_id}/{repo_corpus_id}/{ngram_size}-"
-        listing_url = f"https://books.storage.googleapis.com/?prefix={prefix}"
-        filename_pattern = re.compile(rf"^{ngram_size}-\d{{5}}-of-\d{{5}}\.gz$")
-
-    elif repo_release_id == "20120701":
-        # V2: HTML index page (datasetsv3.html contains all versions)
-        # Files named: "googlebooks-eng-all-2gram-20120701-qu.gz"
-        listing_url = f"{BASE_URL}/datasetsv3.html"
-        filename_pattern = re.compile(
-            rf"^googlebooks-{re.escape(repo_corpus_id)}-all-{ngram_size}gram-{repo_release_id}-\w+\.gz$"
-        )
-
-    elif repo_release_id == "20090715":
-        # V1: HTML index page (datasetsv3.html contains all versions)
-        # Files named: "googlebooks-eng-all-5gram-20090715-296.csv.zip"
-        listing_url = f"{BASE_URL}/datasetsv3.html"
-        filename_pattern = re.compile(
-            rf"^googlebooks-{re.escape(repo_corpus_id)}-all-{ngram_size}gram-{repo_release_id}-\d+\.csv\.zip$"
-        )
-
-    else:
+    # Only the 2020 release (V3) is supported. Earlier releases use different
+    # file formats (2012: one line per n-gram-year; 2009: zipped CSV) that the
+    # worker and parser do not handle.
+    if repo_release_id not in SUPPORTED_RELEASES:
         raise ValueError(
-            f"Unknown release version {repo_release_id}. "
-            f"Supported: 20200217 (V3), 20120701 (V2), 20090715 (V1)"
+            f"Unsupported release {repo_release_id!r}. "
+            f"Supported: {', '.join(SUPPORTED_RELEASES)} (Google Books Ngrams V3)."
         )
+
+    # V3: GCS bucket XML API listing; files named "1-00012-of-00024.gz"
+    prefix = f"ngrams/books/{repo_release_id}/{repo_corpus_id}/{ngram_size}-"
+    listing_url = f"https://books.storage.googleapis.com/?prefix={prefix}"
+    filename_pattern = re.compile(rf"^{ngram_size}-\d{{5}}-of-\d{{5}}\.gz$")
 
     return listing_url, filename_pattern
