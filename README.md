@@ -204,7 +204,10 @@ conda activate your-environment
 pip install -e .
 ```
 
-### Additional setup: Enchant library and Hunspell dictionaries
+#### Additional setup: Enchant library and Hunspell dictionaries
+
+(The container image includes all of this; the steps below are for the conda
+route only.)
 
 Spell-checking relies on the **Enchant C library** and **Hunspell dictionaries**, and
 model alignment requires the NLTK package's **Swadesh list of stable words**. These
@@ -225,7 +228,7 @@ The script will:
 
 You only need to run this script **once per environment**.
 
-### Don't have an environment yet?
+#### Don't have an environment yet?
 
 A reference `environment.yml` is provided with all dependencies pre-configured. To
 create a dedicated conda environment from it:
@@ -237,7 +240,7 @@ conda activate lexichron
 
 Then follow the standard installation steps above.
 
-### Registering a Jupyter kernel (if needed)
+#### Registering a Jupyter kernel (if needed)
 
 If you don't already have a Jupyter kernel registered for your project environment, you
 can register one now:
@@ -250,7 +253,7 @@ python -m ipykernel install --user --name=lexichron --display-name="Python (lexi
 Jupyter's kernel menu. Replace both with something meaningful to your project — for
 example, `--name=gender_semantics --display-name="Python (gender semantics)"`.
 
-### Notes
+#### Notes on the conda route
 
 - **C++ compiler**: Building lexichron requires a C++ compiler (`g++`). This is included automatically if you create the environment from `environment.yml`. If installing into an existing environment, ensure one is available with `conda install -c conda-forge gxx`.
 - **spaCy models** are downloaded automatically on first import.
