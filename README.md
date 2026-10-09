@@ -22,7 +22,7 @@ smaller machines at the cost of speed.
   - [Development installation (conda)](#development-installation-conda)
 - [Example notebooks](#example-notebooks)
 - [Output files](#output-files)
-- [Advanced: Monitoring and Architecture](#advanced-monitoring-and-architecture)
+- [Reading the progress display](#reading-the-progress-display)
 - [Support and Maintenance](#support-and-maintenance)
 
 ## Citation
@@ -209,6 +209,9 @@ conda activate your-environment
 pip install -e .
 ```
 
+`docs/architecture.md` describes how the filter and pivot pipelines are
+structured.
+
 #### Additional setup: Enchant library and Hunspell dictionaries
 
 (The container image includes all of this; the steps below are for the conda
@@ -312,11 +315,9 @@ Model training writes one model per year (or per year bin) into the model
 directory you specify. Use `common_db.compress_db()` to archive a database for
 long-term storage or transfer.
 
-## Advanced: Monitoring and Architecture
+## Reading the progress display
 
-### Real-time Progress Display
-
-The `ngram_filter` and `ngram_pivot` pipelines print periodic updates showing:
+The `ngram_filter` and `ngram_pivot` pipelines print a line like this every few seconds (`progress_every_s`):
 
 ```
       items         kept%         workers         units          rate          elapsed
@@ -332,23 +333,6 @@ Column meanings:
 - **units**: Work distribution status as `pending·processing·completed` (shows load balancing)
 - **rate**: Processing throughput (records per second)
 - **elapsed**: Total time since pipeline started
-
-### Two-Stage Pipeline Architecture
-
-The `ngram_filter` and `ngram_pivot` pipelines use a two-phase design for memory efficiency and fault tolerance:
-
-1. **Processing stage**: Workers divide the input data into chunks, process them in parallel, and write results to temporary files (`tmp_dir/worker_outputs/`)
-2. **Ingestion stage**: Temporary files are merged into the final database using parallel streaming
-
-This design enables:
-
-- **Resume capability**: Interrupted jobs pick up where they left off
-- **Load balancing**: Work units are pre-balanced via density-based sampling; workers steal remaining units as they finish
-- **Balanced work units**: Density-based sampling scans the corpus to estimate token frequency distributions, then partitions work so each unit has similar total token mass, reducing straggler workers and keeping throughput consistent
-- **Memory efficiency**: Large datasets don't need to fit in RAM
-- **Predictable resource usage**: Memory consumption is bounded regardless of corpus size
-
-*Note: Davies acquisition pipelines use simpler direct ingestion and do not employ the two-stage architecture.*
 
 ## Support and Maintenance
 
