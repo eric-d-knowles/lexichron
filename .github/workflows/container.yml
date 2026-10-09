@@ -72,6 +72,27 @@ jobs:
           apptainer test lexichron.sif
           apptainer exec lexichron.sif python -c "import enchant; print(sorted(enchant.list_languages()))"
 
+      - name: Report image contents
+        # Written to the run summary so the build is self-describing without
+        # access to the registry.
+        run: |
+          {
+            echo "## Image report"
+            echo
+            echo "- size: $(du -h lexichron.sif | cut -f1)"
+            echo "- apps: $(apptainer inspect --list-apps lexichron.sif | tr '\n' ' ')"
+            echo "- lexichron: $(apptainer exec lexichron.sif python -c 'import ngramprep; print(ngramprep.__version__)')"
+            echo "- python: $(apptainer exec lexichron.sif python -c 'import sys; print(sys.version.split()[0])')"
+            echo "- /opt/lexichron: $(apptainer exec lexichron.sif ls /opt/lexichron | tr '\n' ' ')"
+            echo
+            echo '```'
+            apptainer inspect --list-apps lexichron.sif
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          # The app must exist, or the build is wrong.
+          apptainer inspect --list-apps lexichron.sif | grep -qx register-kernel
+          apptainer inspect --list-apps lexichron.sif | grep -qx new-project
+
       - name: Log in to ghcr.io
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | apptainer registry login \
@@ -86,7 +107,13 @@ jobs:
           if [[ "${{ steps.meta.outputs.publish_latest }}" == "true" ]]; then
             apptainer push lexichron.sif "oras://${IMAGE}:latest"
           fi
-          echo "Published oras://${IMAGE}:${VERSION}" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Published"
+            echo
+            echo "- oras://${IMAGE}:${VERSION}"
+            [[ "${{ steps.meta.outputs.publish_latest }}" == "true" ]] && echo "- oras://${IMAGE}:latest"
+            echo "- sha256: $(sha256sum lexichron.sif | cut -d' ' -f1)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload image as workflow artifact
         # Also keep the .sif attached to the run for 7 days, for anyone who
