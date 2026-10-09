@@ -54,7 +54,7 @@ def _from_widget(field: Field, raw: Any) -> Any:
     """Convert a widget value back to a project-file value (None = unset)."""
     if field.kind == "bool":
         return bool(raw)
-    if raw is None or raw is Select.BLANK:
+    if raw is None or raw is Select.NULL:
         return None
     if isinstance(raw, str) and not raw.strip():
         return None
@@ -190,8 +190,8 @@ class LexichronApp(App):
                 yield Switch(value=bool(current), id=wid)
             elif f.kind == "choice" and f.choices:
                 opts = [(c, c) for c in f.choices]
-                val = str(current) if current is not None else Select.BLANK
-                if val is not Select.BLANK and val not in f.choices:
+                val = str(current) if current is not None else Select.NULL
+                if val is not Select.NULL and val not in f.choices:
                     opts.append((val, val))
                 yield Select(opts, value=val, allow_blank=True, id=wid)
             else:
