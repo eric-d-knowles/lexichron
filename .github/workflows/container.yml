@@ -76,12 +76,20 @@ jobs:
       - name: Build image
         run: |
           set -eu
-          apptainer build --fakeroot lexichron.sif container/lexichron.def
+          # --notest: the %test section runs as its own step below so that a
+          # failure there is reported with annotations.
+          apptainer build --fakeroot --notest lexichron.sif container/lexichron.def 2>&1 | tee build.log
+          test "${PIPESTATUS[0]}" -eq 0 || { grep -iE "error|failed" build.log | tail -20 | sed 's/^/::error::/'; exit 1; }
           ls -lh lexichron.sif
 
       - name: Run image self-test
         run: |
-          apptainer test lexichron.sif
+          set -o pipefail
+          if ! apptainer test lexichron.sif 2>&1 | tee test.log; then
+            # Surface the failing test names and assertion lines as annotations
+            grep -E "^(FAILED|ERROR) |Error:|AssertionError|assert " test.log | head -30 | sed 's/^/::error::/'
+            exit 1
+          fi
           apptainer exec lexichron.sif python -c "import enchant; print(sorted(enchant.list_languages()))"
 
       - name: Report image contents
