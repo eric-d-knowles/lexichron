@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["process_and_ingest_file"]
+__all__ = ["process_and_ingest_file", "merge_packed_records"]
 
 try:
     import setproctitle as _setproctitle
@@ -139,7 +139,15 @@ def process_and_ingest_file(
                             combined_bigrams=combined_bigrams
                         )
                         if key and rec:
-                            parsed_data[key] = _pack_record(rec)
+                            packed = _pack_record(rec)
+                            existing = parsed_data.get(key)
+                            if existing is None:
+                                parsed_data[key] = packed
+                            else:
+                                # Two source lines collapsed onto one key
+                                # (e.g. tagged variants of a combined bigram):
+                                # add their counts rather than overwrite.
+                                parsed_data[key] = merge_packed_records(existing, packed)
 
                     except UnicodeDecodeError as exc:
                         worker_logger.warning(
@@ -183,6 +191,34 @@ def process_and_ingest_file(
             worker_id, pid, filename, exc
         )
         return msg, {}, 0
+
+
+def merge_packed_records(a: bytes, b: bytes) -> bytes:
+    """
+    Sum two packed records year by year.
+
+    Both inputs are sequences of little-endian uint64 triplets
+    ``(year, frequency, document_count)`` as produced by :func:`_pack_record`.
+    The result contains each year once, with frequency and document_count
+    summed, in ascending year order.
+    """
+    totals: dict[int, list[int]] = {}
+    for blob in (a, b):
+        n = len(blob) // 8
+        vals = struct.unpack(f"<{n}Q", blob)
+        for i in range(0, n, 3):
+            year, freq, docs = vals[i], vals[i + 1], vals[i + 2]
+            t = totals.get(year)
+            if t is None:
+                totals[year] = [freq, docs]
+            else:
+                t[0] += freq
+                t[1] += docs
+    flat: list[int] = []
+    for year in sorted(totals):
+        freq, docs = totals[year]
+        flat.extend((year, freq, docs))
+    return struct.pack(f"<{len(flat)}Q", *flat)
 
 
 def _pack_record(rec: NgramRecord) -> bytes:

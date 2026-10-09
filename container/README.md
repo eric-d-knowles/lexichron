@@ -66,3 +66,7 @@ From the repository root, on a machine with Apptainer and root or fakeroot:
   minor version; `new_project.sh` refuses to reuse one built for a different
   version.
 - Compiled extensions (`.so`) are not tracked in git; the build compiles them.
+- The test suite in `tests/` is copied into the image and run by `apptainer
+  test` during every CI build, so a failing test fails the build. Run it by
+  hand with `apptainer exec lexichron.sif python -m pytest /opt/lexichron/tests`
+  or, in a development checkout, `python -m pytest tests`.

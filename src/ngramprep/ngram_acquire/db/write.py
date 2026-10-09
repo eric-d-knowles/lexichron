@@ -26,6 +26,12 @@ def write_batch_to_db(
     """
     Atomically write entries using rocks-shim batch APIs.
 
+    Data entries are written with ``merge`` rather than ``put``, so that a key
+    which already exists in the database (for example the same n-gram arriving
+    from two shard files, or two n-grams that collapse onto one key through
+    ``combined_bigrams``) has its per-year counts summed by the database's
+    packed24 merge operator instead of being overwritten.
+
     Args:
         db: RocksDB database handle
         pending_data: Mapping of keys (str or bytes) to byte values
@@ -47,7 +53,7 @@ def write_batch_to_db(
     try:
         with db.write_batch(disable_wal=disable_wal, sync=False) as wb:
             for k, v in pending_data.items():
-                wb.put(_coerce_key(k), v)
+                wb.merge(_coerce_key(k), v)
 
             # Add metadata markers in the same batch
             if metadata_keys:

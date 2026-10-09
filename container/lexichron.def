@@ -74,8 +74,9 @@ From: python:3.11-slim-bookworm
     python -m pip install --no-cache-dir /opt/lexichron-src
     chmod 755 /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh
 
-    # Notebook execution without a browser (used for batch runs via nbconvert).
-    python -m pip install --no-cache-dir nbconvert
+    # Notebook execution without a browser (used for batch runs via nbconvert),
+    # and pytest so the image can run the package's test suite.
+    python -m pip install --no-cache-dir nbconvert pytest
 
     # -------------------------------------------------------------------------
     # spaCy models (the list in src/ngramprep/__init__.py). Baking them in
