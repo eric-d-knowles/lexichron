@@ -16,6 +16,6 @@ Key components:
     - reporter: Progress and statistics display
 """
 
-from ngramprep.ngram_acquire.core import download_and_ingest_to_rocksdb
+from ngramprep.ngram_acquire.core import download_and_ingest_to_rocksdb, AcquisitionError
 
-__all__ = ["download_and_ingest_to_rocksdb"]
+__all__ = ["download_and_ingest_to_rocksdb", "AcquisitionError"]

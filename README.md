@@ -46,7 +46,7 @@ Alternatively, you can click "Cite this repository" in the GitHub sidebar for ad
 
 ### Data Preparation
 
-- **Data acquisition:** Download n-gram datasets (1- through 5-grams) or read Davies corpora (which must be licensed and downloaded by the user), and ingest them into a RocksDB database.
+- **Data acquisition:** Download n-gram datasets (1- through 5-grams) from the 2020 release of Google Books Ngrams, or read Davies corpora (which must be licensed and downloaded by the user), and ingest them into a RocksDB database.
 - **Language support:** N-gram pipelines support English, Chinese (simplified), French, German, Hebrew, Italian, Russian, and Spanish.
 - **Filtering:** Any combination of case normalization, stopword removal, short-word removal, non-alphabetic token removal, and lemmatization. Discarded tokens are replaced with `<UNK>`.
 - **Whitelists:** Write the top-N most frequent unigrams, optionally spell-checked, and use the list to filter longer n-grams. With case normalization, spell-checking also drops proper nouns ("Jackson", "Einstein"). A year range restricts the list to tokens present in every year of the range.

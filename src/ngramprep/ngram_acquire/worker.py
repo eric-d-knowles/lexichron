@@ -35,6 +35,7 @@ def process_and_ingest_file(
     *,
     session: Optional[requests.Session] = None,
     combined_bigrams: Optional[set] = None,
+    max_attempts: int = 3,
 ) -> Tuple[str, Dict[str, bytes], int]:
     """
     Download, decompress, and parse a gzipped ngram file.
@@ -50,6 +51,9 @@ def process_and_ingest_file(
         log_file_path: Optional path to log file for worker output
         session: Optional requests.Session for connection pooling
         combined_bigrams: Optional set of bigrams to combine with hyphens
+        max_attempts: How many times to attempt the whole download-and-parse
+            of this file. A connection dropped part-way through a stream is
+            retried from the beginning, discarding partial results.
 
     Returns:
         Tuple of (status_message, parsed_data_dict, uncompressed_bytes)
@@ -95,102 +99,107 @@ def process_and_ingest_file(
             pass
 
     filename = PurePosixPath(url).name
-    parsed_data: Dict[str, bytes] = {}
-    uncompressed_bytes = 0
     pid = os.getpid()
 
+    # One session per worker call, closed when done (a shared one may be passed in).
+    own_session = session is None
+    sess = session or requests.Session()
+
+    worker_logger.info("Worker %s (PID %s): Processing %s", worker_id, pid, filename)
+
     try:
-        worker_logger.info(
-            "Worker %s (PID %s): Processing %s",
-            worker_id, pid, filename
-        )
-
-        # Download file with retry logic
-        resp = stream_download_with_retries(url, session=session)
-
-        with closing(resp):
-            # Log compressed file size if available
-            content_length = resp.headers.get("content-length")
-            if content_length:
-                try:
-                    worker_logger.info(
-                        "Worker %s (PID %s): File size: %s bytes (compressed)",
-                        worker_id, pid, f"{int(content_length):,}"
-                    )
-                except ValueError:
-                    worker_logger.debug(
-                        "Worker %s (PID %s): Non-numeric content-length=%r",
-                        worker_id, pid, content_length
-                    )
-
-            # Process gzipped content line by line
+        last_error = ""
+        for attempt in range(1, max_attempts + 1):
+            parsed_data: Dict[str, bytes] = {}
+            uncompressed_bytes = 0
             lines_processed = 0
-            with gzip.GzipFile(fileobj=resp.raw, mode="rb") as gz:
-                for raw in gz:
-                    # Track uncompressed bytes
-                    uncompressed_bytes += len(raw)
-                    lines_processed += 1
+            try:
+                resp = stream_download_with_retries(url, session=sess)
+                with closing(resp):
+                    content_length = resp.headers.get("content-length")
+                    if content_length:
+                        try:
+                            worker_logger.info(
+                                "Worker %s (PID %s): File size: %s bytes (compressed)",
+                                worker_id, pid, f"{int(content_length):,}"
+                            )
+                        except ValueError:
+                            worker_logger.debug(
+                                "Worker %s (PID %s): Non-numeric content-length=%r",
+                                worker_id, pid, content_length
+                            )
 
-                    try:
-                        # Parse line and pack if valid
-                        key, rec = parse_line(
-                            raw.decode("utf-8"),
-                            filter_pred=filter_pred,
-                            combined_bigrams=combined_bigrams
-                        )
-                        if key and rec:
-                            packed = _pack_record(rec)
-                            existing = parsed_data.get(key)
-                            if existing is None:
-                                parsed_data[key] = packed
-                            else:
-                                # Two source lines collapsed onto one key
-                                # (e.g. tagged variants of a combined bigram):
-                                # add their counts rather than overwrite.
-                                parsed_data[key] = merge_packed_records(existing, packed)
+                    # Process gzipped content line by line
+                    with gzip.GzipFile(fileobj=resp.raw, mode="rb") as gz:
+                        for raw in gz:
+                            uncompressed_bytes += len(raw)
+                            lines_processed += 1
+                            try:
+                                key, rec = parse_line(
+                                    raw.decode("utf-8"),
+                                    filter_pred=filter_pred,
+                                    combined_bigrams=combined_bigrams,
+                                )
+                                if key and rec:
+                                    packed = _pack_record(rec)
+                                    existing = parsed_data.get(key)
+                                    if existing is None:
+                                        parsed_data[key] = packed
+                                    else:
+                                        # Two source lines collapsed onto one key
+                                        # (e.g. tagged variants of a combined
+                                        # bigram): add their counts, don't overwrite.
+                                        parsed_data[key] = merge_packed_records(existing, packed)
+                            except UnicodeDecodeError as exc:
+                                worker_logger.warning(
+                                    "Worker %s (PID %s): Unicode error in %s line %s: %s",
+                                    worker_id, pid, filename, lines_processed, exc
+                                )
+                            except Exception as exc:
+                                worker_logger.warning(
+                                    "Worker %s (PID %s): Error processing line %s from %s: %s",
+                                    worker_id, pid, lines_processed, filename, exc
+                                )
 
-                    except UnicodeDecodeError as exc:
-                        worker_logger.warning(
-                            "Worker %s (PID %s): Unicode error in %s line %s: %s",
-                            worker_id, pid, filename, lines_processed, exc
-                        )
-                    except Exception as exc:
-                        worker_logger.warning(
-                            "Worker %s (PID %s): Error processing line %s from %s: %s",
-                            worker_id, pid, lines_processed, filename, exc
-                        )
+                msg = (
+                    f"SUCCESS: {filename} - {lines_processed:,} lines, "
+                    f"{len(parsed_data):,} entries, {uncompressed_bytes:,} uncompressed bytes"
+                )
+                worker_logger.info("Worker %s (PID %s): %s", worker_id, pid, msg)
+                return msg, parsed_data, uncompressed_bytes
 
-        # Success message
-        msg = (
-            f"SUCCESS: {filename} - {lines_processed:,} lines, "
-            f"{len(parsed_data):,} entries, {uncompressed_bytes:,} uncompressed bytes"
-        )
-        worker_logger.info("Worker %s (PID %s): %s", worker_id, pid, msg)
-        return msg, parsed_data, uncompressed_bytes
+            except requests.Timeout as exc:
+                last_error = f"TIMEOUT: {filename}"
+                detail = str(exc)
+            except (requests.RequestException, EOFError, OSError, gzip.BadGzipFile) as exc:
+                # Includes connections dropped mid-stream, which surface from
+                # inside the gzip loop rather than from the initial request.
+                last_error = f"NETWORK_ERROR: {filename}"
+                detail = f"{type(exc).__name__}: {exc}"
 
-    except requests.Timeout:
-        msg = f"TIMEOUT: {filename}"
-        worker_logger.error(
-            "Worker %s (PID %s): Timeout - %s",
-            worker_id, pid, filename
-        )
-        return msg, {}, 0
-
-    except requests.RequestException as exc:
-        msg = f"NETWORK_ERROR: {filename}"
-        worker_logger.error(
-            "Worker %s (PID %s): Network error - %s (%s)",
-            worker_id, pid, filename, exc
-        )
-        return msg, {}, 0
+            if attempt < max_attempts:
+                worker_logger.warning(
+                    "Worker %s (PID %s): %s after %s lines (attempt %d/%d: %s); retrying from start",
+                    worker_id, pid, last_error, f"{lines_processed:,}", attempt, max_attempts, detail
+                )
+            else:
+                worker_logger.error(
+                    "Worker %s (PID %s): %s - giving up after %d attempts (%s)",
+                    worker_id, pid, last_error, max_attempts, detail
+                )
+        return last_error, {}, 0
 
     except Exception as exc:
         msg = f"ERROR: {filename} - {exc}"
-        worker_logger.error(
-            "Worker %s (PID %s): Error - %s: %s",
-            worker_id, pid, filename, exc
-        )
+        worker_logger.error("Worker %s (PID %s): Error - %s: %s", worker_id, pid, filename, exc)
         return msg, {}, 0
+
+    finally:
+        if own_session:
+            try:
+                sess.close()
+            except Exception:
+                pass
 
 
 def merge_packed_records(a: bytes, b: bytes) -> bytes:

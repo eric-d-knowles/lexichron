@@ -1,10 +1,10 @@
 """Safe cleanup utilities for RocksDB directories."""
 from __future__ import annotations
 
-import inspect
 import logging
 import shutil
 import stat
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -74,23 +74,11 @@ def _purge_nfs_placeholders(root: Path) -> None:
 
 
 def _rmtree_once(path: Path) -> None:
-    """
-    Call shutil.rmtree with onerror handler if supported.
-
-    Uses introspection to detect if onerror parameter is available
-    (some test mocks may not support it).
-    """
-    try:
-        params = inspect.signature(shutil.rmtree).parameters
-        if "onerror" in params:
-            shutil.rmtree(path, onerror=_on_rm_error)
-            return
-    except (ValueError, TypeError):
-        # Builtins/C-callables may lack introspection
-        pass
-
-    # Fallback: no onerror support
-    shutil.rmtree(path)
+    """shutil.rmtree with the permission-fixing handler (onexc on 3.12+, onerror before)."""
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(path, onexc=lambda func, p, exc: _on_rm_error(func, p, (type(exc), exc, None)))
+    else:
+        shutil.rmtree(path, onerror=_on_rm_error)
 
 
 def _force_rmtree(path: Path) -> None:
@@ -114,8 +102,8 @@ def safe_db_cleanup(
     can prevent directory removal when files have open handles.
 
     Strategy:
-        1. If path doesn't exist, return True
-        2. If path is a symlink, unlink it
+        1. If path is a symlink, unlink it (the target is left alone)
+        2. If path doesn't exist, return True
         3. Use robust rmtree with retries:
            - Fix permissions via onerror handler
            - Purge NFS placeholders before each attempt
@@ -139,13 +127,10 @@ def safe_db_cleanup(
         >>> safe_db_cleanup("/data/busy_db.rocksdb", max_retries=10)
         False  # Could not remove after 10 attempts
     """
-    path = Path(db_path).expanduser().resolve()
+    path = Path(db_path).expanduser()
 
-    # Already gone
-    if not path.exists():
-        return True
-
-    # Handle symlinks
+    # A symlinked database path: remove the link, not what it points to.
+    # (Checked before resolve(), which would follow the link.)
     if path.is_symlink():
         try:
             path.unlink()
@@ -153,6 +138,12 @@ def safe_db_cleanup(
         except OSError as e:
             logger.error("Failed to unlink symlink %s: %s", path, e)
             return False
+
+    path = path.resolve()
+
+    # Already gone
+    if not path.exists():
+        return True
 
     # Validate it's a directory
     if not path.is_dir():

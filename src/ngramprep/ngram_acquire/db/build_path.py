@@ -31,8 +31,8 @@ def build_db_path(
         >>> build_db_path("/data/ngrams/", 1, "20200217", "eng")
         '/data/ngrams/20200217/eng/1gram_files/1grams.db'
 
-        >>> build_db_path("/data/ngrams", 2, "20120701", "eng-us")
-        '/data/ngrams/20120701/eng-us/2gram_files/2grams.db'
+        >>> build_db_path("/data/ngrams", 2, "20200217", "eng-us")
+        '/data/ngrams/20200217/eng-us/2gram_files/2grams.db'
     """
     # Normalize stub to ensure no trailing slash issues
     stub = Path(db_path_stub)

@@ -7,6 +7,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Tuple, Type
 
 from ngramprep.ngram_acquire.coordinator import (
@@ -21,12 +22,18 @@ from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
 from ngramprep.ngram_acquire.utils.cleanup import safe_db_cleanup
 from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.db.write import DEFAULT_WRITE_BATCH_SIZE
+from ngramprep.ngram_acquire.logger import setup_logger
 from ngramprep.common_db.api import open_db
 from ngramprep.common_db.compress import compress_db
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["download_and_ingest_to_rocksdb"]
+__all__ = ["download_and_ingest_to_rocksdb", "AcquisitionError"]
+
+
+class AcquisitionError(RuntimeError):
+    """Raised when one or more files could not be acquired. Completed files
+    are persisted; re-running with overwrite_db=False retries only the rest."""
 
 try:
     import setproctitle as _setproctitle
@@ -42,10 +49,10 @@ def download_and_ingest_to_rocksdb(
         file_range: Optional[Tuple[int, int]] = None,
         workers: Optional[int] = None,
         ngram_type: str = "all",
-        overwrite_db: bool = True,
+        overwrite_db: bool = False,
         random_seed: Optional[int] = None,
         write_batch_size: int = DEFAULT_WRITE_BATCH_SIZE,
-        open_type: str = "read",
+        open_type: str = "write:packed24",
         compact_after_ingest: bool = True,
         archive_path_stub: Optional[str] = None,
         combined_bigrams: Optional[set] = None,
@@ -70,10 +77,13 @@ def download_and_ingest_to_rocksdb(
         file_range: Optional (start_idx, end_idx) to process subset of files. Use None for all files.
         workers: Number of concurrent workers (default: min(cpu_count - 1, num_files))
         ngram_type: Filter type ("all", "tagged", etc.)
-        overwrite_db: If True, remove existing database before starting
+        overwrite_db: If True, remove an existing database before starting.
+            Default False: an existing database is resumed, skipping files
+            already marked as processed.
         random_seed: Optional seed for randomizing file processing order
         write_batch_size: Number of entries per batch write
-        open_type: RocksDB profile ("read", "write", "read:packed24", "write:packed24")
+        open_type: RocksDB profile; "write:packed24" (default) is the bulk-ingest
+            profile with the merge operator the pipeline relies on.
         compact_after_ingest: If True (default), perform full compaction after
             ingestion. Each processed file is flushed to its own SST file for
             durability and auto-compaction is off in the write profile, so
@@ -81,6 +91,10 @@ def download_and_ingest_to_rocksdb(
             merges; skip it only for a quick partial run.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
         combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"})
+
+    Raises:
+        AcquisitionError: If any file failed after retries. The summary is
+            printed first; completed files remain in the database.
     """
     logger.info("Starting N-gram processing pipeline")
 
@@ -95,6 +109,17 @@ def download_and_ingest_to_rocksdb(
 
     # Build full database path from stub
     db_path = build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+
+    # Log to a file next to the database unless the caller configured logging.
+    # INFO (per-file progress, batch writes) goes to the file; the console
+    # shows the pipeline's own banner and progress bar, plus warnings.
+    if not logging.getLogger().hasHandlers():
+        log_dir = Path(os.path.dirname(db_path)) / "logs"
+        log_file = setup_logger(
+            log_dir, filename_prefix="ngram_acquire",
+            console=True, console_level=logging.WARNING,
+        )
+        print(f"Log file: {log_file}")
     logger.info("Database path: %s", db_path)
 
     # Handle existing database
@@ -178,13 +203,9 @@ def download_and_ingest_to_rocksdb(
         )
         # Database is automatically flushed by context manager on exit
 
-        # Optional post-ingestion compaction
-        if compact_after_ingest:
+        # Optional post-ingestion compaction (only for a complete run)
+        if compact_after_ingest and not failure:
             _perform_compaction(db, db_path)
-
-    # Optional archiving: compress DB to archive directory
-    if archive_path_stub is not None:
-        _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
 
     # Report final statistics
     end_time = datetime.now()
@@ -197,6 +218,22 @@ def download_and_ingest_to_rocksdb(
         batches=batches,
         uncompressed_bytes=uncompressed_bytes,
     )
+
+    # Fail loudly if any file did not make it. Completed files are already
+    # persisted and marked, so a re-run (overwrite_db=False) picks up only the
+    # missing ones. Archiving is skipped: the database is incomplete.
+    if failure:
+        for msg in failure:
+            logger.error("Failed file: %s", msg)
+        raise AcquisitionError(
+            f"{len(failure)} of {len(success) + len(failure)} files failed "
+            f"(see log for details); re-run with overwrite_db=False to retry "
+            f"only the missing files. First failure: {failure[0]}"
+        )
+
+    # Optional archiving: compress DB to archive directory
+    if archive_path_stub is not None:
+        _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
 
     # Return None to avoid Jupyter displaying the path
     # (the path is already printed in the summary)
@@ -295,9 +332,9 @@ def _archive_database(
     db_name = Path(db_path).name
 
     try:
-        # Create temp directory on /scratch for compression
-        # Use $TMPDIR if set, otherwise try /scratch/edk202, then fall back to default
-        temp_base = os.environ.get('TMPDIR') or '/scratch/edk202'
+        # Compress into a temp directory beside the database (same filesystem),
+        # or $TMPDIR if set, then copy to the final location.
+        temp_base = os.environ.get("TMPDIR") or str(Path(db_path).parent)
         temp_dir = tempfile.mkdtemp(dir=temp_base, prefix="ngram_archive_")
         temp_archive = Path(temp_dir) / f"{db_name}.tar.zst"
         logger.info(f"Temporary archive location: {temp_archive}")

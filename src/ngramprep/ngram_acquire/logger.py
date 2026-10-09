@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 __all__ = ["setup_logger"]
 
@@ -16,6 +16,7 @@ def setup_logger(
         level: int = logging.INFO,
         filename_prefix: str = "ngram_download",
         console: bool = False,
+        console_level: Optional[int] = None,
         rotate: bool = False,
         max_bytes: int = 10 * 1024 * 1024,
         backup_count: int = 3,
@@ -32,6 +33,8 @@ def setup_logger(
         level: Logging level (default: INFO)
         filename_prefix: Prefix for log filename
         console: If True, also log to console
+        console_level: Level for the console handler (default: same as level).
+            Use logging.WARNING to keep INFO in the file only.
         rotate: If True, use RotatingFileHandler instead of FileHandler
         max_bytes: Maximum log file size before rotation (if rotate=True)
         backup_count: Number of backup files to keep (if rotate=True)
@@ -100,7 +103,7 @@ def setup_logger(
     # Optional console handler
     if console:
         console_handler = logging.StreamHandler()
-        console_handler.setLevel(level)
+        console_handler.setLevel(console_level if console_level is not None else level)
         console_handler.setFormatter(formatter)
         root.addHandler(console_handler)
 

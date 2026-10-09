@@ -7,7 +7,7 @@ from datetime import datetime
 def setup_notebook_logging(
     workflow_name,
     data_path=None,
-    log_base_dir="/scratch/edk202/ngram-kit/logs",
+    log_base_dir=None,
     console=True,
     rotate=True,
     max_bytes=100_000_000,
@@ -19,7 +19,8 @@ def setup_notebook_logging(
     Args:
         workflow_name: Name of the workflow (e.g., "download_5grams", "process_unigrams")
         data_path: Optional path to data being processed (for context in logs)
-        log_base_dir: Base directory for all logs (default: /scratch/edk202/ngram-kit/logs)
+        log_base_dir: Base directory for all logs (default: "<data_path>/logs"
+            when data_path is given, otherwise "./logs")
         console: Whether to also log to console
         rotate: Whether to rotate log files
         max_bytes: Max size before rotation
@@ -32,6 +33,8 @@ def setup_notebook_logging(
     import logging
 
     # Create log directory structure
+    if log_base_dir is None:
+        log_base_dir = Path(data_path) / "logs" if data_path else Path("logs")
     log_dir = Path(log_base_dir) / workflow_name
     log_dir.mkdir(parents=True, exist_ok=True)
 
