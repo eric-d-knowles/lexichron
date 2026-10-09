@@ -137,15 +137,16 @@ kernel for it. Your home directory and the usual cluster data roots
 made visible inside the container automatically when they exist; add other
 directories with `--bind /path`.
 
-*Optional:* to start from the example notebooks, check out the copy that
-matches your image version into the project directory:
+*Optional:* to start from the example notebooks, copy them into the project
+directory:
 
 ```bash
-git clone --branch v0.1.0 --depth 1 https://github.com/eric-d-knowles/lexichron.git /tmp/lexichron-v0.1.0
-cp /tmp/lexichron-v0.1.0/notebooks/*.ipynb /scratch/$USER/projects/gender-semantics/
+git clone --depth 1 https://github.com/eric-d-knowles/lexichron.git /tmp/lexichron
+cp /tmp/lexichron/notebooks/*.ipynb /scratch/$USER/projects/gender-semantics/
 ```
 
-(or download them from the `notebooks/` folder of the `v0.1.0` tag on GitHub).
+(or download them from the `notebooks/` folder on GitHub). The notebooks track
+the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
 *Python (gender-semantics | lexichron 0.1.0)* from the kernel menu. If the
