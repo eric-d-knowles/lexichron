@@ -15,8 +15,8 @@ While `lexichron` can be tuned to run on systems with fewer CPUs and less RAM, t
 - [Installation](#installation)
   - [Container installation](#container-installation)
   - [Development installation (conda)](#development-installation-conda)
-- [Quick Start](#quick-start)
-- [Output Files](#output-files)
+- [Example notebooks](#example-notebooks)
+- [Output files](#output-files)
 - [Advanced: Monitoring and Architecture](#advanced-monitoring-and-architecture)
 - [Support and Maintenance](#support-and-maintenance)
 
@@ -260,89 +260,52 @@ example, `--name=gender_semantics --display-name="Python (gender semantics)"`.
 - **Hunspell dictionaries** are handled by the setup script above and are not downloaded automatically.
 - **`rocks-shim`** (a dependency of lexichron) is distributed as a pre-built Linux x86_64 wheel. If you are on macOS or Windows, installation will fail at this step. HPC cluster users on Linux are unaffected.
 
-## Quick Start
+## Example notebooks
 
-See the `notebooks/` directory for complete workflow examples:
+The `notebooks/` folder contains one notebook per workflow. Copy the ones you
+need into your project directory and edit the paths and settings at the top.
 
-### Google Ngrams Workflows
+**Google Ngrams**
 
-- **`eng_unigrams_workflow.ipynb`** — Download and ingest 1-grams, apply filtering and preprocessing, generate vocabulary whitelist (English)
-- **`eng_multigrams_workflow.ipynb`** — Download and filter 2-5 grams using whitelist (English)
-- **`rus_unigrams_workflow.ipynb`** — Same as English unigrams but for Russian
-- **`rus_multigrams_workflow.ipynb`** — Same as English multigrams but for Russian
-- **`ngrams_change_analysis_workflow.ipynb`** — Analyze semantic drift and track meaning changes over time
+| Notebook | What it does |
+|---|---|
+| `unigrams_workflow.ipynb` | Download and ingest 1-grams, filter and lemmatize them, and write a vocabulary whitelist |
+| `multigrams_workflow.ipynb` | Download and ingest 2–5-grams, filter them against the whitelist, and pivot to per-year format |
+| `training_workflow.ipynb` | Train per-year `word2vec` models on processed n-grams, then normalize and align them |
+| `ngram_change_analysis_workflow_eng.ipynb` | Track semantic change over time in the English models (similarity, relatedness, dimension projections) |
+| `ngram_change_analysis_workflow_rus.ipynb` | The same analyses for Russian |
 
-### Davies Corpora Workflows
+**Davies corpora** (COHA, COCA, Movies, …; the corpus files must be licensed and downloaded by you)
 
-- **`davies_acquisition_workflow.ipynb`** — Ingest Davies corpus files with genre and year information
-- **`coha_training_workflow.ipynb`** — Train word2vec models on COHA corpus data
-- **`coha_change_analysis_workflow.ipynb`** — Analyze semantic change in historical English (COHA)
+| Notebook | What it does |
+|---|---|
+| `davies_acquisition_workflow.ipynb` | Ingest Davies corpus files with year and genre metadata, filter them, and write a whitelist |
+| `coha_training_workflow.ipynb` | Train and align per-year `word2vec` models on COHA |
+| `movies_training_workflow.ipynb` | The same for the Movies corpus |
+| `coha_change_analysis_workflow.ipynb` | Track semantic change in the COHA models |
 
-### Model Training & Evaluation
+For the full set of options, see the docstrings in `ngramprep.ngram_filter.config`,
+`ngramprep.ngram_pivot.config` and `daviesprep.davies_filter.config`.
 
-- **`training_workflow.ipynb`** — Train word embeddings on processed n-grams
-- **`ngram_training_workflow.ipynb`** — End-to-end word2vec training pipeline for n-grams
+## Output files
 
-### Basic Usage Example
+The n-gram pipelines lay their outputs out under the `db_path_stub` you give
+them:
 
-```python
-from pathlib import Path
-from ngramprep.ngram_acquire import download_and_ingest_to_rocksdb
-from ngramprep.ngram_filter import PipelineConfig, FilterConfig, build_processed_db
-from ngramprep.ngram_pivot import run_pivot_pipeline
-from ngramprep.ngram_pivot.config import PipelineConfig as PivotConfig
-
-# Step 1: Download and ingest n-grams
-download_and_ingest_to_rocksdb(
-    ngram_size=1,
-    repo_release_id="20200217",
-    repo_corpus_id="eng",
-    db_path_stub="/data/ngrams",
-    workers=30
-)
-
-# Step 2: Filter and clean
-pipeline_config = PipelineConfig(
-    src_db=Path("/data/ngrams/1grams.db"),
-    dst_db=Path("/data/ngrams/1grams_processed.db"),
-    tmp_dir=Path("/data/ngrams/tmp"),
-    num_workers=40,
-    mode="restart"
-)
-
-filter_config = FilterConfig(
-    lowercase=True,
-    filter_short=True,
-    alpha_only=True
-)
-
-build_processed_db(pipeline_config, filter_config)
-
-# Step 3: Pivot for time-series analysis (optional)
-pivot_config = PivotConfig(
-    src_db=Path("/data/ngrams/1grams_processed.db"),
-    dst_db=Path("/data/ngrams/1grams_pivoted.db"),
-    tmp_dir=Path("/data/ngrams/pivot_tmp"),
-    num_workers=30,
-    mode="restart"
-)
-
-run_pivot_pipeline(pivot_config)
+```
+{db_path_stub}/{release}/{language}/{N}gram_files/
+    {N}grams.db             raw n-grams as downloaded (ngram_acquire)
+    {N}grams_processed.db   filtered n-grams (ngram_filter)
+    {N}grams_pivoted.db     per-year layout for time-series work (ngram_pivot)
+    whitelist files         vocabulary whitelists, if requested
+    temporary files         worker shards and the progress-tracking database;
+                            safe to delete after a run completes, but useful
+                            for resuming an interrupted one
 ```
 
-For detailed configuration options, see the docstrings in `ngramprep.ngram_filter.config`, `ngramprep.ngram_pivot.config`, and `daviesprep.davies_filter.config`, or refer to the example notebooks.
-
-## Output Files
-
-After running the pipelines, you'll have:
-
-- **Final database** (`dst_db`): Query-ready RocksDB containing your processed n-grams
-- **Frequency whitelist** (optional): Text file listing retained n-grams with occurrence counts (useful for documenting your corpus)
-- **Compressed archive** (optional): Use `common_db.compress_db()` for efficient long-term storage and transfer
-
-**Temporary files** (can be deleted after completion):
-- `tmp_dir/worker_outputs/`: Intermediate processing shards
-- `tmp_dir/work_tracker.db`: Progress tracking database (useful for debugging interrupted jobs)
+Model training writes one model per year (or per year bin) into the model
+directory you specify. Use `common_db.compress_db()` to archive a database for
+long-term storage or transfer.
 
 ## Advanced: Monitoring and Architecture
 
