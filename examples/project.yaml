@@ -1,0 +1,26 @@
+# lexichron project file.
+#
+# Run a stage with:   lexichron acquire project.yaml
+# Override a value:   lexichron acquire project.yaml --set acquire.ngram_size=2
+# See the call only:  lexichron acquire project.yaml --dry-run
+#
+# `corpus` is shared by every stage. Each other section holds the settings of
+# one stage, named exactly as in that stage's Python function.
+
+corpus:
+  release: "20200217"          # Google Books Ngrams release (YYYYMMDD)
+  language: eng-us             # corpus id: eng, eng-us, eng-gb, fre, ger, ita, rus, spa, heb, chi-sim
+  db_path_stub: /scratch/USERNAME/NLP_corpora/Google_Books/
+  # archive_path_stub: /scratch/USERNAME/NLP_corpora/archives/   # optional .tar.zst archive after ingest
+
+acquire:
+  ngram_size: 1                # 1-5
+  ngram_type: tagged           # all | tagged | untagged
+  workers: 45
+  overwrite_db: false
+  random_seed: 321
+  write_batch_size: 25000
+  open_type: write:packed24
+  compact_after_ingest: false
+  # file_range: [0, 10]        # process only files 0-9 (for a quick test)
+  # combined_bigrams: [human being, human beings]   # hyphenated into single tokens
