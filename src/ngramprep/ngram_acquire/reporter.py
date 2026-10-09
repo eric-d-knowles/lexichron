@@ -55,7 +55,7 @@ def print_pipeline_header(
     print(f"Files to get:         {files_to_get}")
     print(f"Skipping:             {files_to_skip}")
     print(f"Download workers:     {workers}")
-    print(f"Batch size:           {write_batch_size:,}")
+    print(f"Chunk size:           {write_batch_size:,} entries")
     print(f"Ngram size:           {ngram_size}")
     print(f"Ngram type:           {ngram_type}")
     print(f"Overwrite DB:         {overwrite_db}")

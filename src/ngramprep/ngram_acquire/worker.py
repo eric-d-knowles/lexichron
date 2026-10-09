@@ -7,19 +7,24 @@ import os
 import struct
 from contextlib import closing
 from pathlib import PurePosixPath
-from typing import Callable, Dict, Optional, Tuple, TYPE_CHECKING
+from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import requests
 
 from ngramprep.ngram_acquire.io.download import stream_download_with_retries
 from ngramprep.ngram_acquire.io.parse import parse_line
+from ngramprep.ngram_acquire.spool import ChunkWriter
 
 if TYPE_CHECKING:
     from ngram_acquire.io.parse import NgramRecord
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["process_and_ingest_file", "merge_packed_records"]
+__all__ = ["process_and_ingest_file", "merge_packed_records", "DEFAULT_CHUNK_ENTRIES"]
+
+# Entries per spooled chunk. Bounds worker memory to roughly one chunk of
+# packed values (a few hundred MB for unigrams, far less for 5-grams).
+DEFAULT_CHUNK_ENTRIES = 200_000
 
 try:
     import setproctitle as _setproctitle
@@ -36,13 +41,17 @@ def process_and_ingest_file(
     session: Optional[requests.Session] = None,
     combined_bigrams: Optional[set] = None,
     max_attempts: int = 3,
-) -> Tuple[str, Dict[str, bytes], int]:
+    spool_dir: Optional[str] = None,
+    chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
+) -> Tuple[str, List[str], int, int]:
     """
-    Download, decompress, and parse a gzipped ngram file.
+    Download, decompress, parse a gzipped ngram file, and spool it to chunks.
 
     Downloads the file from the given URL, decompresses it line-by-line,
-    parses each line into structured data, and packs the results into
-    compact binary format.
+    parses each line, packs the frequencies into compact binary form, and
+    writes the entries to chunk files in ``spool_dir`` (see
+    :mod:`ngramprep.ngram_acquire.spool`). The worker holds at most one
+    chunk in memory; the parent process ingests the chunk files afterwards.
 
     Args:
         url: Download URL for the gzipped ngram file
@@ -53,13 +62,17 @@ def process_and_ingest_file(
         combined_bigrams: Optional set of bigrams to combine with hyphens
         max_attempts: How many times to attempt the whole download-and-parse
             of this file. A connection dropped part-way through a stream is
-            retried from the beginning, discarding partial results.
+            retried from the beginning, discarding partial results (including
+            chunk files written so far).
+        spool_dir: Directory for chunk files (default: the system temp dir).
+        chunk_entries: Entries per chunk file.
 
     Returns:
-        Tuple of (status_message, parsed_data_dict, uncompressed_bytes)
+        Tuple of (status_message, chunk_paths, uncompressed_bytes, entries)
         - status_message: Success or error message
-        - parsed_data_dict: Mapping of ngram keys to packed binary values
+        - chunk_paths: Chunk files holding this file's entries, in order
         - uncompressed_bytes: Total bytes of uncompressed data processed
+        - entries: Number of distinct keys written across the chunks
 
     Packing Format:
         Values are packed as little-endian uint64 triplets per year:
@@ -107,10 +120,14 @@ def process_and_ingest_file(
 
     worker_logger.info("Worker %s (PID %s): Processing %s", worker_id, pid, filename)
 
+    import tempfile
+    spool_root = spool_dir or tempfile.gettempdir()
+    file_tag = f"{worker_id:05d}_{filename}"
+
     try:
         last_error = ""
         for attempt in range(1, max_attempts + 1):
-            parsed_data: Dict[str, bytes] = {}
+            writer = ChunkWriter(spool_root, file_tag, chunk_entries, merge_packed_records)
             uncompressed_bytes = 0
             lines_processed = 0
             try:
@@ -141,15 +158,10 @@ def process_and_ingest_file(
                                     combined_bigrams=combined_bigrams,
                                 )
                                 if key and rec:
-                                    packed = _pack_record(rec)
-                                    existing = parsed_data.get(key)
-                                    if existing is None:
-                                        parsed_data[key] = packed
-                                    else:
-                                        # Two source lines collapsed onto one key
-                                        # (e.g. tagged variants of a combined
-                                        # bigram): add their counts, don't overwrite.
-                                        parsed_data[key] = merge_packed_records(existing, packed)
+                                    # Repeated keys within a chunk (e.g. tagged
+                                    # variants of a combined bigram) are summed
+                                    # by the writer; across chunks, by the DB.
+                                    writer.add(key, _pack_record(rec))
                             except UnicodeDecodeError as exc:
                                 worker_logger.warning(
                                     "Worker %s (PID %s): Unicode error in %s line %s: %s",
@@ -161,19 +173,24 @@ def process_and_ingest_file(
                                     worker_id, pid, lines_processed, filename, exc
                                 )
 
+                chunk_paths = writer.finish()
+                entries = writer.entries_total
                 msg = (
                     f"SUCCESS: {filename} - {lines_processed:,} lines, "
-                    f"{len(parsed_data):,} entries, {uncompressed_bytes:,} uncompressed bytes"
+                    f"{entries:,} entries in {len(chunk_paths)} chunks, "
+                    f"{uncompressed_bytes:,} uncompressed bytes"
                 )
                 worker_logger.info("Worker %s (PID %s): %s", worker_id, pid, msg)
-                return msg, parsed_data, uncompressed_bytes
+                return msg, chunk_paths, uncompressed_bytes, entries
 
             except requests.Timeout as exc:
+                writer.discard()
                 last_error = f"TIMEOUT: {filename}"
                 detail = str(exc)
             except (requests.RequestException, EOFError, OSError, gzip.BadGzipFile) as exc:
                 # Includes connections dropped mid-stream, which surface from
                 # inside the gzip loop rather than from the initial request.
+                writer.discard()
                 last_error = f"NETWORK_ERROR: {filename}"
                 detail = f"{type(exc).__name__}: {exc}"
 
@@ -187,12 +204,12 @@ def process_and_ingest_file(
                     "Worker %s (PID %s): %s - giving up after %d attempts (%s)",
                     worker_id, pid, last_error, max_attempts, detail
                 )
-        return last_error, {}, 0
+        return last_error, [], 0, 0
 
     except Exception as exc:
         msg = f"ERROR: {filename} - {exc}"
         worker_logger.error("Worker %s (PID %s): Error - %s: %s", worker_id, pid, filename, exc)
-        return msg, {}, 0
+        return msg, [], 0, 0
 
     finally:
         if own_session:
