@@ -20,6 +20,7 @@ smaller machines at the cost of speed.
 - [Installation](#installation)
   - [Container installation](#container-installation)
   - [Development installation (conda)](#development-installation-conda)
+- [Command line](#command-line)
 - [Example notebooks](#example-notebooks)
 - [Output files](#output-files)
 - [Reading the progress display](#reading-the-progress-display)
@@ -277,6 +278,23 @@ example, `--name=gender_semantics --display-name="Python (gender semantics)"`.
 - **spaCy models** are downloaded automatically on first import.
 - **Hunspell dictionaries** are handled by the setup script above and are not downloaded automatically.
 - **`rocks-shim`** (a dependency of lexichron) is distributed as a pre-built Linux x86_64 wheel. If you are on macOS or Windows, installation will fail at this step. HPC cluster users on Linux are unaffected.
+
+## Command line
+
+Pipeline stages can also be run from a project file instead of a notebook.
+The file holds the settings a notebook's setup cells would hold, named exactly
+as in the stage's Python function; `examples/project.yaml` is a commented
+template. Currently the acquisition stage is available this way:
+
+```bash
+lexichron acquire project.yaml                       # run
+lexichron acquire project.yaml --set acquire.ngram_size=2   # override a setting
+lexichron acquire project.yaml --dry-run             # show the call, don't run it
+```
+
+Misspelled or missing settings are reported before anything runs. Inside the
+container, use the project launcher: `.venv/host-python -m lexichron.cli acquire project.yaml`
+(or `apptainer exec lexichron.sif lexichron acquire project.yaml`).
 
 ## Example notebooks
 
