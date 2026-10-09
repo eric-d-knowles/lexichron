@@ -302,22 +302,30 @@ container, use the project launcher: `.venv/host-python -m lexichron.cli acquire
 
 ## Terminal user interface
 
-`lexichron ui` opens a terminal interface on a project file, for people who
-would rather not edit YAML or write Slurm scripts by hand. It works over a
-plain SSH session. Start it through the launcher that `new-project` writes,
-which also runs a small helper on the host so the interface can submit and
-monitor Slurm jobs from inside the container:
+`lexichron ui` is a terminal interface for people who would rather not edit
+YAML or write Slurm scripts by hand. It works over a plain SSH session and
+needs no project set up in advance: fill in where the corpus should go and
+what to download, and submit. Install the command once per image:
 
 ```bash
-/scratch/$USER/projects/gender-semantics/.venv/lexichron-ui
+apptainer run --app install-ui /scratch/$USER/containers/lexichron-0.1.0.sif
+lexichron-ui
 ```
+
+`install-ui` writes `~/.local/bin/lexichron-ui`, which starts the interface
+together with a small helper on the host, so that jobs can be submitted and
+watched from inside the container. (`lexichron-ui /path/to/project.yaml`
+opens an existing project file; a project created with `new-project` also has
+its own `.venv/lexichron-ui` that uses that project's environment.)
 
 Tabs:
 
 - **Project** — a form for every setting of the stage (generated from the
   stage's own arguments, with their help text), and beside it the exact call
   that will run, updated as you type. Misspelled or missing settings are
-  reported there. *Save* writes `project.yaml`.
+  reported there. *Save* writes the project file, by default
+  `<db_path_stub>/project.yaml`; runs, logs and progress go under
+  `<db_path_stub>/.lexichron/`.
 - **Run** — runs the stage here, streaming its output. For small tests on a
   login node (set `file_range`) or inside an interactive allocation.
 - **Submit** — Slurm account, partition, CPUs, memory and time. *Write batch
@@ -327,7 +335,7 @@ Tabs:
   (files done, entries written) read from `.lexichron/runs/*/progress.json`,
   which every run writes.
 
-Without the launcher (`apptainer run --app ui lexichron-0.1.0.sif project.yaml`)
+Without the installed command (`apptainer run --app ui lexichron-0.1.0.sif`)
 everything works except *Submit* and the job table, since Slurm commands are
 not visible from inside the container.
 

@@ -29,6 +29,7 @@ From: public.ecr.aws/docker/library/python:3.11-slim-bookworm
     container/register_kernel.sh /opt/lexichron/register_kernel.sh
     container/new_project.sh /opt/lexichron/new_project.sh
     container/host_bridge.sh /opt/lexichron/host_bridge.sh
+    container/install_ui.sh /opt/lexichron/install_ui.sh
     examples /opt/lexichron/examples
     tests /opt/lexichron/tests
 
@@ -75,7 +76,7 @@ From: public.ecr.aws/docker/library/python:3.11-slim-bookworm
     find /opt/lexichron-src/src -type d -name build -prune -exec rm -rf {} +
 
     python -m pip install --no-cache-dir "/opt/lexichron-src[ui]"
-    chmod 755 /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh
+    chmod 755 /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh /opt/lexichron/install_ui.sh
 
     # Notebook execution without a browser (used for batch runs via nbconvert),
     # and pytest so the image can run the package's test suite.
@@ -149,7 +150,7 @@ EOF
     lexichron acquire /opt/lexichron/examples/project.yaml --dry-run
     # Unit tests, run against the image's real dependencies
     python -m pytest -q /opt/lexichron/tests
-    bash -n /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh
+    bash -n /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh /opt/lexichron/install_ui.sh
     python -c "import textual, lexichron.ui.app"
     # A project environment can be created and sees lexichron through the image
     python -m venv --system-site-packages /tmp/lexichron-test-venv
@@ -188,14 +189,27 @@ EOF
 %apprun ui
     exec lexichron ui "$@"
 
+# App: install a host-side `lexichron-ui` command (bridge + UI) into ~/.local/bin
+%apprun install-ui
+    exec bash /opt/lexichron/install_ui.sh "$@"
+
+%apphelp install-ui
+    Write a `lexichron-ui` command into ~/.local/bin that starts the Slurm host
+    helper and the terminal UI for this image:
+
+        apptainer run --app install-ui lexichron-<version>.sif
+        lexichron-ui                      # then, from anywhere
+
 %apphelp ui
     Open the terminal user interface on a project file:
 
         apptainer run --app ui lexichron-<version>.sif /path/to/project/project.yaml
 
-    From inside the container the UI cannot submit Slurm jobs. For that, start
-    it through the launcher new-project writes, which also runs a small host
-    helper:   /path/to/project/.venv/lexichron-ui
+    From inside the container the UI cannot submit Slurm jobs. For that, run
+    `apptainer run --app install-ui lexichron.sif` once and then start the UI
+    with the `lexichron-ui` command it installs, which also runs a small host
+    helper. A project's .venv/lexichron-ui launcher does the same for that
+    project's environment.
 
 %apphelp new-project
     Create a project environment: a virtual environment in <project>/.venv that

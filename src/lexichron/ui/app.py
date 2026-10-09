@@ -96,18 +96,43 @@ class LexichronApp(App):
     """
     BINDINGS = [("ctrl+s", "save", "Save"), ("ctrl+q", "quit", "Quit")]
 
-    def __init__(self, project_path: str | os.PathLike, stage: str = "acquire") -> None:
+    def __init__(self, project_path: Optional[str | os.PathLike] = None, stage: str = "acquire") -> None:
         super().__init__()
-        self.project_path = Path(project_path).resolve()
+        # The project file is optional. Without one, it defaults to
+        # <db_path_stub>/project.yaml once that field is filled in, so a user
+        # who only wants to download a corpus never has to think about it.
+        self.explicit_project: Optional[Path] = Path(project_path).resolve() if project_path else None
         self.stage = stage
         self.func = _resolve(STAGES[stage][0])
         self.sections: List[Section] = stage_sections(self.func, stage) + [SLURM_FIELDS]
         self.config: Dict[str, Any] = {}
-        if self.project_path.exists():
-            self.config = load_project(self.project_path)
+        if self.explicit_project and self.explicit_project.exists():
+            self.config = load_project(self.explicit_project)
         bridge_dir = default_bridge_dir()
         self.bridge: Optional[HostBridge] = HostBridge(bridge_dir) if bridge_dir else None
         self.proc: Optional[subprocess.Popen] = None
+
+    @property
+    def project_path(self) -> Optional[Path]:
+        """Where the project file is (or will be) saved."""
+        try:
+            typed = self.query_one("#project-path", Input).value.strip()
+        except Exception:
+            typed = ""
+        if typed:
+            return Path(typed).expanduser().resolve()
+        if self.explicit_project:
+            return self.explicit_project
+        stub = (self.config.get("corpus") or {}).get("db_path_stub")
+        if stub:
+            return Path(str(stub)).expanduser().resolve() / "project.yaml"
+        return None
+
+    def _require_project_path(self) -> Path:
+        p = self.project_path
+        if p is None:
+            raise ConfigError("set corpus.db_path_stub (or a project file path) first")
+        return p
 
     # -- layout -----------------------------------------------------------------
     def compose(self) -> ComposeResult:
@@ -116,6 +141,10 @@ class LexichronApp(App):
             with TabPane("Project", id="tab-project"):
                 with Horizontal():
                     with VerticalScroll(id="form"):
+                        with Horizontal(classes="row"):
+                            yield Label("project file")
+                            yield Input(value=str(self.explicit_project or ""), id="project-path",
+                                        placeholder="(optional; defaults to <db_path_stub>/project.yaml)")
                         for sec in self.sections:
                             if sec.name == "slurm":
                                 continue
@@ -209,9 +238,11 @@ class LexichronApp(App):
         try:
             cfg = self._collect()
             kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
-            call.update(_format_call(self.func, kwargs))
-            status.update("")
             self.config = cfg
+            dest = self.project_path
+            call.update(_format_call(self.func, kwargs)
+                        + f"\n\n# project file: {dest if dest else '(set corpus.db_path_stub)'}")
+            status.update("")
         except ConfigError as exc:
             status.update(str(exc))
 
@@ -225,32 +256,42 @@ class LexichronApp(App):
     def action_save(self) -> None:
         try:
             cfg = self._collect()
+            self.config = cfg
+            path = self._require_project_path()
         except ConfigError as exc:
             self.notify(str(exc), severity="error")
-            return
-        self.project_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.project_path, "w", encoding="utf-8") as fh:
+            raise
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
             fh.write(f"# lexichron project file (written by lexichron ui {__version__})\n")
             yaml.safe_dump(cfg, fh, sort_keys=False, default_flow_style=False)
-        self.config = cfg
-        self.notify(f"Saved {self.project_path}")
+        self.notify(f"Saved {path}")
+
+    def _save_quietly(self) -> Optional[Path]:
+        try:
+            self.action_save()
+        except ConfigError:
+            return None
+        return self.project_path
 
     @on(Button.Pressed, "#save")
     def _save_pressed(self) -> None:
-        self.action_save()
+        self._save_quietly()
 
     @on(Button.Pressed, "#run")
     def _run_pressed(self) -> None:
         if self.proc and self.proc.poll() is None:
             self.notify("A run is already in progress", severity="warning")
             return
-        self.action_save()
+        path = self._save_quietly()
+        if path is None:
+            return
         self.query_one(TabbedContent).active = "tab-run"
-        self._run_stage(self.query_one("#runlog", RichLog))
+        self._run_stage(self.query_one("#runlog", RichLog), path)
 
     @work(thread=True, exclusive=True, group="run")
-    def _run_stage(self, log: RichLog) -> None:
-        cmd = [sys.executable, "-m", "lexichron.cli", self.stage, str(self.project_path)]
+    def _run_stage(self, log: RichLog, project: Path) -> None:
+        cmd = [sys.executable, "-m", "lexichron.cli", self.stage, str(project)]
         self.call_from_thread(log.write, "$ " + " ".join(cmd))
         env = dict(os.environ, PYTHONUNBUFFERED="1", TQDM_MININTERVAL="2")
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -290,7 +331,7 @@ class LexichronApp(App):
             self.action_save()
             path = write_sbatch(self.project_path, self.stage, self._slurm_cfg())
         except (ConfigError, OSError) as exc:
-            self.notify(str(exc), severity="error")
+            self.query_one("#submit-status", Static).update(f"Could not write script: {exc}")
             return
         self.query_one("#submit-status", Static).update(
             f"Wrote {path}\nSubmit by hand with:  sbatch {path}")
@@ -343,8 +384,9 @@ class LexichronApp(App):
                 table.add_row("-", str(exc)[:40], "", "", "", "", "")
         runs = self.query_one("#runs", DataTable)
         runs.clear()
-        run_root = self.project_path.parent / ".lexichron" / "runs"
-        if run_root.is_dir():
+        proj = self.project_path
+        run_root = proj.parent / ".lexichron" / "runs" if proj else None
+        if run_root and run_root.is_dir():
             for d in sorted(run_root.iterdir(), reverse=True)[:10]:
                 p = read_progress(d / "progress.json")
                 if not p:
@@ -359,8 +401,8 @@ class LexichronApp(App):
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="lexichron ui", description="Terminal UI for lexichron.")
-    parser.add_argument("project", nargs="?", default="project.yaml",
-                        help="project YAML file (created on save if missing; default: ./project.yaml)")
+    parser.add_argument("project", nargs="?", default=None,
+                        help="project YAML file (optional; defaults to <db_path_stub>/project.yaml)")
     parser.add_argument("--stage", default="acquire", choices=sorted(STAGES))
     args = parser.parse_args(argv)
     LexichronApp(args.project, args.stage).run()

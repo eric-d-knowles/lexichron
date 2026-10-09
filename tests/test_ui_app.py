@@ -36,3 +36,23 @@ def test_app_builds_form_and_preview(tmp_path):
         assert saved["acquire"]["workers"] == 8 and saved["corpus"]["language"] == "eng-us"
 
     asyncio.run(scenario())
+
+
+def test_app_without_project_derives_path_from_db_stub(tmp_path):
+    async def scenario():
+        app = LexichronApp(None)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            assert "(set corpus.db_path_stub)" in str(app.query_one("#call").renderable)
+            app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
+            app.query_one("#f-corpus-release").value = "20200217"
+            app.query_one("#f-corpus-language").value = "eng"
+            app.query_one("#f-acquire-ngram_size").value = "1"
+            await pilot.pause()
+            assert app.project_path == tmp_path / "corpora" / "project.yaml"
+            assert "repo_corpus_id='eng'" in str(app.query_one("#call").renderable)
+            app.action_save()
+            await pilot.pause()
+        assert (tmp_path / "corpora" / "project.yaml").exists()
+
+    asyncio.run(scenario())
