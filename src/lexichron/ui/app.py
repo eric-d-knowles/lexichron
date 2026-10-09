@@ -237,14 +237,20 @@ class LexichronApp(App):
         status = self.query_one("#status", Static)
         try:
             cfg = self._collect()
-            kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
             self.config = cfg
-            dest = self.project_path
-            call.update(_format_call(self.func, kwargs)
-                        + f"\n\n# project file: {dest if dest else '(set corpus.db_path_stub)'}")
-            status.update("")
         except ConfigError as exc:
             status.update(str(exc))
+            return
+        dest = self.project_path
+        dest_line = f"# project file: {dest if dest else '(set corpus.db_path_stub)'}"
+        try:
+            kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
+        except ConfigError as exc:
+            call.update(f"# (fill in the required settings)\n{dest_line}")
+            status.update(str(exc))
+            return
+        call.update(_format_call(self.func, kwargs) + "\n\n" + dest_line)
+        status.update("")
 
     @on(Input.Changed)
     @on(Select.Changed)
