@@ -119,26 +119,35 @@ There are two ways to install lexichron:
 
 ### Container installation
 
-Each release of lexichron is published as an Apptainer image at
-`ghcr.io/eric-d-knowles/lexichron`. The image version is the lexichron version.
-
-**1. Pull the image** (once; on many clusters you first need `module load apptainer`):
+One command installs lexichron on a cluster that has Apptainer (most do; if
+`apptainer` is not on your PATH, `module load apptainer` first):
 
 ```bash
-mkdir -p /scratch/$USER/containers && cd /scratch/$USER/containers
-apptainer pull lexichron-0.1.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.1.0
+curl -fsSL https://raw.githubusercontent.com/eric-d-knowles/lexichron/main/install.sh | bash
 ```
 
-Replace `0.1.0` with the version you want (`latest` is the newest release).
-Keep the image on a large filesystem (it is roughly 700 MB), not in your home
-directory.
+This pulls the current release image into `$SCRATCH/lexichron/` (or
+`~/.lexichron/`) and installs two commands in `~/.local/bin`:
 
-**2. Create a project environment.** Choose a directory for your project (your
-notebooks and outputs will live there). It can be empty or an existing project,
-such as a fresh clone of a repository. Run:
+- `lexichron-ui` — the terminal interface (see below), the easiest way to
+  download and process a corpus.
+- `lexichron` — the command line, e.g. `lexichron acquire lexichron.yaml`.
+
+Both run inside the image without you having to type any container commands,
+and both re-pull the image automatically if a scratch purge removes it. To
+install a specific version: `LEXICHRON_VERSION=0.1.0 bash install.sh`.
+
+That is all that is needed to download and process corpora. Steps 2 and 3
+below are for people who want to work with lexichron from their own notebooks
+and scripts.
+
+**2. Create a project environment** (for notebooks and your own code). Choose
+a directory for your project (your notebooks and outputs will live there). It
+can be empty or an existing project, such as a fresh clone of a repository.
+Run:
 
 ```bash
-apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -146,11 +155,11 @@ lexichron and all of its dependencies from the image, and registers a Jupyter
 kernel for it. If the directory contains a `requirements.txt`, those packages
 are installed too, so an existing project is set up in the same single step.
 Re-running the command on a directory that already has a `.venv` keeps the
-environment and refreshes the kernel and launcher. Your home directory and the usual cluster data roots
-(`/scratch`, `/vast`, `/gpfs`, `/work`, `/project`, `/projects`, `/data`) are
-made visible inside the container automatically when they exist; add other
-directories with `--bind /path`, and set environment variables for the project
-with `--env NAME=VALUE`.
+environment and refreshes the kernel and launcher. Your home directory and the
+usual cluster data roots (`/scratch`, `/vast`, `/gpfs`, `/work`, `/project`,
+`/projects`, `/data`) are made visible inside the container automatically when
+they exist; add other directories with `--bind /path`, and set environment
+variables for the project with `--env NAME=VALUE`.
 
 Example notebooks for each workflow are in the
 [`notebooks/`](https://github.com/eric-d-knowles/lexichron/tree/main/notebooks)
@@ -302,22 +311,15 @@ project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
 
 ## Terminal user interface
 
-`lexichron ui` is a terminal interface for people who would rather not edit
+`lexichron-ui` is a terminal interface for people who would rather not edit
 YAML or write Slurm scripts by hand. It works over a plain SSH session and
-needs no project set up in advance: fill in where the corpus should go and
-what to download, and submit. Install the command once per image:
-
-```bash
-apptainer run --app install-ui /scratch/$USER/containers/lexichron-0.1.0.sif
-lexichron-ui
-```
-
-`install-ui` writes `~/.local/bin/lexichron-ui`, which starts the interface
-together with a small helper on the host, so that jobs can be submitted and
-watched from inside the container. (`lexichron-ui /path/to/lexichron.yaml`
-opens an existing settings file; a project environment created with
-`new-project` also has its own `.venv/lexichron-ui` that uses that
-environment.)
+needs nothing set up in advance: fill in where the corpus should go and what
+to download, and submit. The installer above puts it on your PATH; it starts
+the interface together with a small helper on the host, so that jobs can be
+submitted and watched from inside the container. (`lexichron-ui
+/path/to/lexichron.yaml` opens an existing settings file; a project
+environment created with `new-project` also has its own `.venv/lexichron-ui`
+that uses that environment.)
 
 Tabs:
 
@@ -336,9 +338,9 @@ Tabs:
   (files done, entries written) read from `.lexichron/runs/*/progress.json`,
   which every run writes.
 
-Without the installed command (`apptainer run --app ui lexichron-0.1.0.sif`)
-everything works except *Submit* and the job table, since Slurm commands are
-not visible from inside the container.
+Run straight from the image instead (`apptainer run --app ui lexichron-0.1.0.sif`)
+and everything works except *Submit* and the job table, since Slurm commands
+are not visible from inside the container.
 
 ## Example notebooks
 

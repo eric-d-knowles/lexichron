@@ -3,7 +3,21 @@
 End users only need the "Container installation" section of the main README.
 This file covers how the image is produced.
 
+## Installing by hand
+
+`install.sh` (repository root) is what users run via `curl | bash`. The steps
+it automates, for when something needs doing manually:
+
+    export APPTAINER_TMPDIR=$SCRATCH/lexichron/apptainer-tmp   # pulls stage files here, not /tmp
+    export APPTAINER_CACHEDIR=$SCRATCH/lexichron/apptainer-cache
+    apptainer pull $SCRATCH/lexichron/images/lexichron-0.1.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.1.0
+    apptainer run --app install $SCRATCH/lexichron/images/lexichron-0.1.0.sif   # writes ~/.local/bin/lexichron{,-ui}
+
 ## Files
+
+- `../install.sh` — the one-line installer (pull + `install` app + PATH).
+- `install_ui.sh` — the `install` app: writes the host-side `lexichron` and
+  `lexichron-ui` commands, which re-pull the image if it is purged.
 
 - `lexichron.def` — Apptainer definition. Builds lexichron from the repository
   checkout and bakes in Enchant, Hunspell dictionaries, spaCy models and the
