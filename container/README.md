@@ -59,7 +59,9 @@ From the repository root, on a machine with Apptainer and root or fakeroot:
   registration time).
 - Project environments are `python -m venv --system-site-packages` created
   inside the container, so they inherit the image's packages and store only
-  the user's additions. The compiler is kept in the image so that source
+  the user's additions. `register_kernel.sh` writes one host-side launcher
+  script (`<project>/.venv/host-python`) that applies the binds and `--env`
+  settings; the kernelspec calls it, and so can Slurm scripts. The compiler is kept in the image so that source
   builds in those environments work. A venv is tied to the image's Python
   minor version; `new_project.sh` refuses to reuse one built for a different
   version.

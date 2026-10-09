@@ -137,10 +137,12 @@ apptainer run --app new-project /scratch/$USER/containers/lexichron-0.1.0.sif /s
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
 lexichron and all of its dependencies from the image, and registers a Jupyter
-kernel for it. Your home directory and the usual cluster data roots
+kernel for it. If the directory contains a `requirements.txt`, those packages
+are installed too. Your home directory and the usual cluster data roots
 (`/scratch`, `/vast`, `/gpfs`, `/work`, `/project`, `/projects`, `/data`) are
 made visible inside the container automatically when they exist; add other
-directories with `--bind /path`.
+directories with `--bind /path`, and set environment variables for the project
+with `--env NAME=VALUE`.
 
 Example notebooks for each workflow are in the
 [`notebooks/`](https://github.com/eric-d-knowles/lexichron/tree/main/notebooks)
@@ -159,30 +161,35 @@ Open a notebook on the project's kernel and install packages the usual way:
 %pip install rpy2 pymc
 ```
 
-or from a shell:
+or from a shell, using the project's launcher:
 
 ```bash
-apptainer exec lexichron-0.1.0.sif /scratch/$USER/projects/gender-semantics/.venv/bin/pip install rpy2 pymc
+/scratch/$USER/projects/gender-semantics/.venv/host-python -m pip install rpy2 pymc
 ```
 
 Packages land in the project's `.venv` and persist. Each project gets its own
-environment; `.venv/bin/pip freeze --local` lists what you added. Install on a
-login node if compute nodes have no internet access. The environment is tied to
-the image's Python version (3.11): if a future image moves to a newer Python,
-run `new-project` again and reinstall from your frozen list; the script tells
-you when this is needed.
+environment; `.venv/host-python -m pip freeze --local` lists what you added.
+Install on a login node if compute nodes have no internet access. The
+environment is tied to the image's Python version (3.11): if a future image
+moves to a newer Python, run `new-project` again and reinstall from your frozen
+list; the command tells you when this is needed.
 
-To run Python directly instead of through a notebook:
+#### Running scripts and batch jobs
+
+`new-project` also writes `<project>/.venv/host-python`, a launcher that runs
+the project's Python inside the image with the right directories and
+environment. It is an ordinary executable on the host, so it can be used
+anywhere a Python path is expected, including Slurm scripts:
 
 ```bash
-apptainer exec --bind /scratch lexichron-0.1.0.sif python my_script.py
+/scratch/$USER/projects/gender-semantics/.venv/host-python my_script.py
 ```
 
-and to execute a notebook unattended inside a Slurm job:
+To execute a notebook unattended inside a Slurm job:
 
 ```bash
-apptainer exec --bind /scratch lexichron-0.1.0.sif \
-    jupyter nbconvert --to notebook --execute --output run.ipynb notebooks/unigrams_workflow.ipynb
+/scratch/$USER/projects/gender-semantics/.venv/host-python -m jupyter nbconvert \
+    --to notebook --execute --output run.ipynb unigrams_workflow.ipynb
 ```
 
 Notes on the container route:

@@ -16,14 +16,24 @@
 #                  (default: "Python (<project> | lexichron 0.2.0)").
 #   --bind DIR     Additional host directory to make visible inside the
 #                  container when the kernel runs. May be repeated.
+#   --env K=V      Environment variable set inside the container for this
+#                  project (e.g. --env CMDSTAN=/path/to/cmdstan). May be repeated.
+#   --no-install   Do not install <project>/requirements.txt even if present.
+#
+# Creates:
+#   <project>/.venv/              the environment (inherits the image's packages)
+#   <project>/.venv/host-python   a launcher that runs the project's Python inside
+#                                 the image; callable by path from the host, e.g.
+#                                 in Slurm scripts:  .venv/host-python script.py
 #
 # Afterwards:
 #   - In a notebook using the project's kernel, install packages with
 #         %pip install <package>
 #   - From a shell:
-#         apptainer exec lexichron-0.2.0.sif /path/to/project/.venv/bin/pip install <package>
+#         /path/to/project/.venv/host-python -m pip install <package>
 #   - Record the environment with
-#         apptainer exec lexichron-0.2.0.sif /path/to/project/.venv/bin/pip freeze --local
+#         /path/to/project/.venv/host-python -m pip freeze --local
+#   If <project>/requirements.txt exists it is installed automatically.
 #
 # The environment lives in <project>/.venv and is tied to this image's Python
 # version. If a future image moves to a new Python minor version, run this
@@ -31,7 +41,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 [ $# -ge 1 ] || usage
 
@@ -39,12 +49,15 @@ PROJECT_DIR="$1"; shift
 PASSTHROUGH=()
 KERNEL_NAME=""
 DISPLAY_NAME=""
+INSTALL_REQS=1
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --name)    KERNEL_NAME="$2"; shift 2 ;;
         --display) DISPLAY_NAME="$2"; shift 2 ;;
         --bind)    PASSTHROUGH+=("--bind" "$2"); shift 2 ;;
+        --env)     PASSTHROUGH+=("--env" "$2"); shift 2 ;;
+        --no-install) INSTALL_REQS=0; shift ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -107,12 +120,28 @@ EOF
 # ---------------------------------------------------------------------------
 bash /opt/lexichron/register_kernel.sh \
     --python "$VENV/bin/python" \
+    --launcher "$VENV/host-python" \
     --name "$KERNEL_NAME" \
     --display "$DISPLAY_NAME" \
     --bind "$PROJECT_DIR" \
     "${PASSTHROUGH[@]}"
 
+# ---------------------------------------------------------------------------
+# Project requirements, if any. pip runs inside this container; the venv is on
+# the host filesystem, so the packages persist.
+# ---------------------------------------------------------------------------
+if [ "$INSTALL_REQS" = 1 ] && [ -f "$PROJECT_DIR/requirements.txt" ]; then
+    echo ""
+    echo "Installing $PROJECT_DIR/requirements.txt into the project environment..."
+    if ! "$VENV/bin/python" -m pip install --quiet -r "$PROJECT_DIR/requirements.txt"; then
+        echo "Warning: requirements install failed (no network on this node?)."
+        echo "Re-run from a node with internet access:"
+        echo "  $VENV/host-python -m pip install -r $PROJECT_DIR/requirements.txt"
+    fi
+fi
+
 echo ""
 echo "Project environment ready."
 echo "  Install packages from a notebook on this kernel:  %pip install <package>"
-echo "  ...or from a shell:  apptainer exec $(basename "$IMAGE") $VENV/bin/pip install <package>"
+echo "  ...or from a shell:  $VENV/host-python -m pip install <package>"
+echo "  Run a script inside the environment:  $VENV/host-python script.py"
