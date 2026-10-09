@@ -29,6 +29,7 @@ From: python:3.11-slim-bookworm
     container/register_kernel.sh /opt/lexichron/register_kernel.sh
     container/new_project.sh /opt/lexichron/new_project.sh
     examples /opt/lexichron/examples
+    tests /opt/lexichron/tests
 
 %post
     set -eu
@@ -145,6 +146,8 @@ EOF
     python -c "import ngramprep, daviesprep, train, analyze; print('lexichron import OK')"
     lexichron --version
     lexichron acquire /opt/lexichron/examples/project.yaml --dry-run
+    # Unit tests, run against the image's real dependencies
+    python -m pytest -q /opt/lexichron/tests
     bash -n /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh
     # A project environment can be created and sees lexichron through the image
     python -m venv --system-site-packages /tmp/lexichron-test-venv
