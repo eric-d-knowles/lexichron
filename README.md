@@ -14,7 +14,7 @@ While `lexichron` can be tuned to run on systems with fewer CPUs and less RAM, t
 - [System Requirements](#system-requirements)
 - [Installation](#installation)
   - [Container installation](#container-installation)
-  - [Standard installation (conda)](#standard-installation-conda)
+  - [Development installation (conda)](#development-installation-conda)
 - [Quick Start](#quick-start)
 - [Output Files](#output-files)
 - [Advanced: Monitoring and Architecture](#advanced-monitoring-and-architecture)
@@ -104,8 +104,8 @@ There are two ways to install lexichron:
 - **Container (recommended for users):** pull a prebuilt Apptainer image that
   contains lexichron and every dependency, then run the notebooks against it.
   Nothing to compile, no conda environment, no setup script.
-- **Conda (for developers):** install from source into a conda environment.
-  Use this if you plan to modify the code.
+- **Conda (for developers):** an editable install from source into a conda
+  environment, for modifying the code.
 
 ### Container installation
 
@@ -191,26 +191,18 @@ Notes on the container route:
 - `apptainer run-help lexichron-0.1.0.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
-### Standard installation (conda)
+### Development installation (conda)
 
-Clone the repository, navigate into it, activate your project's conda environment, and
-install:
+For working on lexichron itself. Clone the repository, activate a conda
+environment, and install in editable mode so that changes to the source take
+effect without reinstalling:
 
 ```bash
 git clone https://github.com/eric-d-knowles/lexichron.git
 cd lexichron
 conda activate your-environment
-pip install .
-```
-
-If you plan to modify the source code, install in editable mode instead:
-
-```bash
 pip install -e .
 ```
-
-Editable mode links the installation directly to your cloned repository, so any changes
-you make to the source are immediately reflected without reinstalling.
 
 ### Additional setup: Enchant library and Hunspell dictionaries
 
