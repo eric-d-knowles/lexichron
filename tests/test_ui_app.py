@@ -50,19 +50,18 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
         app = LexichronApp(None)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
-            assert "(set corpus.db_path_stub)" in str(app.query_one("#call").content)
+            assert "(set corpus.db_path_stub)" in str(app.query_one("#dest").content)
             from textual.widgets import Select
             assert app.query_one("#f-corpus-language", Select).value is Select.NULL
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
-            app.query_one("#f-corpus-release").value = "20200217"
             app.query_one("#f-corpus-language").value = "eng"
             app.query_one("#f-acquire-ngram_size").value = "1"
             await pilot.pause()
-            assert app.project_path == tmp_path / "corpora" / "project.yaml"
+            assert app.project_path == tmp_path / "corpora" / "lexichron.yaml"
             assert "repo_corpus_id='eng'" in str(app.query_one("#call").content)
             app.action_save()
             await pilot.pause()
         _assert_clean(app)
-        assert (tmp_path / "corpora" / "project.yaml").exists()
+        assert (tmp_path / "corpora" / "lexichron.yaml").exists()
 
     asyncio.run(scenario())

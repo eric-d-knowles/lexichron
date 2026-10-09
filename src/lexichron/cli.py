@@ -1,6 +1,6 @@
 """``lexichron`` command line.
 
-    lexichron acquire project.yaml [--set acquire.ngram_size=2] [--dry-run]
+    lexichron acquire lexichron.yaml [--set acquire.ngram_size=2] [--dry-run]
 
 Each subcommand reads the project file, merges any ``--set`` overrides, builds
 the keyword arguments for the stage's Python entry point, and calls it. With
@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for stage, (_, help_text) in STAGES.items():
         p = sub.add_parser(stage, help=help_text, description=help_text)
-        p.add_argument("project", help="project YAML file")
+        p.add_argument("project", help="settings YAML file (e.g. lexichron.yaml)")
         p.add_argument(
             "--set", action="append", metavar="SECTION.KEY=VALUE",
             help="override a setting from the project file (repeatable)",

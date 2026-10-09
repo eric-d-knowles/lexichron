@@ -147,7 +147,7 @@ EOF
 %test
     python -c "import ngramprep, daviesprep, train, analyze; print('lexichron import OK')"
     lexichron --version
-    lexichron acquire /opt/lexichron/examples/project.yaml --dry-run
+    lexichron acquire /opt/lexichron/examples/lexichron.yaml --dry-run
     # The unit tests are run by the CI workflow with `apptainer exec ... pytest`,
     # because a failing %test section does not fail `apptainer build`/`test`.
     bash -n /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh /opt/lexichron/install_ui.sh
@@ -184,7 +184,7 @@ EOF
 # App: terminal user interface (runs inside the container; for Slurm actions
 # start it through the project's .venv/lexichron-ui launcher instead, which
 # also runs the host bridge)
-#   apptainer run --app ui lexichron-<version>.sif /path/to/project/project.yaml
+#   apptainer run --app ui lexichron-<version>.sif /path/to/project/lexichron.yaml
 # -----------------------------------------------------------------------------
 %apprun ui
     exec lexichron ui "$@"
@@ -203,7 +203,7 @@ EOF
 %apphelp ui
     Open the terminal user interface on a project file:
 
-        apptainer run --app ui lexichron-<version>.sif /path/to/project/project.yaml
+        apptainer run --app ui lexichron-<version>.sif /path/to/project/lexichron.yaml
 
     From inside the container the UI cannot submit Slurm jobs. For that, run
     `apptainer run --app install-ui lexichron.sif` once and then start the UI

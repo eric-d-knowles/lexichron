@@ -1,8 +1,13 @@
 """``lexichron ui``: a terminal interface for configuring, running and
-submitting pipeline stages from a project file.
+submitting pipeline stages from a settings file.
+
+Terminology: the *settings file* (default ``lexichron.yaml`` in the corpus
+directory) holds the corpus, the stage settings and the Slurm resources; it is
+what ``lexichron <stage> file.yaml`` runs from. It is not a "project
+environment" (what ``new-project`` creates), which the UI does not need.
 
 Layout: a tab per concern.
-  Project  — form for the project file (generated from the stage's signature)
+  Settings — form for the settings file (generated from the stage's signature)
              and, beside it, the resolved call exactly as --dry-run prints it
   Run      — run the stage here (login node test, or inside an allocation)
   Submit   — Slurm resources; writes the batch script and submits it through
@@ -35,7 +40,9 @@ from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
 from ngramprep.ngram_acquire.progress import read_progress
 
-__all__ = ["LexichronApp", "main"]
+__all__ = ["LexichronApp", "main", "SETTINGS_FILENAME"]
+
+SETTINGS_FILENAME = "lexichron.yaml"
 
 
 # ---------------------------------------------------------------------------
@@ -81,16 +88,18 @@ def _from_widget(field: Field, raw: Any) -> Any:
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
-    #form { width: 1fr; padding: 0 1; }
+    #form { width: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
     #preview { width: 1fr; padding: 0 1; border-left: solid $secondary; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
-    .field-help { color: $text-muted; margin-bottom: 1; }
+    .field-help { color: $text-muted; padding-left: 24; margin-bottom: 1; }
     .row { height: auto; }
-    .row Label { width: 24; padding-top: 1; }
+    .row Label { width: 24; }
     .row Input, .row Select { width: 1fr; }
-    #call { padding: 1; }
+    .row Switch { height: 1; border: none; padding: 0; }
+    #dest { padding: 0 1; }
+    #call { padding: 0 1; }
     #status { color: $warning; padding: 0 1; height: auto; }
-    .actions { height: auto; padding: 1; }
+    .actions { height: auto; padding: 1 1 0 1; }
     .actions Button { margin-right: 2; }
     #runlog, #joblog { height: 1fr; }
     """
@@ -98,8 +107,8 @@ class LexichronApp(App):
 
     def __init__(self, project_path: Optional[str | os.PathLike] = None, stage: str = "acquire") -> None:
         super().__init__()
-        # The project file is optional. Without one, it defaults to
-        # <db_path_stub>/project.yaml once that field is filled in, so a user
+        # The settings file is optional. Without one, it defaults to
+        # <db_path_stub>/lexichron.yaml once that field is filled in, so a user
         # who only wants to download a corpus never has to think about it.
         self.explicit_project: Optional[Path] = Path(project_path).resolve() if project_path else None
         self.stage = stage
@@ -114,7 +123,7 @@ class LexichronApp(App):
 
     @property
     def project_path(self) -> Optional[Path]:
-        """Where the project file is (or will be) saved."""
+        """Where the settings file is (or will be) saved."""
         try:
             typed = self.query_one("#project-path", Input).value.strip()
         except Exception:
@@ -125,26 +134,27 @@ class LexichronApp(App):
             return self.explicit_project
         stub = (self.config.get("corpus") or {}).get("db_path_stub")
         if stub:
-            return Path(str(stub)).expanduser().resolve() / "project.yaml"
+            return Path(str(stub)).expanduser().resolve() / SETTINGS_FILENAME
         return None
 
     def _require_project_path(self) -> Path:
         p = self.project_path
         if p is None:
-            raise ConfigError("set corpus.db_path_stub (or a project file path) first")
+            raise ConfigError("set corpus.db_path_stub (or a settings file path) first")
         return p
 
     # -- layout -----------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
         with TabbedContent(initial="tab-project"):
-            with TabPane("Project", id="tab-project"):
+            with TabPane("Settings", id="tab-project"):
                 with Horizontal():
                     with VerticalScroll(id="form"):
                         with Horizontal(classes="row"):
-                            yield Label("project file")
+                            yield Label("settings file")
                             yield Input(value=str(self.explicit_project or ""), id="project-path",
-                                        placeholder="(optional; defaults to <db_path_stub>/project.yaml)")
+                                        placeholder=f"(optional; defaults to <db_path_stub>/{SETTINGS_FILENAME})",
+                                        compact=True)
                         for sec in self.sections:
                             if sec.name == "slurm":
                                 continue
@@ -152,11 +162,12 @@ class LexichronApp(App):
                             for f in sec.fields:
                                 yield from self._field_widgets(sec.name, f)
                     with Vertical(id="preview"):
-                        yield Static("Resolved call", classes="section")
-                        yield Static("", id="call")
+                        yield Static("", id="dest")
                         yield Static("", id="status")
                         with Horizontal(classes="actions"):
-                            yield Button("Save project file", id="save", variant="primary")
+                            yield Button("Save settings", id="save", variant="primary")
+                        yield Static("Resolved call", classes="section")
+                        yield Static("", id="call")
             with TabPane("Run", id="tab-run"):
                 with Horizontal(classes="actions"):
                     yield Button("Run here", id="run", variant="success")
@@ -190,12 +201,14 @@ class LexichronApp(App):
                 yield Switch(value=bool(current), id=wid)
             elif f.kind == "choice" and f.choices:
                 opts = [(c, c) for c in f.choices]
+                if current is None and len(f.choices) == 1:
+                    current = f.choices[0]          # only one valid value: preselect it
                 val = str(current) if current is not None else Select.NULL
                 if val is not Select.NULL and val not in f.choices:
                     opts.append((val, val))
-                yield Select(opts, value=val, allow_blank=True, id=wid)
+                yield Select(opts, value=val, allow_blank=True, id=wid, compact=True)
             else:
-                yield Input(value=_to_widget_text(current), id=wid,
+                yield Input(value=_to_widget_text(current), id=wid, compact=True,
                             placeholder=f"({f.kind}{', optional' if not f.required else ''})")
         if f.help:
             yield Static(f.help, classes="field-help")
@@ -242,14 +255,15 @@ class LexichronApp(App):
             status.update(str(exc))
             return
         dest = self.project_path
-        dest_line = f"# project file: {dest if dest else '(set corpus.db_path_stub)'}"
+        self.query_one("#dest", Static).update(
+            f"Settings file: {dest if dest else '(set corpus.db_path_stub)'}")
         try:
             kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
         except ConfigError as exc:
-            call.update(f"# (fill in the required settings)\n{dest_line}")
+            call.update("(fill in the required settings)")
             status.update(str(exc))
             return
-        call.update(_format_call(self.func, kwargs) + "\n\n" + dest_line)
+        call.update(_format_call(self.func, kwargs))
         status.update("")
 
     @on(Input.Changed)
@@ -269,7 +283,7 @@ class LexichronApp(App):
             raise
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write(f"# lexichron project file (written by lexichron ui {__version__})\n")
+            fh.write(f"# lexichron settings file (written by lexichron ui {__version__})\n")
             yaml.safe_dump(cfg, fh, sort_keys=False, default_flow_style=False)
         self.notify(f"Saved {path}")
 
@@ -408,7 +422,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="lexichron ui", description="Terminal UI for lexichron.")
     parser.add_argument("project", nargs="?", default=None,
-                        help="project YAML file (optional; defaults to <db_path_stub>/project.yaml)")
+                        help=f"settings YAML file (optional; defaults to <db_path_stub>/{SETTINGS_FILENAME})")
     parser.add_argument("--stage", default="acquire", choices=sorted(STAGES))
     args = parser.parse_args(argv)
     LexichronApp(args.project, args.stage).run()

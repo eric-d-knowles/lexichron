@@ -285,20 +285,20 @@ example, `--name=gender_semantics --display-name="Python (gender semantics)"`.
 
 ## Command line
 
-Pipeline stages can also be run from a project file instead of a notebook.
+Pipeline stages can also be run from a settings file instead of a notebook.
 The file holds the settings a notebook's setup cells would hold, named exactly
-as in the stage's Python function; `examples/project.yaml` is a commented
+as in the stage's Python function; `examples/lexichron.yaml` is a commented
 template. Currently the acquisition stage is available this way:
 
 ```bash
-lexichron acquire project.yaml                       # run
-lexichron acquire project.yaml --set acquire.ngram_size=2   # override a setting
-lexichron acquire project.yaml --dry-run             # show the call, don't run it
+lexichron acquire lexichron.yaml                       # run
+lexichron acquire lexichron.yaml --set acquire.ngram_size=2   # override a setting
+lexichron acquire lexichron.yaml --dry-run             # show the call, don't run it
 ```
 
 Misspelled or missing settings are reported before anything runs. Inside the
-container, use the project launcher: `.venv/host-python -m lexichron.cli acquire project.yaml`
-(or `apptainer exec lexichron.sif lexichron acquire project.yaml`).
+container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml` (or a
+project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
 
 ## Terminal user interface
 
@@ -314,23 +314,24 @@ lexichron-ui
 
 `install-ui` writes `~/.local/bin/lexichron-ui`, which starts the interface
 together with a small helper on the host, so that jobs can be submitted and
-watched from inside the container. (`lexichron-ui /path/to/project.yaml`
-opens an existing project file; a project created with `new-project` also has
-its own `.venv/lexichron-ui` that uses that project's environment.)
+watched from inside the container. (`lexichron-ui /path/to/lexichron.yaml`
+opens an existing settings file; a project environment created with
+`new-project` also has its own `.venv/lexichron-ui` that uses that
+environment.)
 
 Tabs:
 
-- **Project** — a form for every setting of the stage (generated from the
+- **Settings** — a form for every setting of the stage (generated from the
   stage's own arguments, with their help text), and beside it the exact call
   that will run, updated as you type. Misspelled or missing settings are
-  reported there. *Save* writes the project file, by default
-  `<db_path_stub>/project.yaml`; runs, logs and progress go under
+  reported there. *Save* writes the settings file, by default
+  `<db_path_stub>/lexichron.yaml`; runs, logs and progress go under
   `<db_path_stub>/.lexichron/`.
 - **Run** — runs the stage here, streaming its output. For small tests on a
   login node (set `file_range`) or inside an interactive allocation.
 - **Submit** — Slurm account, partition, CPUs, memory and time. *Write batch
-  script* writes `project.acquire.sbatch` next to the project file; *Submit*
-  also submits it and shows the job id.
+  script* writes `lexichron.acquire.sbatch` next to the settings file;
+  *Submit* also submits it and shows the job id.
 - **Jobs** — your queued and running jobs, and the progress of the latest runs
   (files done, entries written) read from `.lexichron/runs/*/progress.json`,
   which every run writes.

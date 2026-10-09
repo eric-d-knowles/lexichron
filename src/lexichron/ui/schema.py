@@ -21,6 +21,7 @@ HIDDEN = {"progress_path", "write_batch_size"}
 
 # Known choice lists for arguments whose type is a plain str/int.
 CHOICES: Dict[str, List[str]] = {
+    "release": ["20200217"],
     "ngram_size": ["1", "2", "3", "4", "5"],
     "ngram_type": ["tagged", "untagged", "all"],
     "open_type": ["write:packed24", "write", "read:packed24", "read"],
