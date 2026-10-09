@@ -9,7 +9,6 @@ the keyword arguments for the stage's Python entry point, and calls it. With
 from __future__ import annotations
 
 import argparse
-import logging
 import sys
 from typing import Any, Callable, Dict
 
@@ -58,12 +57,9 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
         print(_format_call(func, kwargs))
         return 0
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        stream=sys.stdout,
-    )
-    logging.getLogger(__name__).info("lexichron %s: running stage '%s'", __version__, stage)
+    # Logging is left to the stage: each pipeline writes a log file next to
+    # its output and keeps the console to its banner, progress and warnings.
+    print(f"lexichron {__version__}: running stage '{stage}'", flush=True)
     func(**kwargs)
     return 0
 
@@ -106,6 +102,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.exit(2, f"lexichron {args.stage}: {exc}\n")
     except KeyboardInterrupt:
         return 130
+    except RuntimeError as exc:
+        # A stage reporting failure (e.g. AcquisitionError): message, not a traceback
+        print(f"lexichron {args.stage}: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":  # pragma: no cover

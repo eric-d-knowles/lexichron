@@ -126,6 +126,6 @@ def randomize_file_order(
         file_urls: List of file URLs to shuffle
         seed: Random seed for reproducibility
     """
-    random.seed(seed)
-    random.shuffle(file_urls)
+    # A private generator: do not reseed the process-wide random module.
+    random.Random(seed).shuffle(file_urls)
     logger.info("Randomized file order with seed %d", seed)

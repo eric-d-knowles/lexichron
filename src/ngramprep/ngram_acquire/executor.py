@@ -76,8 +76,11 @@ def process_files(
         # Configure executor
         kwargs = {"max_workers": workers}
         if issubclass(executor_class, ProcessPoolExecutor):
-            # Use fork to allow DB handle sharing across processes
-            # (spawn would require pickling the C++ DB object, which fails)
+            # Workers never touch the database; the parent does all writes.
+            # Fork is chosen explicitly so behaviour does not change with the
+            # interpreter's default start method (spawn from Python 3.14),
+            # and so each worker inherits the already-imported modules
+            # instead of re-importing them.
             kwargs["mp_context"] = mp.get_context("fork")
             logger.info(
                 "Using multiprocessing start method: %s",
