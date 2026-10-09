@@ -148,11 +148,14 @@ EOF
     python -c "import ngramprep, daviesprep, train, analyze; print('lexichron import OK')"
     lexichron --version
     lexichron acquire /opt/lexichron/examples/project.yaml --dry-run
-    # Unit tests, run against the image's real dependencies. The summary line
-    # is echoed as a GitHub annotation so CI results are visible via the API.
-    set -o pipefail
-    python -m pytest -q -rs /opt/lexichron/tests 2>&1 | tee /tmp/pytest.out
+    # Unit tests, run against the image's real dependencies. Failed test names
+    # and the summary line are echoed as GitHub annotations so that CI results
+    # are visible through the API. (POSIX sh: no pipefail/PIPESTATUS.)
+    python -m pytest -q -rfs /opt/lexichron/tests > /tmp/pytest.out 2>&1; rc=$?
+    cat /tmp/pytest.out
+    grep -E '^(FAILED|ERROR) ' /tmp/pytest.out | cut -c1-400 | sed 's/^/::error::/'
     echo "::notice::pytest: $(tail -1 /tmp/pytest.out)"
+    [ "$rc" -eq 0 ]
     bash -n /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh /opt/lexichron/install_ui.sh
     python -c "import textual, lexichron.ui.app"
     # A project environment can be created and sees lexichron through the image
