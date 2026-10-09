@@ -119,11 +119,9 @@ mkdir -p /scratch/$USER/containers && cd /scratch/$USER/containers
 apptainer pull lexichron-0.1.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.1.0
 ```
 
-Replace `0.1.0` with the version you want. Keep the image on a large
-filesystem (it is roughly 700 MB), not in your home directory. Versioned tags
-never change; `latest` (newest release) and `dev` (newest commit) move, so to
-re-pull one of those run `apptainer cache clean` first, or Apptainer will hand
-you the cached copy.
+Replace `0.1.0` with the version you want (`latest` is the newest release).
+Keep the image on a large filesystem (it is roughly 700 MB), not in your home
+directory.
 
 **2. Set up a Jupyter kernel.** Pick one of the two:
 
@@ -194,9 +192,7 @@ Notes on the container route:
 - Each image is pinned to one lexichron version. To use a different version,
   pull its image and register it as a separate kernel.
 - `apptainer run-help lexichron-0.1.0.sif` prints a short usage summary.
-- To build the image yourself instead of pulling it, run
-  `apptainer build lexichron.sif container/lexichron.def` from the repository
-  root (requires `--fakeroot` or root privileges on most systems).
+- How the image is built and released is described in `container/README.md`.
 
 ### Standard installation (conda)
 
