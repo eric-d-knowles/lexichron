@@ -91,8 +91,15 @@ class BatchWriter:
             self.total_entries_written += entries_written
             self.write_batches += 1
 
+            # Make this batch durable now. Writes go in with the WAL disabled
+            # and the write profile keeps gigabytes of memtables in memory, so
+            # without an explicit flush nothing reaches disk until the database
+            # is closed cleanly; a kill (OOM, time limit) would then lose every
+            # completed file, including the resume markers written above.
+            self.db.finalize_bulk()
+
             logger.info(
-                "Flushed batch: %d entries, %d files",
+                "Flushed batch: %d entries, %d files (persisted to disk)",
                 entries_written, len(self.pending_files)
             )
         except Exception:
