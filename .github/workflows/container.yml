@@ -92,6 +92,16 @@ jobs:
           fi
           apptainer exec lexichron.sif python -c "import enchant; print(sorted(enchant.list_languages()))"
 
+      - name: Run unit tests inside the image
+        run: |
+          set +e
+          apptainer exec lexichron.sif python -m pytest -q -rfs /opt/lexichron/tests > pytest.out 2>&1
+          rc=$?
+          cat pytest.out
+          grep -E '^(FAILED|ERROR) ' pytest.out | cut -c1-400 | sed 's/^/::error::/'
+          echo "::notice::pytest: $(tail -1 pytest.out)"
+          exit $rc
+
       - name: Report image contents
         # Written to the run summary so the build is self-describing without
         # access to the registry.

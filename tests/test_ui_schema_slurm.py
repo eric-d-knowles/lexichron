@@ -41,6 +41,7 @@ def test_write_sbatch_uses_launcher_when_present(tmp_path, monkeypatch):
     launcher = proj / ".venv" / "host-python"; launcher.write_text("#!/bin/sh\n"); launcher.chmod(0o755)
     yaml_path = proj / "project.yaml"; yaml_path.write_text("corpus: {}\n")
     monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
 
     out = write_sbatch(yaml_path, "acquire", {"account": "acct", "cpus": 8, "mem": "32G", "time": "02:00:00"})
     text = out.read_text()
@@ -54,6 +55,7 @@ def test_write_sbatch_uses_launcher_when_present(tmp_path, monkeypatch):
 
 def test_stage_command_falls_back_to_image(tmp_path, monkeypatch):
     yaml_path = tmp_path / "project.yaml"; yaml_path.write_text("")
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
     monkeypatch.setenv("APPTAINER_CONTAINER", "/img/lexichron.sif")
     assert stage_command(yaml_path, "acquire")[:3] == ["apptainer", "exec", "/img/lexichron.sif"]
     monkeypatch.delenv("APPTAINER_CONTAINER")
