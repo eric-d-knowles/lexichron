@@ -1,10 +1,15 @@
 # lexichron
 
-**Scalable tools for temporal linguistic analysis using Google Books Ngrams and Davies Corpora**
+Tools for studying semantic change over time with word embeddings trained on
+large historical corpora. lexichron covers the whole pipeline: acquiring
+Google Books Ngrams (1- to 5-grams) or Mark Davies' corpora (COHA, COCA and
+others), filtering and normalizing the text, storing it in a queryable RocksDB
+database, training per-year `word2vec` models, aligning them, and analyzing how
+word meanings move.
 
-A comprehensive platform for semantic change research combining data preparation, text processing, and word embedding analysis. Supports both Google Ngrams (1-5 grams) and Mark Davies' corpora (COHA, COCA, etc.). Ideal for large datasets consisting of millions or billions of text examples. Provides efficient pipelines for acquiring, filtering, transforming, and organizing raw data—and for training and evaluating `word2vec` models to track semantic change over time.
-
-While `lexichron` can be tuned to run on systems with fewer CPUs and less RAM, the package truly shines on High Performance Computing (HPC) or cloud infrastructures. Processing pipelines that might take days or weeks on a laptop can be completed in hours on a cluster or cloud platform.
+The pipelines are built for corpora of millions to billions of records and are
+meant to run on an HPC cluster or similar hardware. They can be tuned for
+smaller machines at the cost of speed.
 
 ## Contents
 
@@ -40,35 +45,35 @@ Alternatively, you can click "Cite this repository" in the GitHub sidebar for ad
 
 ### Data Preparation
 
-- **Data acquisition:** Download n-gram datasets (1- through 5-grams) or access Davies corpora. (Davies datasets must be licensed and downloaded by the user.) Immediately ingest data into a queryable RocksDB database.
+- **Data acquisition:** Download n-gram datasets (1- through 5-grams) or read Davies corpora (which must be licensed and downloaded by the user), and ingest them into a RocksDB database.
 - **Language support:** N-gram pipelines support English, Chinese (simplified), French, German, Hebrew, Italian, Russian, and Spanish.
-- **Configurable processing:** Apply any or all of the following transformations: case normalization, stopword removal, short word removal, non-alphabetic token removal, and lemmatization. Discarded tokens are replaced in the corpus with `<UNK>`.
-- **Whitelist creation:** Output the top-N most frequent unigrams, applying optional spell-checking, then use this whitelist to efficiently filter text examples. Spell-checking discards proper nouns when used in conjunction with case normalization (e.g., "Jackson" and "Einstein" would be discarded). A year range can be defined to ensure that the whitelist contains only tokens found in all specified years.
-- **Bigram hyphenation:** Automatically convert semantically interesting bigrams into hyphenated unigrams (e.g., "working class" → "working-class", "nuclear family" → "nuclear-family"), preserving multiword concepts as single tokens for downstream analysis.
-- **Token immunity:** Define tokens that should always be preserved during filtering, immune to exclusion rules. Useful for domain-specific terms, names or proper nouns, historical keywords, or particular multiword expressions that you want to ensure remain in your corpus regardless of other filtering criteria.
-- **Temporal analysis support:** Reorganize n-gram data into a format suitable for time-series analyses:
+- **Filtering:** Any combination of case normalization, stopword removal, short-word removal, non-alphabetic token removal, and lemmatization. Discarded tokens are replaced with `<UNK>`.
+- **Whitelists:** Write the top-N most frequent unigrams, optionally spell-checked, and use the list to filter longer n-grams. With case normalization, spell-checking also drops proper nouns ("Jackson", "Einstein"). A year range restricts the list to tokens present in every year of the range.
+- **Bigram hyphenation:** Convert chosen bigrams into hyphenated unigrams ("working class" → "working-class") so that multiword concepts survive as single tokens.
+- **Token immunity:** Name tokens that are always kept regardless of the filtering rules, such as domain terms, proper nouns, or specific multiword expressions.
+- **Pivoting:** Reorganize n-gram data from one record per n-gram to one record per n-gram-year:
   - BEFORE: `n-gram → (year1, count1, volumes1) (year2, count2, volumes2) ... (yearn, countn, volumesn)`
   - AFTER:
     - `[year1] n-gram → (count1, volumes1)`
     - `[year2] n-gram → (count2, volumes2)`
     - `...`
     - `[yearn] n-gram → (countn, volumesn)`
-- **High-throughput architecture:** Parallel processing with load balancing, progress tracking, and resume capability in the event of interruption.
-- **Research-friendly storage:** Fast key-value database (RocksDB) quickly queries even enormous datasets.
+- **Parallel processing** with load balancing, progress reporting, and resumption after interruption.
+- **Storage** in RocksDB, a key-value database that stays fast at corpus scale.
 
 ### Model Training and Evaluation
 
-- **Word embeddings:** Train `word2vec` models on the processed n-grams using `gensim`'s implementation. Optionally use `corpus_file` mode to enable fast, multithreaded training and training multiple years at once. Easily adjust model hyperparameters:
+- **Word embeddings:** Train `word2vec` models on the processed n-grams with `gensim`. `corpus_file` mode gives multithreaded training and can train several years at once. Hyperparameters:
   - `approach`: use skip-gram or continuous bag-of-words (CBOW) architectures
   - `vector_size`: the number of vector dimensions (features) to extract
   - `window_size`: the width of the context window
   - `min_count`: the minimum frequency of words to include in the model
   - `weight_by`: downweight common ngrams by frequency or document count
-- **Evaluation:** Evaluate the performance of the trained model using standard intrinsic tests of similarity and analogy performance. Plot the results for visual comparison of model quality. Use mixed-model regression to quantify the impact of different hyperparameters on model performance across years.
+- **Evaluation:** Score models on standard similarity and analogy benchmarks, plot the results, and use mixed-model regression to estimate how each hyperparameter affects performance across years.
 
 ## Workflow
 
-The toolkit provides two parallel pipelines for different data sources:
+There are two parallel pipelines, one per data source:
 
 ### Google Ngrams Pipeline
 
@@ -83,11 +88,11 @@ The toolkit provides two parallel pipelines for different data sources:
 
 ### Analysis Tools
 
-**`analyze`**: General-purpose analysis tools for tracking semantic drift and similarity changes across time using trained word embeddings. Works with both ngram and Davies corpus data.
+**`analyze`**: Track semantic drift, similarity change, and projections onto semantic dimensions across years, using the trained embeddings. Works with models from either pipeline.
 
 ### Model Training
 
-**`train/word2vec`**: Train per-year word2vec models, evaluate across intrinsic benchmarks, align models across years, and analyze hyperparameter impact via regression.
+**`train/word2vec`**: Train per-year `word2vec` models, evaluate them, align them across years, and analyze hyperparameter effects.
 
 ## System Requirements
 
@@ -95,7 +100,7 @@ The toolkit provides two parallel pipelines for different data sources:
 - Large amount of RAM (80+ GB recommended)
 - Fast local storage (NVMe SSD recommended)
 - Several TB of disk space for processing and storing very large corpora
-- Settings can be tuned for fewer resources, but at the cost of processing speed
+- Settings can be tuned for smaller machines at the cost of speed
 
 ## Installation
 
@@ -347,6 +352,4 @@ This design enables:
 
 ## Support and Maintenance
 
-This project is provided as-is for research and development purposes. While issues and pull requests are welcome, there is no guarantee of response time or ongoing maintenance. The code is shared in the spirit of open science, but support is provided on a best-effort basis only.
-
-For critical production use, consider forking and maintaining your own version.
+This is research software, provided as-is. Issues and pull requests are welcome, but there is no guarantee of a response or of ongoing maintenance. If you depend on it, consider maintaining your own fork.
