@@ -112,7 +112,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, 
 
     detail = [
         f"{entries:,} entries",
-        f"{fmt_bytes(float(doc.get('uncompressed_bytes', 0)))} read",
+        f"{fmt_bytes(float(doc.get('uncompressed_bytes', 0)))} parsed (uncompressed)",
         f"{fmt_count(rate)} entries/s",
         f"elapsed {fmt_duration(elapsed)}",
     ]
