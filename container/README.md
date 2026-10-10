@@ -10,8 +10,8 @@ it automates, for when something needs doing manually:
 
     export APPTAINER_TMPDIR=$SCRATCH/lexichron/apptainer-tmp   # pulls stage files here, not /tmp
     export APPTAINER_CACHEDIR=$SCRATCH/lexichron/apptainer-cache
-    apptainer pull $SCRATCH/lexichron/images/lexichron-0.1.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.1.0
-    apptainer run --app install $SCRATCH/lexichron/images/lexichron-0.1.0.sif   # writes ~/.local/bin/lexichron{,-ui}
+    apptainer pull $SCRATCH/lexichron/images/lexichron-0.2.0.sif oras://ghcr.io/eric-d-knowles/lexichron:0.2.0
+    apptainer run --app install $SCRATCH/lexichron/images/lexichron-0.2.0.sif   # writes ~/.local/bin/lexichron{,-ui}
 
 ## Files
 

@@ -15,7 +15,7 @@
 #   --bin DIR        where to put the commands (default ~/.local/bin)
 #   --bind DIR       extra host directory to bind at run time (repeatable)
 #   --ref REF        registry reference for re-pulls, e.g.
-#                    ghcr.io/eric-d-knowles/lexichron:0.1.0 (default: derived
+#                    ghcr.io/eric-d-knowles/lexichron:0.2.0 (default: derived
 #                    from the image file name)
 #   --tmpdir DIR     APPTAINER_TMPDIR to use for pulls (default: beside the image)
 #   --cachedir DIR   APPTAINER_CACHEDIR to use for pulls (default: beside the image)
@@ -42,7 +42,7 @@ IMAGE="${APPTAINER_CONTAINER:-${SINGULARITY_CONTAINER:-}}"
 IMAGE_DIR="$(dirname "$IMAGE")"
 
 if [ -z "$REF" ]; then
-    # lexichron-0.1.0.sif -> ghcr.io/eric-d-knowles/lexichron:0.1.0
+    # lexichron-0.2.0.sif -> ghcr.io/eric-d-knowles/lexichron:0.2.0
     base="$(basename "$IMAGE" .sif)"
     ver="${base#lexichron-}"
     [ "$ver" = "$base" ] && ver="latest"
