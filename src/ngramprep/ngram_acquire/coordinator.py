@@ -4,13 +4,13 @@ from __future__ import annotations
 import logging
 import random
 from pathlib import PurePosixPath
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import rocks_shim as rs
 
 from ngramprep.ngram_acquire.io.locations import build_location_info
 from ngramprep.ngram_acquire.io.fetch import fetch_file_urls
-from ngramprep.ngram_acquire.db.metadata import is_file_processed
+from ngramprep.ngram_acquire.db.metadata import is_file_processed, processed_stats
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +18,7 @@ __all__ = [
     "discover_files",
     "select_file_subset",
     "filter_processed_files",
+    "processed_totals",
     "randomize_file_order",
 ]
 
@@ -129,3 +130,21 @@ def randomize_file_order(
     # A private generator: do not reseed the process-wide random module.
     random.Random(seed).shuffle(file_urls)
     logger.info("Randomized file order with seed %d", seed)
+
+
+def processed_totals(file_urls: List[str], db: rs.DB) -> Dict[str, int]:
+    """What the already-processed files among ``file_urls`` contributed to the
+    database: ``{"files", "entries", "bytes", "unsized"}``. ``unsized`` counts
+    files whose marker predates per-file figures (their size is unknown)."""
+    totals = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
+    for url in file_urls:
+        stats = processed_stats(db, PurePosixPath(url).name)
+        if stats is None:
+            continue
+        totals["files"] += 1
+        if "bytes" in stats:
+            totals["entries"] += int(stats.get("entries", 0))
+            totals["bytes"] += int(stats.get("bytes", 0))
+        else:
+            totals["unsized"] += 1
+    return totals

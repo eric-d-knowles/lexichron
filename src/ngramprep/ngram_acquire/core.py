@@ -14,6 +14,7 @@ from ngramprep.ngram_acquire.coordinator import (
     discover_files,
     select_file_subset,
     filter_processed_files,
+    processed_totals,
     randomize_file_order,
 )
 from ngramprep.ngram_acquire.executor import process_files
@@ -180,11 +181,13 @@ def download_and_ingest_to_rocksdb(
     with open_db(db_path, profile=open_type, create_if_missing=True) as db:
         # Resume mode: skip already-processed files
         files_to_skip = 0
+        prior = None
         if not overwrite_db:
+            prior = processed_totals(file_urls_to_use, db)
             file_urls_to_use, files_to_skip = filter_processed_files(file_urls_to_use, db)
 
         progress.set_totals(files_total=len(file_urls_to_use) + files_to_skip,
-                            files_skipped=files_to_skip)
+                            files_skipped=files_to_skip, prior=prior)
 
         # Optional randomization
         if random_seed is not None:

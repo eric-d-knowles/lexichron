@@ -7,7 +7,7 @@ from typing import Iterable, List
 
 import rocks_shim as rs
 
-from ngramprep.ngram_acquire.db.metadata import processed_key
+from ngramprep.ngram_acquire.db.metadata import processed_key, processed_value
 from ngramprep.ngram_acquire.spool import read_chunk
 
 logger = logging.getLogger(__name__)
@@ -36,14 +36,19 @@ class ChunkIngestor:
         self.write_batches = 0
         self.files_completed = 0
 
-    def ingest_file(self, filename: str, chunk_paths: Iterable[str]) -> int:
-        """Ingest all chunks of one shard, then mark it processed and persist."""
+    def ingest_file(self, filename: str, chunk_paths: Iterable[str], *,
+                    uncompressed_bytes: int = 0) -> int:
+        """Ingest all chunks of one shard, then mark it processed (recording
+        its entry count and uncompressed size) and persist."""
+        chunk_paths = list(chunk_paths)
         written = 0
         for path in chunk_paths:
             written += self._ingest_chunk(path)
 
         with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
-            wb.put(processed_key(filename), b"1")
+            wb.put(processed_key(filename),
+                   processed_value(entries=written, uncompressed_bytes=uncompressed_bytes,
+                                   chunks=len(chunk_paths)))
         self.db.finalize_bulk()
 
         self.files_completed += 1

@@ -122,3 +122,26 @@ def test_reporter_tracks_phases(tmp_path):
     doc = read_progress(p)
     assert doc["ingesting"] is None and doc["phases"]["ingesting"] == 0
     assert doc["current"] == ["b.gz", "c.gz", "d.gz"]
+
+
+def test_corpus_totals_span_runs():
+    doc, now = _doc(files_total=14, files_skipped=11, files_done=3,
+                    entries_written=100, uncompressed_bytes=1024 ** 3,
+                    corpus={"files": 14, "entries": 1100, "bytes": 5 * 1024 ** 3, "unsized": 0})
+    s = summarize(doc, now)
+    assert s["corpus_text"] == "Whole corpus so far: 14/14 files · 1,100 entries · 5.0 GB parsed (uncompressed)"
+    doc["corpus"]["unsized"] = 4
+    assert summarize(doc, now)["corpus_text"].endswith("(excludes 4 files done before sizes were recorded)")
+    doc["corpus"] = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
+    assert summarize(doc, now)["corpus_text"] == ""
+    assert summarize({"state": "running"}, now)["corpus_text"] == ""     # old progress files
+
+
+def test_reporter_adds_prior_to_corpus_totals(tmp_path):
+    p = tmp_path / "progress.json"
+    r = ProgressReporter(p, stage="acquire", min_interval_s=0)
+    r.set_totals(files_total=5, files_skipped=2, prior={"files": 2, "entries": 10, "bytes": 1000, "unsized": 1})
+    r.file_started("x.gz")
+    r.file_done("x.gz", entries=5, chunks=1, uncompressed_bytes=500)
+    doc = read_progress(p)
+    assert doc["corpus"] == {"files": 3, "entries": 15, "bytes": 1500, "unsized": 1}

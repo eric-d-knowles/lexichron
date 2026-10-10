@@ -146,7 +146,8 @@ def process_files(
                             if result_msg.startswith("SUCCESS"):
                                 if progress:
                                     progress.file_ingesting(filename)
-                                ingestor.ingest_file(filename, chunk_paths)
+                                ingestor.ingest_file(filename, chunk_paths,
+                                                     uncompressed_bytes=uncompressed_bytes)
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
                                 logger.info("Processed: %s", filename)

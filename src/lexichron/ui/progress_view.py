@@ -148,11 +148,26 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
             current_text += f"  ({doc['ingesting']})"
     else:
         current_text = f"{len(current)} files in flight"
+    corpus = doc.get("corpus") or {}
+    corpus_text = ""
+    if corpus and (corpus.get("files") or 0) > 0:
+        all_files = int(doc.get("files_total", 0))
+        n = int(corpus.get("files", 0))
+        parts_c = [f"{n}/{all_files} files" if all_files else f"{n} files",
+                   f"{int(corpus.get('entries', 0)):,} entries",
+                   f"{fmt_bytes(float(corpus.get('bytes', 0)))} parsed (uncompressed)"]
+        text = "Whole corpus so far: " + " · ".join(parts_c)
+        unsized = int(corpus.get("unsized", 0))
+        if unsized:
+            text += f"  (excludes {unsized} files done before sizes were recorded)"
+        corpus_text = text
+
     return {
         "state": state, "state_label": state_label, "done": done, "total": total, "failed": failed,
         "percent": percent, "elapsed_s": elapsed, "rate": rate, "eta_s": eta,
         "stale": stale, "stopped": stopped, "headline": headline, "detail": " · ".join(detail),
-        "current": current, "current_text": current_text, "message": doc.get("message") or "",
+        "current": current, "current_text": current_text, "corpus_text": corpus_text,
+        "message": doc.get("message") or "",
         "log_path": doc.get("log_path"), "db_path": doc.get("db_path"),
     }
 

@@ -2,7 +2,7 @@
 import struct
 
 from ngramprep.ngram_acquire.batch_writer import ChunkIngestor
-from ngramprep.ngram_acquire.db.metadata import processed_key
+from ngramprep.ngram_acquire.db.metadata import processed_key, processed_stats
 from ngramprep.ngram_acquire.spool import ChunkWriter
 from ngramprep.ngram_acquire.worker import merge_packed_records
 
@@ -38,12 +38,19 @@ def test_ingest_file_merges_marks_and_persists(tmp_path):
     paths = _chunks(tmp_path, "f1", [("a", b"x"), ("b", b"y"), ("c", b"z")], per_chunk=2)
     assert len(paths) == 2
 
-    written = ing.ingest_file("f1.gz", paths)
+    written = ing.ingest_file("f1.gz", paths, uncompressed_bytes=12345)
 
     assert written == 3
     assert db.store[b"a"] == [("merge", b"x")]
     assert db.store[b"c"] == [("merge", b"z")]
-    assert db.store[processed_key("f1.gz")] == [("put", b"1")]
+    # the resume marker records what the file contributed
+    (op, marker), = db.store[processed_key("f1.gz")]
+    assert op == "put"
+    db.get = lambda k: marker if k == processed_key("f1.gz") else None
+    assert processed_stats(db, "f1.gz") == {"entries": 3, "bytes": 12345, "chunks": 2}
+    assert processed_stats(db, "other.gz") is None
+    db.get = lambda k: b"1"
+    assert processed_stats(db, "old.gz") == {}         # marker from an older version
     assert db.finalize_calls == 1          # once per shard, after all its chunks
     assert ing.get_stats() == (3, 2)       # entries, chunks
     assert not list(tmp_path.iterdir())    # chunks removed after ingest

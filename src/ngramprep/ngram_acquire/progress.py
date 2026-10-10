@@ -16,6 +16,8 @@ Document::
       "current": ["1-00003-of-00014.gz", "1-00004-of-00014.gz"],  # in flight
       "phases": {"queued": 40, "parsing": 36, "parsed": 3, "ingesting": 1},
       "ingesting": "1-00003-of-00014.gz" | null,
+      "corpus": {"files": 8309, "entries": 794..., "bytes": 7.9e12, "unsized": 0},
+                                            # whole database incl. earlier runs
       "message": "...",                     # last error, if any
       "db_path": "...", "log_path": "...",  # where the output and log are
       "slurm_job_id": "12345" | null,       # when run under Slurm
@@ -54,6 +56,7 @@ class ProgressReporter:
         self.spool_dir = Path(spool_dir) if spool_dir else None
         self._parsed: set = set()
         self._ingesting: Optional[str] = None
+        self._prior: Dict[str, int] = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
         self.doc: Dict[str, Any] = {
             "stage": stage, "state": "running",
             "started": _now(), "updated": _now(), "finished": None,
@@ -62,6 +65,7 @@ class ProgressReporter:
             "current": [], "message": "",
             "phases": {"queued": 0, "parsing": 0, "parsed": 0, "ingesting": 0},
             "ingesting": None,
+            "corpus": {"files": 0, "entries": 0, "bytes": 0, "unsized": 0},
             "db_path": str(db_path) if db_path else None,
             "log_path": str(log_path) if log_path else None,
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
@@ -72,9 +76,14 @@ class ProgressReporter:
             self._write(force=True)
 
     # -- updates --------------------------------------------------------------
-    def set_totals(self, files_total: int, files_skipped: int = 0) -> None:
+    def set_totals(self, files_total: int, files_skipped: int = 0,
+                   prior: Optional[Dict[str, int]] = None) -> None:
+        """``prior`` is what files already in the database contributed
+        (see :func:`coordinator.processed_totals`); the ``corpus`` totals in
+        the document are prior plus this run, so they span resumed runs."""
         self.doc["files_total"] = files_total
         self.doc["files_skipped"] = files_skipped
+        self._prior = dict(prior or {"files": 0, "entries": 0, "bytes": 0, "unsized": 0})
         self._write(force=True)
 
     def file_started(self, filename: str) -> None:
@@ -154,6 +163,12 @@ class ProgressReporter:
         self.doc["phases"] = {"queued": len(queued), "parsing": len(parsing),
                               "parsed": len(parsed), "ingesting": len(ingesting)}
         self.doc["ingesting"] = self._ingesting
+        self.doc["corpus"] = {
+            "files": self._prior["files"] + self.doc["files_done"],
+            "entries": self._prior["entries"] + self.doc["entries_written"],
+            "bytes": self._prior["bytes"] + self.doc["uncompressed_bytes"],
+            "unsized": self._prior["unsized"],
+        }
 
     def _write(self, force: bool = False) -> None:
         if not self.path:
