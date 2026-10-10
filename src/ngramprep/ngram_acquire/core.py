@@ -229,9 +229,11 @@ def download_and_ingest_to_rocksdb(
         )
         # Database is automatically flushed by context manager on exit
 
-        # Optional post-ingestion compaction (only for a complete run)
+        # Optional post-ingestion compaction (only for a complete run). On a
+        # large database this is the longest single step of the run.
         if compact_after_ingest and not failure:
-            _perform_compaction(db, db_path)
+            with progress.long_phase("compacting"):
+                _perform_compaction(db, db_path)
 
     # Report final statistics
     end_time = datetime.now()
@@ -260,7 +262,8 @@ def download_and_ingest_to_rocksdb(
 
     # Optional archiving: compress DB to archive directory
     if archive_path_stub is not None:
-        _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+        with progress.long_phase("archiving"):
+            _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
 
     progress.finish("done")
 

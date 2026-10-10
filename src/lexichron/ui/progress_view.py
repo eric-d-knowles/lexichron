@@ -97,7 +97,9 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         elapsed = (end - started).total_seconds() if started else elapsed
         rate = (entries / elapsed) if elapsed and elapsed > 0 else 0.0
         eta = None
-    state_label = "stopped" if stopped else ("running?" if stale else state)
+    long_phase = state == "running" and (doc.get("phase") or "ingesting") in ("compacting", "archiving")
+    state_label = ("stopped" if stopped else "running?" if stale
+                   else doc["phase"] if long_phase else state)
 
     where = doc.get("hostname") or ""
     job = doc.get("slurm_job_id")
@@ -107,10 +109,17 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     elif where:
         where_txt = f"on {where}"
 
+    phase = doc.get("phase") or "ingesting"
+    phase_started = _parse(doc.get("phase_started"))
     if stopped:
         status = "stopped (job no longer in the queue; resume by running again)"
     elif state == "running" and stale:
         status = "running? (no update for " + fmt_duration((now - updated).total_seconds()) + ")"
+    elif state == "running" and phase in ("compacting", "archiving"):
+        for_how_long = fmt_duration((now - phase_started).total_seconds()) if phase_started else "-"
+        what = "compacting the database" if phase == "compacting" else "archiving the database"
+        status = f"{what} (all files ingested; {for_how_long} so far)"
+        eta = None
     else:
         status = state
     parts = [status + (f" {where_txt}" if where_txt else "")]
@@ -165,7 +174,8 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     return {
         "state": state, "state_label": state_label, "done": done, "total": total, "failed": failed,
         "percent": percent, "elapsed_s": elapsed, "rate": rate, "eta_s": eta,
-        "stale": stale, "stopped": stopped, "headline": headline, "detail": " · ".join(detail),
+        "stale": stale, "stopped": stopped, "phase": phase,
+        "headline": headline, "detail": " · ".join(detail),
         "current": current, "current_text": current_text, "corpus_text": corpus_text,
         "message": doc.get("message") or "",
         "log_path": doc.get("log_path"), "db_path": doc.get("db_path"),

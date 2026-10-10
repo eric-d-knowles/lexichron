@@ -10,6 +10,8 @@ Document::
 
     {
       "stage": "acquire", "state": "running" | "done" | "failed",
+      "phase": "ingesting" | "compacting" | "archiving",   # what a running job is doing
+      "phase_started": "...",
       "started": "...", "updated": "...", "finished": "..." | null,
       "files_total": 14, "files_done": 3, "files_failed": 0, "files_skipped": 0,
       "entries_written": 4914496, "uncompressed_bytes": 4731..., "chunks": 25,
@@ -29,7 +31,9 @@ from __future__ import annotations
 import json
 import os
 import socket
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -59,6 +63,7 @@ class ProgressReporter:
         self._prior: Dict[str, int] = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
         self.doc: Dict[str, Any] = {
             "stage": stage, "state": "running",
+            "phase": "ingesting", "phase_started": _now(),
             "started": _now(), "updated": _now(), "finished": None,
             "files_total": 0, "files_done": 0, "files_failed": 0, "files_skipped": 0,
             "entries_written": 0, "uncompressed_bytes": 0, "chunks": 0,
@@ -118,6 +123,35 @@ class ProgressReporter:
         self.doc["files_failed"] += 1
         self.doc["message"] = message
         self._write(force=True)
+
+    def set_phase(self, phase: str) -> None:
+        self.doc["phase"] = phase
+        self.doc["phase_started"] = _now()
+        self._write(force=True)
+
+    @contextmanager
+    def long_phase(self, phase: str, heartbeat_s: float = 30.0):
+        """Mark a long single-call phase (compaction, archiving) and keep the
+        document's ``updated`` time fresh from a background thread while it
+        runs, so readers can tell "still compacting" from "died"."""
+        self.set_phase(phase)
+        stop = threading.Event()
+
+        def beat() -> None:
+            while not stop.wait(heartbeat_s):
+                try:
+                    self._write(force=True)
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=beat, name=f"progress-{phase}", daemon=True)
+        t.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            t.join(timeout=5)
+            self.set_phase("ingesting" if self.doc["state"] == "running" else self.doc["phase"])
 
     def finish(self, state: str = "done", message: str = "") -> None:
         self.doc["state"] = state

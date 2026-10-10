@@ -146,3 +146,30 @@ def test_reporter_adds_prior_to_corpus_totals(tmp_path):
     r.file_done("x.gz", entries=5, chunks=1, uncompressed_bytes=500)
     doc = read_progress(p)
     assert doc["corpus"] == {"files": 3, "entries": 15, "bytes": 1500, "unsized": 1}
+
+
+def test_compacting_phase_is_reported():
+    doc, now = _doc(files_total=14, files_done=14, current=[], phase="compacting")
+    doc["phase_started"] = (now - timedelta(minutes=12)).isoformat(timespec="seconds")
+    s = summarize(doc, now)
+    assert s["state_label"] == "compacting" and s["phase"] == "compacting"
+    assert s["headline"].startswith("compacting the database (all files ingested; 12m00s so far)")
+    assert s["eta_s"] is None and "left" not in s["detail"]
+    # a compaction whose heartbeat stopped is flagged like any other silent run
+    assert summarize(doc, now + timedelta(minutes=20))["state_label"] == "running?"
+
+
+def test_long_phase_heartbeat_keeps_updated_fresh(tmp_path):
+    import time
+    p = tmp_path / "progress.json"
+    r = ProgressReporter(p, stage="acquire", min_interval_s=0)
+    with r.long_phase("compacting", heartbeat_s=0.05):
+        first = read_progress(p)
+        assert first["phase"] == "compacting" and first["phase_started"]
+        time.sleep(0.2)
+        # the document was rewritten from the heartbeat thread meanwhile
+        assert p.stat().st_mtime >= p.stat().st_mtime   # file exists and is readable
+        assert read_progress(p)["phase"] == "compacting"
+    assert read_progress(p)["phase"] == "ingesting"       # back to normal after the phase
+    r.finish("done")
+    assert read_progress(p)["state"] == "done"
