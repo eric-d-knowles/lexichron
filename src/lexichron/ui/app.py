@@ -340,6 +340,7 @@ class LexichronApp(App):
         runs.cursor_type = "row"
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
+        self.queued_jobs: Optional[set] = None
         self._refresh_preview()
         self.refresh_jobs()
         self.set_interval(5, self.refresh_jobs)
@@ -532,15 +533,37 @@ class LexichronApp(App):
     def refresh_jobs(self) -> None:
         table = self.query_one("#jobs", DataTable)
         table.clear()
+        # Job ids of queued/running jobs, or None when Slurm cannot be asked.
+        self.queued_jobs: Optional[set] = None
         if self.bridge and self.bridge.available():
             try:
-                for row in self.bridge.squeue(user=getpass.getuser()):
+                rows = self.bridge.squeue(user=getpass.getuser())
+                ours = self._run_job_ids()
+                rows.sort(key=lambda r: 0 if r["job_id"] in ours else 1)   # lexichron jobs first
+                self.queued_jobs = {r["job_id"] for r in rows}
+                for row in rows:
                     table.add_row(row["job_id"], row["name"], row["state"], row["elapsed"],
                                   row["limit"], row["nodes"], row["reason"])
             except (BridgeUnavailable, TimeoutError) as exc:
                 table.add_row("-", str(exc)[:40], "", "", "", "", "")
         self._refresh_runs()
         self._refresh_run_panel()
+
+    def _run_job_ids(self) -> set:
+        ids = set()
+        for d in self._run_dirs():
+            p = read_progress(d / "progress.json")
+            if p and p.get("slurm_job_id"):
+                ids.add(str(p["slurm_job_id"]))
+        return ids
+
+    def _summarize(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """summarize() plus what Slurm knows: a 'running' run whose job has
+        left the queue is reported as stopped."""
+        job = doc.get("slurm_job_id")
+        gone = (self.queued_jobs is not None and job is not None
+                and str(job) not in self.queued_jobs)
+        return summarize(doc, job_gone=gone)
 
     def _run_dirs(self) -> List[Path]:
         proj = self.project_path
@@ -560,11 +583,11 @@ class LexichronApp(App):
             p = read_progress(d / "progress.json")
             if not p:
                 continue
-            info = summarize(p)
+            info = self._summarize(p)
             files = f"{info['done']}/{info['total']}" if info["total"] else str(info["done"])
             if info["failed"]:
                 files += f" ({info['failed']} failed)"
-            runs.add_row(d.name, info["state"] + ("?" if info["stale"] else ""), files,
+            runs.add_row(d.name, info["state_label"], files,
                          f"{int(p.get('entries_written', 0)):,}", f"{fmt_count(info['rate'])}/s",
                          fmt_duration(info["elapsed_s"]), p.get("slurm_job_id") or "-", key=str(d))
         if dirs and self.selected_run:
@@ -597,7 +620,7 @@ class LexichronApp(App):
         if not doc:
             title.update(f"{self.selected_run.name}: progress file unreadable")
             return
-        info = summarize(doc)
+        info = self._summarize(doc)
         title.update(f"Run {self.selected_run.name}" + (f"  ->  {info['db_path']}" if info["db_path"] else ""))
         if info["total"]:
             bar.update(total=info["total"], progress=info["done"] + info["failed"])
@@ -605,9 +628,7 @@ class LexichronApp(App):
             bar.update(total=None, progress=0)
         self.query_one("#run-headline", Static).update(info["headline"])
         self.query_one("#run-detail", Static).update(info["detail"])
-        cur = info["current"]
-        self.query_one("#run-current", Static).update(
-            ("Working on: " + ", ".join(cur)) if cur else ("" if info["state"] == "running" else " "))
+        self.query_one("#run-current", Static).update(info["current_text"] or " ")
         self.query_one("#run-message", Static).update(info["message"])
         # Log tail: only rewrite when it changes, so the pane does not flicker.
         lines = tail_lines(info["log_path"], 15)

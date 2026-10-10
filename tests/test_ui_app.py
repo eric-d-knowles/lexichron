@@ -196,3 +196,52 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
     asyncio.run(first())
     assert proj.exists()
     asyncio.run(second())
+
+
+def test_run_whose_job_left_the_queue_is_stopped(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  db_path_stub: {tmp_path}\n"
+                    "acquire:\n  ngram_size: 1\n")
+    now = datetime.now(timezone.utc)
+
+    def run(name, job, minutes_ago):
+        d = tmp_path / ".lexichron" / "runs" / name
+        d.mkdir(parents=True)
+        d.joinpath("progress.json").write_text(json.dumps(dict(
+            stage="acquire", state="running",
+            started=(now - timedelta(minutes=minutes_ago + 5)).isoformat(timespec="seconds"),
+            updated=(now - timedelta(minutes=minutes_ago)).isoformat(timespec="seconds"), finished=None,
+            files_total=10, files_done=3, files_failed=0, files_skipped=0, entries_written=100,
+            uncompressed_bytes=1, chunks=1, current=[], message="", db_path=None, log_path=None,
+            slurm_job_id=job, hostname="n1")))
+
+    run("20261010_090000_acquire", "200", 0)      # alive, in the queue
+    run("20261010_010000_acquire", "100", 60)     # job gone, stale for an hour
+
+    class FakeBridge:
+        def available(self):
+            return True
+
+        def squeue(self, user=None):
+            return [dict(job_id="999", name="other", state="RUNNING", elapsed="1:00", limit="2:00",
+                         nodes="1", reason="n5"),
+                    dict(job_id="200", name="lexichron", state="RUNNING", elapsed="0:05", limit="1:00",
+                         nodes="1", reason="n1")]
+
+    async def scenario():
+        from textual.widgets import DataTable
+        app = LexichronApp(proj)
+        app.bridge = FakeBridge()
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            runs = app.query_one("#runs", DataTable)
+            states = [str(runs.get_row_at(i)[1]) for i in range(runs.row_count)]
+            assert states == ["running", "stopped"]
+            # lexichron's own job is listed first
+            jobs = app.query_one("#jobs", DataTable)
+            assert str(jobs.get_row_at(0)[0]) == "200"
+        _assert_clean(app)
+
+    asyncio.run(scenario())

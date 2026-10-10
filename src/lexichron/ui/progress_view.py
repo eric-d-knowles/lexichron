@@ -54,14 +54,18 @@ def fmt_count(n: float) -> str:
     return f"{n:.0f}"
 
 
-def summarize(doc: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, Any]:
+def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
+              job_gone: bool = False) -> Dict[str, Any]:
     """Derived figures for one progress document.
 
     Returns a dict with ``done``, ``total`` (files, excluding skipped),
     ``percent`` (None until the total is known), ``elapsed_s``, ``rate``
     (entries per second), ``eta_s`` (None unless running with progress),
-    ``stale`` (True when a running job has not written for a while, e.g. it
-    was killed) and ready-made ``headline`` / ``detail`` strings.
+    ``stale`` (True when a running job has not written for a while),
+    ``state_label`` (``running``, ``running?`` when stale, ``stopped`` when
+    the caller knows the job has left the queue — ``job_gone`` — or the
+    recorded final state) and ready-made ``headline`` / ``detail`` /
+    ``current_text`` strings.
     """
     now = now or datetime.now(timezone.utc)
     state = doc.get("state", "running")
@@ -86,6 +90,14 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, 
     stale = False
     if state == "running" and updated:
         stale = (now - updated).total_seconds() > 300
+    stopped = state == "running" and job_gone
+    if stopped:
+        # The job is gone, so the clock stopped at its last write.
+        end = updated or now
+        elapsed = (end - started).total_seconds() if started else elapsed
+        rate = (entries / elapsed) if elapsed and elapsed > 0 else 0.0
+        eta = None
+    state_label = "stopped" if stopped else ("running?" if stale else state)
 
     where = doc.get("hostname") or ""
     job = doc.get("slurm_job_id")
@@ -95,7 +107,9 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, 
     elif where:
         where_txt = f"on {where}"
 
-    if state == "running" and stale:
+    if stopped:
+        status = "stopped (job no longer in the queue; resume by running again)"
+    elif state == "running" and stale:
         status = "running? (no update for " + fmt_duration((now - updated).total_seconds()) + ")"
     else:
         status = state
@@ -118,11 +132,18 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None) -> Dict[str, 
     ]
     if eta is not None:
         detail.append(f"about {fmt_duration(eta)} left")
+    current = list(doc.get("current") or [])
+    if not current:
+        current_text = ""
+    elif len(current) <= 4:
+        current_text = "Working on: " + ", ".join(current)
+    else:
+        current_text = f"Working on {len(current)} files: {current[0]} … {current[-1]}"
     return {
-        "state": state, "done": done, "total": total, "failed": failed,
+        "state": state, "state_label": state_label, "done": done, "total": total, "failed": failed,
         "percent": percent, "elapsed_s": elapsed, "rate": rate, "eta_s": eta,
-        "stale": stale, "headline": headline, "detail": " · ".join(detail),
-        "current": list(doc.get("current") or []), "message": doc.get("message") or "",
+        "stale": stale, "stopped": stopped, "headline": headline, "detail": " · ".join(detail),
+        "current": current, "current_text": current_text, "message": doc.get("message") or "",
         "log_path": doc.get("log_path"), "db_path": doc.get("db_path"),
     }
 

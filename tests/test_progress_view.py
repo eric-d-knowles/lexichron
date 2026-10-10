@@ -72,3 +72,27 @@ def test_tail_lines(tmp_path):
     f.write_text("".join(f"line {i}\n" for i in range(50)))
     assert tail_lines(f, 3) == ["line 47", "line 48", "line 49"]
     assert tail_lines(tmp_path / "missing") == [] and tail_lines(None) == []
+
+
+def test_summarize_stopped_when_job_left_queue():
+    doc, now = _doc()
+    s = summarize(doc, now + timedelta(hours=3), job_gone=True)
+    assert s["stopped"] and s["state_label"] == "stopped" and s["eta_s"] is None
+    assert s["headline"].startswith("stopped (job no longer in the queue")
+    # the clock stopped at the last write, not at 'now'
+    assert s["elapsed_s"] == 600
+    # a finished run is never 'stopped', whatever the queue says
+    doc["state"] = "done"; doc["finished"] = doc["updated"]
+    assert summarize(doc, now, job_gone=True)["state_label"] == "done"
+
+
+def test_state_label_and_current_text():
+    doc, now = _doc()
+    assert summarize(doc, now)["state_label"] == "running"
+    assert summarize(doc, now + timedelta(hours=1))["state_label"] == "running?"
+    assert summarize(doc, now)["current_text"] == "Working on: a.gz"
+    doc["current"] = [f"5-{i:05d}-of-11145.gz" for i in range(80)]
+    text = summarize(doc, now)["current_text"]
+    assert text == "Working on 80 files: 5-00000-of-11145.gz … 5-00079-of-11145.gz"
+    doc["current"] = []
+    assert summarize(doc, now)["current_text"] == ""
