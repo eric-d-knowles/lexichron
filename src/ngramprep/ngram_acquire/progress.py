@@ -14,13 +14,17 @@ Document::
       "files_total": 14, "files_done": 3, "files_failed": 0, "files_skipped": 0,
       "entries_written": 4914496, "uncompressed_bytes": 4731..., "chunks": 25,
       "current": ["1-00003-of-00014.gz", "1-00004-of-00014.gz"],
-      "message": "..."                      # last error, if any
+      "message": "...",                     # last error, if any
+      "db_path": "...", "log_path": "...",  # where the output and log are
+      "slurm_job_id": "12345" | null,       # when run under Slurm
+      "hostname": "..."
     }
 """
 from __future__ import annotations
 
 import json
 import os
+import socket
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,7 +39,9 @@ def _now() -> str:
 
 class ProgressReporter:
     def __init__(self, path: Optional[str | os.PathLike], *, stage: str,
-                 min_interval_s: float = 2.0) -> None:
+                 min_interval_s: float = 2.0,
+                 db_path: Optional[str | os.PathLike] = None,
+                 log_path: Optional[str | os.PathLike] = None) -> None:
         self.path = Path(path) if path else None
         self.min_interval_s = min_interval_s
         self._last_write = 0.0
@@ -45,6 +51,10 @@ class ProgressReporter:
             "files_total": 0, "files_done": 0, "files_failed": 0, "files_skipped": 0,
             "entries_written": 0, "uncompressed_bytes": 0, "chunks": 0,
             "current": [], "message": "",
+            "db_path": str(db_path) if db_path else None,
+            "log_path": str(log_path) if log_path else None,
+            "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+            "hostname": socket.gethostname(),
         }
         if self.path:
             self.path.parent.mkdir(parents=True, exist_ok=True)

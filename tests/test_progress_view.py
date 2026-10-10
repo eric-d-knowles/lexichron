@@ -1,0 +1,74 @@
+from datetime import datetime, timedelta, timezone
+
+from lexichron.ui.progress_view import fmt_bytes, fmt_count, fmt_duration, summarize, tail_lines
+from ngramprep.ngram_acquire.progress import ProgressReporter, read_progress
+
+
+def _doc(**over):
+    now = datetime(2026, 10, 9, 22, 40, tzinfo=timezone.utc)
+    d = dict(stage="acquire", state="running",
+             started=(now - timedelta(minutes=10)).isoformat(timespec="seconds"),
+             updated=now.isoformat(timespec="seconds"), finished=None,
+             files_total=14, files_done=4, files_failed=0, files_skipped=0,
+             entries_written=6_000_000, uncompressed_bytes=3 * 1024 ** 3, chunks=10,
+             current=["a.gz"], message="", db_path="/x/1grams.db", log_path=None,
+             slurm_job_id="123", hostname="cs001")
+    d.update(over)
+    return d, now
+
+
+def test_formatters():
+    assert fmt_duration(5) == "5s" and fmt_duration(65) == "1m05s" and fmt_duration(3700) == "1h01m"
+    assert fmt_duration(None) == "-"
+    assert fmt_bytes(512) == "512 B" and fmt_bytes(3 * 1024 ** 3) == "3.0 GB"
+    assert fmt_count(950) == "950" and fmt_count(48_800) == "48.8k" and fmt_count(2_500_000) == "2.5M"
+
+
+def test_summarize_running_with_eta():
+    doc, now = _doc()
+    s = summarize(doc, now)
+    assert s["done"] == 4 and s["total"] == 14 and round(s["percent"]) == 29
+    assert s["elapsed_s"] == 600 and s["rate"] == 10_000
+    # 10 files left at 150 s each
+    assert s["eta_s"] == 1500 and not s["stale"]
+    assert s["headline"] == "running job 123 on cs001 · 4/14 files (29%)"
+    assert "6,000,000 entries" in s["detail"] and "about 25m00s left" in s["detail"]
+    assert s["current"] == ["a.gz"]
+
+
+def test_summarize_done_uses_finished_time_and_skipped():
+    doc, now = _doc(state="done", files_total=14, files_skipped=11, files_done=3)
+    doc["finished"] = (now - timedelta(minutes=5)).isoformat(timespec="seconds")
+    s = summarize(doc, now)
+    assert s["total"] == 3 and s["percent"] == 100 and s["elapsed_s"] == 300
+    assert s["eta_s"] is None and "11 already done" in s["headline"]
+    assert s["headline"].startswith("done job 123")
+
+
+def test_summarize_flags_stale_running_job():
+    doc, now = _doc()
+    s = summarize(doc, now + timedelta(minutes=20))
+    assert s["stale"] and s["headline"].startswith("running? (no update for 20m00s)")
+
+
+def test_summarize_before_totals_known():
+    doc, now = _doc(files_total=0, files_done=0, entries_written=0, slurm_job_id=None)
+    s = summarize(doc, now)
+    assert s["percent"] is None and s["eta_s"] is None
+    assert s["headline"] == "running on cs001 · 0 files"
+
+
+def test_reporter_records_where_it_runs(tmp_path, monkeypatch):
+    monkeypatch.setenv("SLURM_JOB_ID", "999")
+    p = tmp_path / "progress.json"
+    ProgressReporter(p, stage="acquire", db_path="/db/1grams.db", log_path=tmp_path / "x.log")
+    doc = read_progress(p)
+    assert doc["slurm_job_id"] == "999" and doc["db_path"] == "/db/1grams.db"
+    assert doc["log_path"].endswith("x.log") and doc["hostname"]
+
+
+def test_tail_lines(tmp_path):
+    f = tmp_path / "log"
+    f.write_text("".join(f"line {i}\n" for i in range(50)))
+    assert tail_lines(f, 3) == ["line 47", "line 48", "line 49"]
+    assert tail_lines(tmp_path / "missing") == [] and tail_lines(None) == []

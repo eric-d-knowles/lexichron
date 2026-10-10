@@ -335,9 +335,13 @@ Tabs:
 - **Submit** — Slurm account, partition, CPUs, memory and time. *Write batch
   script* writes `lexichron.acquire.sbatch` next to the settings file;
   *Submit* also submits it and shows the job id.
-- **Jobs** — your queued and running jobs, and the progress of the latest runs
-  (files done, entries written) read from `.lexichron/runs/*/progress.json`,
-  which every run writes.
+- **Progress** — the latest runs, newest first, whether started with *Run
+  here* or by a Slurm job: a progress bar, files done, entries written, rate,
+  elapsed time and time left, the files being worked on, and the tail of the
+  run's log, refreshed every few seconds. (Every run writes
+  `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
+  be closed and reopened while a job runs.) Your queued and running Slurm
+  jobs are listed underneath, with a *Cancel* button.
 
 Run straight from the image instead (`apptainer run --app ui lexichron-0.1.0.sif`)
 and everything works except *Submit* and the job table, since Slurm commands

@@ -13,7 +13,9 @@ Layout: a tab per concern.
   Run      — run the stage here (login node test, or inside an allocation)
   Submit   — Slurm resources; writes the batch script and submits it through
              the host bridge when one is running
-  Jobs     — squeue for your jobs, plus progress.json of the latest runs
+  Progress — the latest runs (from each run's progress.json) with a progress
+             bar, rate, time left and the tail of the run's log; plus squeue
+             for your Slurm jobs
 """
 from __future__ import annotations
 
@@ -29,14 +31,15 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
-    Button, Collapsible, DataTable, Footer, Header, Input, Label, RichLog, Select,
-    Static, Switch, TabbedContent, TabPane,
+    Button, Collapsible, DataTable, Footer, Header, Input, Label, ProgressBar,
+    RichLog, Select, Static, Switch, TabbedContent, TabPane,
 )
 
 from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
+from lexichron.ui.progress_view import fmt_count, fmt_duration, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
 from ngramprep.ngram_acquire.progress import read_progress
@@ -130,7 +133,17 @@ class LexichronApp(App):
     #status { color: $warning; padding: 0 1; height: auto; }
     .actions { height: auto; padding: 1 1 0 1; }
     .actions Button { margin-right: 2; }
-    #runlog, #joblog { height: 1fr; }
+    #runlog { height: 1fr; }
+    #jobs { height: auto; max-height: 8; }
+    #runs { height: auto; max-height: 8; }
+    #run-panel { height: auto; padding: 0 1; border-top: solid $secondary; }
+    #run-title { text-style: bold; }
+    #run-bar { width: 1fr; margin: 0 0 1 0; }
+    #run-bar Bar { width: 1fr; }
+    #run-headline, #run-detail, #run-current { height: auto; }
+    #run-message { color: $warning; height: auto; }
+    #run-log { height: 12; border: round $secondary; scrollbar-size-vertical: 1; }
+    .muted { color: $text-muted; }
     """
     BINDINGS = [("ctrl+s", "save", "Save"), ("f1", "toggle_help", "Help"), ("ctrl+q", "quit", "Quit")]
 
@@ -206,13 +219,23 @@ class LexichronApp(App):
                         yield Button("Write batch script", id="write-sbatch")
                         yield Button("Submit to Slurm", id="submit", variant="primary")
                     yield Static("", id="submit-status")
-            with TabPane("Jobs", id="tab-jobs"):
-                with Horizontal(classes="actions"):
-                    yield Button("Refresh", id="refresh-jobs")
-                    yield Button("Cancel selected", id="cancel-job", variant="error")
-                yield DataTable(id="jobs")
-                yield Static("Latest runs", classes="section")
-                yield DataTable(id="runs")
+            with TabPane("Progress", id="tab-jobs"):
+                with VerticalScroll():
+                    yield Static("Runs (select one to see its progress)", classes="section")
+                    yield DataTable(id="runs")
+                    with Vertical(id="run-panel"):
+                        yield Static("", id="run-title")
+                        yield ProgressBar(total=None, show_eta=False, id="run-bar")
+                        yield Static("", id="run-headline")
+                        yield Static("", id="run-detail", classes="muted")
+                        yield Static("", id="run-current", classes="muted")
+                        yield Static("", id="run-message")
+                        yield RichLog(id="run-log", wrap=False, highlight=False, markup=False)
+                    yield Static("Slurm jobs", classes="section")
+                    yield DataTable(id="jobs")
+                    with Horizontal(classes="actions"):
+                        yield Button("Refresh", id="refresh-jobs")
+                        yield Button("Cancel selected job", id="cancel-job", variant="error")
         yield Footer()
 
     def _field_widgets(self, section: str, f: Field):
@@ -264,10 +287,13 @@ class LexichronApp(App):
         jobs.add_columns("Job", "Name", "State", "Elapsed", "Limit", "Nodes", "Reason")
         jobs.cursor_type = "row"
         runs = self.query_one("#runs", DataTable)
-        runs.add_columns("Run", "State", "Files", "Entries", "Updated", "Message")
+        runs.add_columns("Run", "State", "Files", "Entries", "Rate", "Elapsed", "Job")
+        runs.cursor_type = "row"
+        self.selected_run: Optional[Path] = None
+        self._log_shown: Optional[tuple] = None
         self._refresh_preview()
         self.refresh_jobs()
-        self.set_interval(10, self.refresh_jobs)
+        self.set_interval(5, self.refresh_jobs)
         if not self.bridge or not self.bridge.available():
             self.query_one("#submit-status", Static).update(
                 "No host helper: 'Submit' and the job table need the UI started with the "
@@ -460,20 +486,83 @@ class LexichronApp(App):
                                   row["limit"], row["nodes"], row["reason"])
             except (BridgeUnavailable, TimeoutError) as exc:
                 table.add_row("-", str(exc)[:40], "", "", "", "", "")
-        runs = self.query_one("#runs", DataTable)
-        runs.clear()
+        self._refresh_runs()
+        self._refresh_run_panel()
+
+    def _run_dirs(self) -> List[Path]:
         proj = self.project_path
         run_root = proj.parent / ".lexichron" / "runs" if proj else None
-        if run_root and run_root.is_dir():
-            for d in sorted(run_root.iterdir(), reverse=True)[:10]:
-                p = read_progress(d / "progress.json")
-                if not p:
-                    continue
-                files = f"{p.get('files_done', 0)}/{p.get('files_total', 0)}"
-                if p.get("files_failed"):
-                    files += f" ({p['files_failed']} failed)"
-                runs.add_row(d.name, p.get("state", ""), files, f"{p.get('entries_written', 0):,}",
-                             (p.get("updated") or "")[11:19], (p.get("message") or "")[:50])
+        if not run_root or not run_root.is_dir():
+            return []
+        return sorted((d for d in run_root.iterdir() if (d / "progress.json").exists()), reverse=True)[:20]
+
+    def _refresh_runs(self) -> None:
+        runs = self.query_one("#runs", DataTable)
+        keep = runs.cursor_row
+        runs.clear()
+        dirs = self._run_dirs()
+        if self.selected_run not in dirs:
+            self.selected_run = dirs[0] if dirs else None
+        for d in dirs:
+            p = read_progress(d / "progress.json")
+            if not p:
+                continue
+            info = summarize(p)
+            files = f"{info['done']}/{info['total']}" if info["total"] else str(info["done"])
+            if info["failed"]:
+                files += f" ({info['failed']} failed)"
+            runs.add_row(d.name, info["state"] + ("?" if info["stale"] else ""), files,
+                         f"{int(p.get('entries_written', 0)):,}", f"{fmt_count(info['rate'])}/s",
+                         fmt_duration(info["elapsed_s"]), p.get("slurm_job_id") or "-", key=str(d))
+        if dirs and self.selected_run:
+            try:
+                runs.move_cursor(row=dirs.index(self.selected_run), animate=False)
+            except ValueError:
+                pass
+
+    @on(DataTable.RowHighlighted, "#runs")
+    def _run_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        if event.row_key is not None and event.row_key.value:
+            self.selected_run = Path(event.row_key.value)
+            self._refresh_run_panel()
+
+    def _refresh_run_panel(self) -> None:
+        title = self.query_one("#run-title", Static)
+        bar = self.query_one("#run-bar", ProgressBar)
+        log = self.query_one("#run-log", RichLog)
+        if not self.selected_run:
+            title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
+            for wid in ("#run-headline", "#run-detail", "#run-current", "#run-message"):
+                self.query_one(wid, Static).update("")
+            bar.update(total=None, progress=0)
+            return
+        doc = read_progress(self.selected_run / "progress.json")
+        if not doc:
+            title.update(f"{self.selected_run.name}: progress file unreadable")
+            return
+        info = summarize(doc)
+        title.update(f"Run {self.selected_run.name}" + (f"  ->  {info['db_path']}" if info["db_path"] else ""))
+        if info["total"]:
+            bar.update(total=info["total"], progress=info["done"] + info["failed"])
+        else:
+            bar.update(total=None, progress=0)
+        self.query_one("#run-headline", Static).update(info["headline"])
+        self.query_one("#run-detail", Static).update(info["detail"])
+        cur = info["current"]
+        self.query_one("#run-current", Static).update(
+            ("Working on: " + ", ".join(cur)) if cur else ("" if info["state"] == "running" else " "))
+        self.query_one("#run-message", Static).update(info["message"])
+        # Log tail: only rewrite when it changes, so the pane does not flicker.
+        lines = tail_lines(info["log_path"], 15)
+        key = (self.selected_run, tuple(lines))
+        if key != self._log_shown:
+            log.clear()
+            if lines:
+                for line in lines:
+                    log.write(line)
+            else:
+                log.write("(no log yet)" if info["log_path"] is None else f"(cannot read {info['log_path']})")
+            self._log_shown = key
 
 
 def main(argv: Optional[List[str]] = None) -> int:

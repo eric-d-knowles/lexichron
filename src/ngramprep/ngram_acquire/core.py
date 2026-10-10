@@ -128,6 +128,7 @@ def download_and_ingest_to_rocksdb(
     # Log to a file next to the database unless the caller configured logging.
     # INFO (per-file progress, batch writes) goes to the file; the console
     # shows the pipeline's own banner and progress bar, plus warnings.
+    log_file = None
     if not logging.getLogger().hasHandlers():
         log_dir = Path(os.path.dirname(db_path)) / "logs"
         log_file = setup_logger(
@@ -136,7 +137,8 @@ def download_and_ingest_to_rocksdb(
         )
         print(f"Log file: {log_file}")
     logger.info("Database path: %s", db_path)
-    progress = ProgressReporter(progress_path, stage="acquire")
+    progress = ProgressReporter(progress_path, stage="acquire",
+                                db_path=db_path, log_path=log_file)
 
     # Handle existing database
     if overwrite_db and os.path.exists(db_path):

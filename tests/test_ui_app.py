@@ -104,3 +104,55 @@ def test_missing_required_reported_with_labels(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_progress_tab_shows_selected_run(tmp_path):
+    import json
+    from datetime import datetime, timedelta, timezone
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  db_path_stub: {tmp_path}\n"
+                    "acquire:\n  ngram_size: 1\n")
+    now = datetime.now(timezone.utc)
+    log = tmp_path / "run.log"
+    log.write_text("first\nsecond\nthird\n")
+    run = tmp_path / ".lexichron" / "runs" / "20261009_120000_acquire"
+    run.mkdir(parents=True)
+    run.joinpath("progress.json").write_text(json.dumps(dict(
+        stage="acquire", state="running", started=(now - timedelta(minutes=5)).isoformat(timespec="seconds"),
+        updated=now.isoformat(timespec="seconds"), finished=None, files_total=10, files_done=2,
+        files_failed=0, files_skipped=0, entries_written=1000, uncompressed_bytes=10, chunks=2,
+        current=["f.gz"], message="", db_path="/db", log_path=str(log), slurm_job_id="42", hostname="n1")))
+    older = tmp_path / ".lexichron" / "runs" / "20261009_110000_acquire"
+    older.mkdir()
+    older.joinpath("progress.json").write_text(json.dumps(dict(
+        stage="acquire", state="done", started=(now - timedelta(hours=2)).isoformat(timespec="seconds"),
+        updated=(now - timedelta(hours=1)).isoformat(timespec="seconds"),
+        finished=(now - timedelta(hours=1)).isoformat(timespec="seconds"), files_total=1, files_done=1,
+        files_failed=0, files_skipped=0, entries_written=5, uncompressed_bytes=1, chunks=1,
+        current=[], message="", db_path=None, log_path=None, slurm_job_id=None, hostname="n1")))
+
+    async def scenario():
+        from textual.widgets import DataTable, ProgressBar
+        app = LexichronApp(proj)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            runs = app.query_one("#runs", DataTable)
+            assert runs.row_count == 2 and app.selected_run == run       # newest first, selected
+            assert "running job 42 on n1 · 2/10 files (20%)" in str(app.query_one("#run-headline").content)
+            bar = app.query_one("#run-bar", ProgressBar)
+            assert bar.total == 10 and bar.progress == 2
+            assert "Working on: f.gz" in str(app.query_one("#run-current").content)
+            assert app._log_shown[1] == ("first", "second", "third")
+            # the log pane follows the file
+            log.write_text("first\nsecond\nthird\nfourth\n")
+            app.refresh_jobs()
+            await pilot.pause()
+            assert app._log_shown[1][-1] == "fourth"
+            # selecting the older run switches the panel
+            runs.move_cursor(row=1)
+            await pilot.pause()
+            assert app.selected_run == older
+            assert str(app.query_one("#run-headline").content).startswith("done on n1 · 1/1 files (100%)")
+        _assert_clean(app)
+
+    asyncio.run(scenario())
