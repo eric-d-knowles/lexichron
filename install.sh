@@ -68,7 +68,10 @@ say "Image: $SIF (lexichron $ACTUAL)"
 # ---------------------------------------------------------------------------
 # 4. Host commands
 # ---------------------------------------------------------------------------
-apptainer run --app install "$SIF" --bin "$BIN_DIR" --ref "ghcr.io/$REPO:$ACTUAL" \
+# Re-pulls use the tag that was pulled: a release image reports its version,
+# which is also its tag; a manual build reports 0.2.0+dev.<sha>, which is not.
+case "$ACTUAL" in *+*) PULL_TAG="$VERSION" ;; *) PULL_TAG="$ACTUAL" ;; esac
+apptainer run --app install "$SIF" --bin "$BIN_DIR" --ref "ghcr.io/$REPO:$PULL_TAG" \
     --tmpdir "$APPTAINER_TMPDIR" --cachedir "$APPTAINER_CACHEDIR" >/dev/null
 
 # ---------------------------------------------------------------------------

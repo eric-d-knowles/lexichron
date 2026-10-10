@@ -78,6 +78,11 @@ jobs:
           set -eu
           # --notest: the %test section runs as its own step below so that a
           # failure there is reported with annotations.
+          # Manual builds are stamped with their tag and commit (see
+          # lexichron/__init__.py); release builds report the plain version.
+          if [[ "${{ steps.meta.outputs.publish_latest }}" != "true" ]]; then
+            echo "BUILD = \"${{ steps.meta.outputs.version }}.${GITHUB_SHA::7}\"" > src/lexichron/_build.py
+          fi
           apptainer build --fakeroot --notest lexichron.sif container/lexichron.def 2>&1 | tee build.log
           test "${PIPESTATUS[0]}" -eq 0 || { grep -iE "error|failed" build.log | tail -20 | sed 's/^/::error::/'; exit 1; }
           ls -lh lexichron.sif
