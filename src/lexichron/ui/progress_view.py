@@ -200,5 +200,5 @@ def tail_lines(path: Optional[str | os.PathLike], n: int = 20) -> List[str]:
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             return [line.rstrip("\n") for line in deque(fh, maxlen=n)]
-    except OSError:
+    except (OSError, ValueError):
         return []
