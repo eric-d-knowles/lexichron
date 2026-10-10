@@ -62,13 +62,21 @@ class ChunkWriter:
             return
         idx = len(self.part_paths)
         path = self.spool_dir / f"{self.file_tag}.{idx:05d}.part"
+        pack = _HDR.pack
         with open(path, "wb") as fh:
             fh.write(MAGIC)
+            buf: List[bytes] = []
+            n = 0
             for key, value in self.pending.items():
                 kb = key.encode("utf-8")
-                fh.write(_HDR.pack(len(kb), len(value)))
-                fh.write(kb)
-                fh.write(value)
+                buf += (pack(len(kb), len(value)), kb, value)
+                n += 1
+                if n >= 8192:                     # one write per few thousand records
+                    fh.write(b"".join(buf))
+                    buf = []
+                    n = 0
+            if buf:
+                fh.write(b"".join(buf))
         self.part_paths.append(path)
         self.entries_total += len(self.pending)
         self.pending = {}
