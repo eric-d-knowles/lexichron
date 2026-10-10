@@ -1,8 +1,8 @@
 """``lexichron ui``: a terminal interface for configuring, running and
 submitting pipeline stages from a settings file.
 
-Terminology: the *settings file* (default ``lexichron.yaml`` in the corpus
-directory) holds the corpus, the stage settings and the Slurm resources; it is
+Terminology: the *settings file* (default ``lexichron.yaml`` in the corpus's
+own directory, ``<stub>/<release>/<language>/<n>gram_files/``) holds the corpus, the stage settings and the Slurm resources; it is
 what ``lexichron <stage> file.yaml`` runs from. It is not a "project
 environment" (what ``new-project`` creates), which the UI does not need.
 
@@ -42,6 +42,7 @@ from lexichron.config import ConfigError, build_call, load_project
 from lexichron.ui.progress_view import fmt_count, fmt_duration, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
+from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.progress import read_progress
 
 __all__ = ["LexichronApp", "main", "SETTINGS_FILENAME"]
@@ -191,33 +192,40 @@ class LexichronApp(App):
         self.config: Dict[str, Any] = {}
         if self.explicit_project and self.explicit_project.exists():
             self.config = load_project(self.explicit_project)
-        self.loaded_stub: Optional[Path] = self._stub_dir(self.config)
+        self.loaded_dir: Optional[Path] = self._corpus_dir(self.config)
         bridge_dir = default_bridge_dir()
         self.bridge: Optional[HostBridge] = HostBridge(bridge_dir) if bridge_dir else None
         self.proc: Optional[subprocess.Popen] = None
 
     @property
     def project_path(self) -> Optional[Path]:
-        """Where the settings file is (or will be) saved: by default
-        <corpus directory>/lexichron.yaml. A file that was opened explicitly
-        (command-line argument, or reopened from last time) stays the target
-        until the corpus directory is changed, at which point the file follows
-        the new directory."""
-        stub_dir = self._stub_dir(self.config)
-        if self.explicit_project and (stub_dir is None or stub_dir == self.loaded_stub
-                                      or self.explicit_project.parent == stub_dir):
+        """Where the settings file is (or will be) saved: by default beside
+        the database it describes, <stub>/<release>/<language>/<n>gram_files/
+        lexichron.yaml. A file that was opened explicitly (command-line
+        argument, or reopened from last time) stays the target until the
+        corpus it describes is changed, at which point the file follows."""
+        corpus_dir = self._corpus_dir(self.config)
+        if self.explicit_project and (corpus_dir is None or corpus_dir == self.loaded_dir
+                                      or self.explicit_project.parent == corpus_dir):
             return self.explicit_project
-        return stub_dir / SETTINGS_FILENAME if stub_dir else None
+        return corpus_dir / SETTINGS_FILENAME if corpus_dir else None
 
-    @staticmethod
-    def _stub_dir(config: Dict[str, Any]) -> Optional[Path]:
-        stub = (config.get("corpus") or {}).get("db_path_stub")
-        return Path(str(stub)).expanduser().resolve() if stub else None
+    def _corpus_dir(self, config: Dict[str, Any]) -> Optional[Path]:
+        """The directory of the database these settings describe, or None
+        until the corpus directory, release, language and n-gram size are set."""
+        corpus = config.get("corpus") or {}
+        stage = config.get(self.stage) or {}
+        stub, release, lang = corpus.get("db_path_stub"), corpus.get("release"), corpus.get("language")
+        n = stage.get("ngram_size")
+        if not (stub and release and lang and n):
+            return None
+        root = Path(str(stub)).expanduser().resolve()
+        return Path(build_db_path(str(root), int(n), str(release), str(lang))).parent
 
     def _require_project_path(self) -> Path:
         p = self.project_path
         if p is None:
-            raise ConfigError("fill in the corpus directory first")
+            raise ConfigError("fill in the corpus directory, language and n-gram size first")
         return p
 
     # -- layout -----------------------------------------------------------------
@@ -374,7 +382,7 @@ class LexichronApp(App):
             return
         dest = self.project_path
         self.query_one("#dest", Static).update(
-            f"Settings file: {dest if dest else '(fill in the corpus directory)'}"
+            f"Settings file: {dest if dest else '(fill in the corpus directory, language and n-gram size)'}"
             + ("  (reopened from last time)" if self.reopened else ""))
         try:
             kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
@@ -412,7 +420,7 @@ class LexichronApp(App):
             fh.write(f"# lexichron settings file (written by lexichron ui {__version__})\n")
             yaml.safe_dump(cfg, fh, sort_keys=False, default_flow_style=False)
         self.explicit_project = path
-        self.loaded_stub = self._stub_dir(cfg)
+        self.loaded_dir = self._corpus_dir(cfg)
         remember_settings_path(path)
         self.notify(f"Saved {path}")
 
@@ -577,7 +585,8 @@ class LexichronApp(App):
         log = self.query_one("#run-log", RichLog)
         if not self.selected_run:
             if self.project_path is None:
-                title.update("Fill in the corpus directory on the Settings tab; its runs will appear here.")
+                title.update("Fill in the corpus directory, language and n-gram size on the Settings tab; "
+                             "that corpus's runs will appear here.")
             else:
                 title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
             for wid in ("#run-headline", "#run-detail", "#run-current", "#run-message"):
@@ -617,7 +626,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="lexichron ui", description="Terminal UI for lexichron.")
     parser.add_argument("project", nargs="?", default=None,
-                        help=f"settings YAML file to open (default: <corpus directory>/{SETTINGS_FILENAME})")
+                        help=f"settings YAML file to open (default: the {SETTINGS_FILENAME} beside the database)")
     parser.add_argument("--stage", default="acquire", choices=sorted(STAGES))
     args = parser.parse_args(argv)
     LexichronApp(args.project, args.stage).run()

@@ -327,8 +327,10 @@ Tabs:
   n-gram size, token type, and so on, with rarely-used settings under
   *Advanced*. Hover a `?` (or press F1) for help on a setting. Missing or
   invalid settings are reported at the top as you type. *Save* writes the
-  settings file to `<corpus directory>/lexichron.yaml`; runs, logs and
-  progress go under `<corpus directory>/.lexichron/`. The exact Python call
+  settings file beside the database it describes,
+  `<corpus directory>/<release>/<language>/<n>gram_files/lexichron.yaml`, so
+  each corpus carries its own settings; that corpus's runs, logs and
+  progress go in `.lexichron/` next to it. The exact Python call
   that will run is under *Resolved call* for anyone who wants to check it.
   Plain `lexichron-ui` reopens the file you saved last time, so closing the
   UI while a job runs and reopening it later brings back the settings and

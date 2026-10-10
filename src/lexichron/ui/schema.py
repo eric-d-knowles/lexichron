@@ -64,9 +64,9 @@ LABELS: Dict[str, str] = {
 HELP: Dict[str, str] = {
     "release": "Google Books n-gram release. Only the February 2020 release is supported.",
     "language": "Which Google Books corpus to download (eng = all English, eng-us, eng-gb, eng-fiction, ...).",
-    "db_path_stub": ("Where corpora are kept, e.g. /scratch/<you>/NLP_corpora/Google_Books. The database "
-                     "goes in <dir>/<release>/<language>/<n>gram_files/ and this settings file in "
-                     "<dir>/lexichron.yaml. Created if missing."),
+    "db_path_stub": ("Where Google Books corpora are kept, e.g. /scratch/<you>/NLP_corpora/Google_Books. "
+                     "Each corpus goes in <dir>/<release>/<language>/<n>gram_files/, with its database, "
+                     "this settings file and its run logs. Created if missing."),
     "ngram_size": "1 = single words, 2 = word pairs, up to 5. Larger n means far more data.",
     "ngram_type": ("tagged = only tokens with a part-of-speech tag (run_VERB); untagged = only plain "
                    "tokens; all = both."),

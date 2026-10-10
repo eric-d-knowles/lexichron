@@ -77,13 +77,14 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
         app = LexichronApp(None)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
-            assert "(fill in the corpus directory)" in str(app.query_one("#dest").content)
+            assert "(fill in the corpus directory, language and n-gram size)" in str(app.query_one("#dest").content)
             assert app.query_one("#f-corpus-language", Select).value is Select.NULL
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
             app.query_one("#f-corpus-language").value = "eng"
             app.query_one("#f-acquire-ngram_size").value = "1"
             await pilot.pause()
-            assert app.project_path == tmp_path / "corpora" / "lexichron.yaml"
+            # the settings file goes beside the database it describes
+            assert app.project_path == tmp_path / "corpora" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml"
             assert "repo_corpus_id='eng'" in str(app.query_one("#call").content)
             # a half-filled range is reported in plain words, no call shown
             app.query_one("#f-acquire-file_range").value = "0"
@@ -95,7 +96,7 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
             app.action_save()
             await pilot.pause()
         _assert_clean(app)
-        assert (tmp_path / "corpora" / "lexichron.yaml").exists()
+        assert (tmp_path / "corpora" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml").exists()
 
     asyncio.run(scenario())
 
@@ -165,7 +166,7 @@ def test_progress_tab_shows_selected_run(tmp_path):
 
 
 def test_reopening_without_argument_restores_last_settings(tmp_path):
-    proj = tmp_path / "corp" / "lexichron.yaml"
+    proj = tmp_path / "corp" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml"
 
     async def first():
         app = LexichronApp(None)
@@ -186,10 +187,10 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
             assert app.reopened and app.project_path == proj
             assert app.query_one("#f-corpus-language").value == "eng"
             assert "(reopened from last time)" in str(app.query_one("#dest").content)
-            # changing the corpus directory moves the settings file with it
-            app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "other")
+            # changing which corpus it describes moves the settings file with it
+            app.query_one("#f-acquire-ngram_size").value = "2"
             await pilot.pause()
-            assert app.project_path == tmp_path / "other" / "lexichron.yaml"
+            assert app.project_path == tmp_path / "corp" / "20200217" / "eng" / "2gram_files" / "lexichron.yaml"
         _assert_clean(app)
 
     asyncio.run(first())
