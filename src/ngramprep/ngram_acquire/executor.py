@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import multiprocessing as mp
+import os
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import PurePosixPath
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Type
@@ -75,6 +76,8 @@ def process_files(
     spool_ctx = tempfile.TemporaryDirectory(prefix="ngram_acquire_spool_", dir=spool_dir)
     spool_path = spool_ctx.name
     logger.info("Spool directory: %s (chunk size %s entries)", spool_path, f"{chunk_entries:,}")
+    if progress:
+        progress.set_spool_dir(spool_path)
 
     try:
         with tqdm(
@@ -99,7 +102,7 @@ def process_files(
 
             with executor_class(**kwargs) as executor:
                 it = iter(urls)
-                futures: Dict[object, str] = {}
+                futures: Dict[object, Tuple[str, int]] = {}
                 max_in_flight = max(1, workers * 2)
                 idx = 0
 
@@ -123,21 +126,26 @@ def process_files(
                             spool_dir=spool_path,
                             chunk_entries=chunk_entries,
                         )
-                        futures[fut] = url
+                        futures[fut] = (url, idx)
 
                 submit_next(max_in_flight)
 
                 while futures:
                     done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                    if progress:
+                        for fut in done:
+                            progress.file_parsed(PurePosixPath(futures[fut][0]).name)
 
                     for fut in done:
-                        url = futures.pop(fut)
+                        url, file_idx = futures.pop(fut)
                         filename = PurePosixPath(url).name
                         chunk_paths: List[str] = []
                         try:
                             result_msg, chunk_paths, uncompressed_bytes, _entries = fut.result()
 
                             if result_msg.startswith("SUCCESS"):
+                                if progress:
+                                    progress.file_ingesting(filename)
                                 ingestor.ingest_file(filename, chunk_paths)
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
@@ -160,6 +168,10 @@ def process_files(
                             if progress:
                                 progress.file_failed(filename, msg)
                         finally:
+                            try:
+                                os.remove(os.path.join(spool_path, f"{file_idx:05d}_{filename}.started"))
+                            except OSError:
+                                pass
                             pbar.update(1)
 
                     submit_next(len(done))

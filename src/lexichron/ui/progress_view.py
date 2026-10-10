@@ -133,12 +133,21 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     if eta is not None:
         detail.append(f"about {fmt_duration(eta)} left")
     current = list(doc.get("current") or [])
+    phases = doc.get("phases") or {}
     if not current:
         current_text = ""
-    elif len(current) <= 4:
-        current_text = "Working on: " + ", ".join(current)
+    elif phases:
+        bits = []
+        for key, label in (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
+                           ("parsed", "parsed, waiting to ingest"), ("ingesting", "ingesting")):
+            n = int(phases.get(key, 0))
+            if n:
+                bits.append(f"{n} {label}")
+        current_text = f"{len(current)} files in flight: " + " · ".join(bits)
+        if doc.get("ingesting"):
+            current_text += f"  ({doc['ingesting']})"
     else:
-        current_text = f"Working on {len(current)} files: {current[0]} … {current[-1]}"
+        current_text = f"{len(current)} files in flight"
     return {
         "state": state, "state_label": state_label, "done": done, "total": total, "failed": failed,
         "percent": percent, "elapsed_s": elapsed, "rate": rate, "eta_s": eta,

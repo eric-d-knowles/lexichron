@@ -123,6 +123,11 @@ def process_and_ingest_file(
     import tempfile
     spool_root = spool_dir or tempfile.gettempdir()
     file_tag = f"{worker_id:05d}_{filename}"
+    # Tell the parent (which reports progress) that a worker has this file.
+    try:
+        open(os.path.join(spool_root, f"{file_tag}.started"), "w").close()
+    except OSError:
+        pass
 
     try:
         last_error = ""

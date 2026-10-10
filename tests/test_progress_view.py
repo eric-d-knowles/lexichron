@@ -90,9 +90,35 @@ def test_state_label_and_current_text():
     doc, now = _doc()
     assert summarize(doc, now)["state_label"] == "running"
     assert summarize(doc, now + timedelta(hours=1))["state_label"] == "running?"
-    assert summarize(doc, now)["current_text"] == "Working on: a.gz"
+    assert summarize(doc, now)["current_text"] == "1 files in flight"      # no phase data
     doc["current"] = [f"5-{i:05d}-of-11145.gz" for i in range(80)]
-    text = summarize(doc, now)["current_text"]
-    assert text == "Working on 80 files: 5-00000-of-11145.gz … 5-00079-of-11145.gz"
+    doc["phases"] = {"queued": 40, "parsing": 36, "parsed": 3, "ingesting": 1}
+    doc["ingesting"] = "5-00000-of-11145.gz"
+    assert summarize(doc, now)["current_text"] == (
+        "80 files in flight: 40 waiting for a worker · 36 downloading & parsing · "
+        "3 parsed, waiting to ingest · 1 ingesting  (5-00000-of-11145.gz)")
     doc["current"] = []
     assert summarize(doc, now)["current_text"] == ""
+
+
+def test_reporter_tracks_phases(tmp_path):
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    p = tmp_path / "progress.json"
+    r = ProgressReporter(p, stage="acquire", min_interval_s=0, spool_dir=spool)
+    for name in ("a.gz", "b.gz", "c.gz", "d.gz"):
+        r.file_started(name)
+    assert read_progress(p)["phases"] == {"queued": 4, "parsing": 0, "parsed": 0, "ingesting": 0}
+    # workers pick up a, b, c (markers as the worker writes them: <idx>_<name>.started)
+    for i, name in enumerate(("a.gz", "b.gz", "c.gz"), 1):
+        (spool / f"{i:05d}_{name}.started").touch()
+    r.file_parsed("a.gz"); r.file_parsed("b.gz")
+    r.file_ingesting("a.gz")
+    doc = read_progress(p)
+    assert doc["phases"] == {"queued": 1, "parsing": 1, "parsed": 1, "ingesting": 1}
+    assert doc["ingesting"] == "a.gz"
+    r.file_done("a.gz", entries=1, chunks=1, uncompressed_bytes=1)
+    (spool / "00001_a.gz.started").unlink()
+    doc = read_progress(p)
+    assert doc["ingesting"] is None and doc["phases"]["ingesting"] == 0
+    assert doc["current"] == ["b.gz", "c.gz", "d.gz"]

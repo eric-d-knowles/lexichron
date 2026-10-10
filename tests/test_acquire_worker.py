@@ -129,7 +129,8 @@ def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch, tmp_path):
     # The failed attempt's partial chunks were discarded: no double counting.
     assert entries == 2000 and len(chunks) == 4
     assert len(_collect(chunks)) == 2000
-    assert sorted(tmp_path.iterdir()) == sorted(map(type(tmp_path), chunks))
+    # Only the chunks and the worker's "I have this file" marker remain.
+    assert sorted(tmp_path.iterdir()) == sorted(list(map(type(tmp_path), chunks)) + [tmp_path / "00001_f.gz.started"])
 
 
 def test_worker_gives_up_after_max_attempts(monkeypatch, tmp_path):
@@ -140,7 +141,7 @@ def test_worker_gives_up_after_max_attempts(monkeypatch, tmp_path):
         "http://example/f.gz", 1, max_attempts=2, spool_dir=str(tmp_path))
     assert msg == "NETWORK_ERROR: f.gz"
     assert chunks == [] and nbytes == 0 and entries == 0
-    assert not list(tmp_path.iterdir())
+    assert [p.name for p in tmp_path.iterdir()] == ["00001_f.gz.started"]   # the parent removes it
 
 
 def test_session_is_closed_when_worker_creates_it(monkeypatch, tmp_path):
