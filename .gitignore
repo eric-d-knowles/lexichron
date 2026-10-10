@@ -40,3 +40,4 @@ bls_scraped/
 *.o
 src/**/build/
 src/ngramprep/ngram_acquire/io/parse_cy.c
+src/lexichron/_build.py
