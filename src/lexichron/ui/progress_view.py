@@ -54,6 +54,14 @@ def fmt_count(n: float) -> str:
     return f"{n:.0f}"
 
 
+LONG_PHASES = {
+    "partitioning": "partitioning the source (sampling the key space)",
+    "compacting": "compacting the database (all work ingested)",
+    "archiving": "archiving the database",
+    "whitelist": "writing the vocabulary",
+}
+
+
 def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
               job_gone: bool = False) -> Dict[str, Any]:
     """Derived figures for one progress document.
@@ -97,7 +105,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         elapsed = (end - started).total_seconds() if started else elapsed
         rate = (entries / elapsed) if elapsed and elapsed > 0 else 0.0
         eta = None
-    long_phase = state == "running" and (doc.get("phase") or "ingesting") in ("compacting", "archiving")
+    long_phase = state == "running" and (doc.get("phase") or "ingesting") in LONG_PHASES
     state_label = ("stopped" if stopped else "running?" if stale
                    else doc["phase"] if long_phase else state)
 
@@ -115,30 +123,33 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         status = "stopped (job no longer in the queue; resume by running again)"
     elif state == "running" and stale:
         status = "running? (no update for " + fmt_duration((now - updated).total_seconds()) + ")"
-    elif state == "running" and phase in ("compacting", "archiving"):
+    elif state == "running" and phase in LONG_PHASES:
         for_how_long = fmt_duration((now - phase_started).total_seconds()) if phase_started else "-"
-        what = "compacting the database" if phase == "compacting" else "archiving the database"
-        status = f"{what} (all files ingested; {for_how_long} so far)"
+        status = f"{LONG_PHASES[phase]} ({for_how_long} so far)"
         eta = None
     else:
         status = state
     parts = [status + (f" {where_txt}" if where_txt else "")]
+    unit = doc.get("unit_label") or "files"
     if total:
-        parts.append(f"{done}/{total} files" + (f" ({percent:.0f}%)" if percent is not None else ""))
+        parts.append(f"{done}/{total} {unit}" + (f" ({percent:.0f}%)" if percent is not None else ""))
     else:
-        parts.append(f"{done} files")
+        parts.append(f"{done} {unit}")
     if failed:
         parts.append(f"{failed} failed")
     if doc.get("files_skipped"):
         parts.append(f"{doc['files_skipped']} already done")
     headline = " · ".join(parts)
 
-    detail = [
-        f"{entries:,} entries",
-        f"{fmt_bytes(float(doc.get('uncompressed_bytes', 0)))} parsed (uncompressed)",
-        f"{fmt_count(rate)} entries/s",
-        f"elapsed {fmt_duration(elapsed)}",
-    ]
+    counters = doc.get("counters") or {}
+    detail = [f"{entries:,} entries"]
+    if doc.get("uncompressed_bytes"):
+        detail.append(f"{fmt_bytes(float(doc['uncompressed_bytes']))} parsed (uncompressed)")
+    if counters.get("scanned"):
+        kept = int(counters.get("kept", 0))
+        pct = 100.0 * kept / int(counters["scanned"]) if counters["scanned"] else 0.0
+        detail.append(f"{int(counters['scanned']):,} scanned, {kept:,} kept ({pct:.1f}%)")
+    detail += [f"{fmt_count(rate)} entries/s", f"elapsed {fmt_duration(elapsed)}"]
     if eta is not None:
         detail.append(f"about {fmt_duration(eta)} left")
     current = list(doc.get("current") or [])

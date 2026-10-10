@@ -10,10 +10,10 @@ Example::
     corpus:
       release: "20200217"
       language: eng-us
+      ngram_size: 1
       db_path_stub: /scratch/me/NLP_corpora/Google_Books/
 
     acquire:
-      ngram_size: 1
       ngram_type: tagged
       workers: 45
       overwrite_db: false
@@ -86,6 +86,7 @@ def apply_overrides(config: Dict[str, Any], overrides: list[str]) -> Dict[str, A
 CORPUS_KEY_MAP = {
     "release": "repo_release_id",
     "language": "repo_corpus_id",
+    "ngram_size": "ngram_size",
     "db_path_stub": "db_path_stub",
     "archive_path_stub": "archive_path_stub",
 }

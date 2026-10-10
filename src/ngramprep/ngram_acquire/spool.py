@@ -43,12 +43,13 @@ class ChunkWriter:
         self.file_tag = file_tag
         self.chunk_entries = max(1, int(chunk_entries))
         self.merge_fn = merge_fn
-        self.pending: Dict[str, bytes] = {}
+        self.pending: Dict[object, bytes] = {}
         self.part_paths: List[Path] = []
         self.entries_total = 0
         self.spool_dir.mkdir(parents=True, exist_ok=True)
 
-    def add(self, key: str, value: bytes) -> None:
+    def add(self, key, value: bytes) -> None:
+        """``key`` may be str (encoded as UTF-8 on spill) or bytes."""
         existing = self.pending.get(key)
         if existing is None:
             self.pending[key] = value
@@ -68,7 +69,7 @@ class ChunkWriter:
             buf: List[bytes] = []
             n = 0
             for key, value in self.pending.items():
-                kb = key.encode("utf-8")
+                kb = key if isinstance(key, bytes) else key.encode("utf-8")
                 buf += (pack(len(kb), len(value)), kb, value)
                 n += 1
                 if n >= 8192:                     # one write per few thousand records

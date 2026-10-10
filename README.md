@@ -301,7 +301,7 @@ template. Currently the acquisition stage is available this way:
 
 ```bash
 lexichron acquire lexichron.yaml                       # run
-lexichron acquire lexichron.yaml --set acquire.ngram_size=2   # override a setting
+lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
 lexichron acquire lexichron.yaml --dry-run             # show the call, don't run it
 ```
 

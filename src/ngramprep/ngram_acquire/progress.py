@@ -50,7 +50,8 @@ class ProgressReporter:
                  min_interval_s: float = 2.0,
                  db_path: Optional[str | os.PathLike] = None,
                  log_path: Optional[str | os.PathLike] = None,
-                 spool_dir: Optional[str | os.PathLike] = None) -> None:
+                 spool_dir: Optional[str | os.PathLike] = None,
+                 unit_label: str = "files") -> None:
         self.path = Path(path) if path else None
         self.min_interval_s = min_interval_s
         self._last_write = 0.0
@@ -71,6 +72,8 @@ class ProgressReporter:
             "phases": {"queued": 0, "parsing": 0, "parsed": 0, "ingesting": 0},
             "ingesting": None,
             "corpus": {"files": 0, "entries": 0, "bytes": 0, "unsized": 0},
+            "unit_label": unit_label,          # what files_total/files_done count
+            "counters": {},                    # stage-specific running totals
             "db_path": str(db_path) if db_path else None,
             "log_path": str(log_path) if log_path else None,
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
@@ -110,12 +113,15 @@ class ProgressReporter:
         self._ingesting = filename
         self._write(force=True)
 
-    def file_done(self, filename: str, *, entries: int, chunks: int, uncompressed_bytes: int) -> None:
+    def file_done(self, filename: str, *, entries: int, chunks: int, uncompressed_bytes: int,
+                  counters: Optional[Dict[str, int]] = None) -> None:
         self._drop_current(filename)
         self.doc["files_done"] += 1
         self.doc["entries_written"] += entries
         self.doc["chunks"] += chunks
         self.doc["uncompressed_bytes"] += uncompressed_bytes
+        for k, v in (counters or {}).items():
+            self.doc["counters"][k] = self.doc["counters"].get(k, 0) + int(v)
         self._write(force=True)
 
     def file_failed(self, filename: str, message: str) -> None:

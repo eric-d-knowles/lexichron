@@ -43,11 +43,14 @@ def is_file_processed(db: rs.DB, filename: str) -> bool:
         return False
 
 
-def processed_value(*, entries: int, uncompressed_bytes: int, chunks: int = 0) -> bytes:
+def processed_value(*, entries: int, uncompressed_bytes: int, chunks: int = 0,
+                    extra: Optional[Dict[str, int]] = None) -> bytes:
     """Marker value recording what the file contributed (older databases hold
     ``b"1"``, which still counts as processed but carries no figures)."""
-    return json.dumps({"entries": int(entries), "bytes": int(uncompressed_bytes),
-                       "chunks": int(chunks)}).encode("utf-8")
+    doc = {"entries": int(entries), "bytes": int(uncompressed_bytes), "chunks": int(chunks)}
+    if extra:
+        doc.update({k: int(v) for k, v in extra.items()})
+    return json.dumps(doc).encode("utf-8")
 
 
 def processed_stats(db: rs.DB, filename: str) -> Optional[Dict[str, int]]:
