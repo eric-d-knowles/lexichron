@@ -330,6 +330,9 @@ Tabs:
   settings file to `<corpus directory>/lexichron.yaml`; runs, logs and
   progress go under `<corpus directory>/.lexichron/`. The exact Python call
   that will run is under *Resolved call* for anyone who wants to check it.
+  Plain `lexichron-ui` reopens the file you saved last time, so closing the
+  UI while a job runs and reopening it later brings back the settings and
+  the job's progress.
 - **Run** — runs the stage here, streaming its output. For small tests on a
   login node (set a small file range) or inside an interactive allocation.
 - **Submit** — Slurm account, partition, CPUs, memory and time. *Write batch
