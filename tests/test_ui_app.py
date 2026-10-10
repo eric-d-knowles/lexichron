@@ -10,6 +10,12 @@ from textual.widgets import Collapsible, Select  # noqa: E402
 from lexichron.ui.app import FixedValue, LexichronApp  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path, monkeypatch):
+    """Keep the 'last settings file' memory out of the real home directory."""
+    monkeypatch.setenv("LEXICHRON_STATE_DIR", str(tmp_path / "state"))
+
+
 def _assert_clean(app):
     # run_test re-raises panics, but be explicit: the app must not have errored.
     assert getattr(app, "_exception", None) is None, app._exception
@@ -156,3 +162,36 @@ def test_progress_tab_shows_selected_run(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_reopening_without_argument_restores_last_settings(tmp_path):
+    proj = tmp_path / "corp" / "lexichron.yaml"
+
+    async def first():
+        app = LexichronApp(None)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corp")
+            app.query_one("#f-corpus-language").value = "eng"
+            app.query_one("#f-acquire-ngram_size").value = "1"
+            await pilot.pause()
+            app.action_save()
+            await pilot.pause()
+        _assert_clean(app)
+
+    async def second():
+        app = LexichronApp(None)          # no argument, like plain `lexichron-ui`
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            assert app.reopened and app.project_path == proj
+            assert app.query_one("#f-corpus-language").value == "eng"
+            assert "(reopened from last time)" in str(app.query_one("#dest").content)
+            # changing the corpus directory moves the settings file with it
+            app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "other")
+            await pilot.pause()
+            assert app.project_path == tmp_path / "other" / "lexichron.yaml"
+        _assert_clean(app)
+
+    asyncio.run(first())
+    assert proj.exists()
+    asyncio.run(second())

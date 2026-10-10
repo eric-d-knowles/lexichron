@@ -49,6 +49,30 @@ __all__ = ["LexichronApp", "main", "SETTINGS_FILENAME"]
 SETTINGS_FILENAME = "lexichron.yaml"
 
 
+def _state_dir() -> Path:
+    """Per-user state (the last settings file opened); ~/.lexichron by default."""
+    return Path(os.environ.get("LEXICHRON_STATE_DIR") or Path.home() / ".lexichron")
+
+
+def remember_settings_path(path: Path) -> None:
+    try:
+        d = _state_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "last_settings").write_text(str(path) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def last_settings_path() -> Optional[Path]:
+    """The settings file the UI saved most recently, if it still exists."""
+    try:
+        text = (_state_dir() / "last_settings").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    p = Path(text) if text else None
+    return p if p and p.exists() else None
+
+
 # ---------------------------------------------------------------------------
 # Value conversion between widgets and the project dict
 # ---------------------------------------------------------------------------
@@ -149,29 +173,46 @@ class LexichronApp(App):
 
     def __init__(self, project_path: Optional[str | os.PathLike] = None, stage: str = "acquire") -> None:
         super().__init__()
-        # The settings file is optional. Without one, it lives at
-        # <db_path_stub>/lexichron.yaml once that field is filled in, so a user
-        # who only wants to download a corpus never has to think about it.
+        # The settings file is optional. Without one, the UI reopens the file
+        # it saved last time (so closing and reopening keeps the settings and
+        # the runs in view); failing that, it lives at <db_path_stub>/lexichron.yaml
+        # once that field is filled in, so a user who only wants to download a
+        # corpus never has to think about it.
         self.explicit_project: Optional[Path] = Path(project_path).resolve() if project_path else None
+        self.reopened = False
+        if self.explicit_project is None:
+            last = last_settings_path()
+            if last:
+                self.explicit_project = last.resolve()
+                self.reopened = True
         self.stage = stage
         self.func = _resolve(STAGES[stage][0])
         self.sections: List[Section] = stage_sections(self.func, stage) + [SLURM_FIELDS]
         self.config: Dict[str, Any] = {}
         if self.explicit_project and self.explicit_project.exists():
             self.config = load_project(self.explicit_project)
+        self.loaded_stub: Optional[Path] = self._stub_dir(self.config)
         bridge_dir = default_bridge_dir()
         self.bridge: Optional[HostBridge] = HostBridge(bridge_dir) if bridge_dir else None
         self.proc: Optional[subprocess.Popen] = None
 
     @property
     def project_path(self) -> Optional[Path]:
-        """Where the settings file is (or will be) saved."""
-        if self.explicit_project:
+        """Where the settings file is (or will be) saved: by default
+        <corpus directory>/lexichron.yaml. A file that was opened explicitly
+        (command-line argument, or reopened from last time) stays the target
+        until the corpus directory is changed, at which point the file follows
+        the new directory."""
+        stub_dir = self._stub_dir(self.config)
+        if self.explicit_project and (stub_dir is None or stub_dir == self.loaded_stub
+                                      or self.explicit_project.parent == stub_dir):
             return self.explicit_project
-        stub = (self.config.get("corpus") or {}).get("db_path_stub")
-        if stub:
-            return Path(str(stub)).expanduser().resolve() / SETTINGS_FILENAME
-        return None
+        return stub_dir / SETTINGS_FILENAME if stub_dir else None
+
+    @staticmethod
+    def _stub_dir(config: Dict[str, Any]) -> Optional[Path]:
+        stub = (config.get("corpus") or {}).get("db_path_stub")
+        return Path(str(stub)).expanduser().resolve() if stub else None
 
     def _require_project_path(self) -> Path:
         p = self.project_path
@@ -333,7 +374,8 @@ class LexichronApp(App):
             return
         dest = self.project_path
         self.query_one("#dest", Static).update(
-            f"Settings file: {dest if dest else '(fill in the corpus directory)'}")
+            f"Settings file: {dest if dest else '(fill in the corpus directory)'}"
+            + ("  (reopened from last time)" if self.reopened else ""))
         try:
             kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
         except ConfigError as exc:
@@ -369,6 +411,9 @@ class LexichronApp(App):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(f"# lexichron settings file (written by lexichron ui {__version__})\n")
             yaml.safe_dump(cfg, fh, sort_keys=False, default_flow_style=False)
+        self.explicit_project = path
+        self.loaded_stub = self._stub_dir(cfg)
+        remember_settings_path(path)
         self.notify(f"Saved {path}")
 
     def _save_quietly(self) -> Optional[Path]:
@@ -531,7 +576,10 @@ class LexichronApp(App):
         bar = self.query_one("#run-bar", ProgressBar)
         log = self.query_one("#run-log", RichLog)
         if not self.selected_run:
-            title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
+            if self.project_path is None:
+                title.update("Fill in the corpus directory on the Settings tab; its runs will appear here.")
+            else:
+                title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
             for wid in ("#run-headline", "#run-detail", "#run-current", "#run-message"):
                 self.query_one(wid, Static).update("")
             bar.update(total=None, progress=0)
