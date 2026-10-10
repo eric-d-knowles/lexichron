@@ -133,3 +133,12 @@ def test_restart_wipes_destination(rocks, tmp_path):
     res = run_rangemap(cfg)
     assert res.units_done == 4 and res.units_skipped == 0
     assert fake_rocks._REGISTRY[str(dst)] is not before
+
+
+def test_worker_scans_without_filling_the_cache(rocks, tmp_path):
+    from ngramprep.rangemap.worker import map_unit
+    src = tmp_path / "src.db"
+    _make_source(str(src), n=10)
+    chunks, scanned, kept, _ = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
+    assert scanned == 21 and kept == 20 and len(chunks) == 1
+    assert fake_rocks._REGISTRY[str(src)].last_iterator_opts == (False, 2 << 20)

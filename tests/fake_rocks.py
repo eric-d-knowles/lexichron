@@ -77,7 +77,8 @@ class DB:
         else:
             self.data[k] = merge_packed_records(self.data[k], v)
 
-    def iterator(self):
+    def iterator(self, fill_cache=True, readahead_size=0):
+        self.last_iterator_opts = (fill_cache, readahead_size)
         return _Iterator(self)
 
     def get(self, k):

@@ -68,7 +68,10 @@ def map_unit(
     scanned = kept = 0
     try:
         with open_db(src_db, mode="r", profile=read_profile) as db:
-            for key, value in range_scan(db, start_key or b"", end_key):
+            # One pass over the range: don't fill the block cache (rocks-shim >= 0.4),
+            # and read ahead, since this is a strictly sequential scan.
+            for key, value in range_scan(db, start_key or b"", end_key,
+                                         fill_cache=False, readahead_size=2 << 20):
                 if key.startswith(METADATA_PREFIX):
                     continue
                 scanned += 1
