@@ -112,7 +112,8 @@ def test_reporter_tracks_phases(tmp_path):
     # workers pick up a, b, c (markers as the worker writes them: <idx>_<name>.started)
     for i, name in enumerate(("a.gz", "b.gz", "c.gz"), 1):
         (spool / f"{i:05d}_{name}.started").touch()
-    r.file_parsed("a.gz"); r.file_parsed("b.gz")
+    r.file_parsed("a.gz")
+    (spool / "00002_b.gz.started").rename(spool / "00002_b.gz.parsed")   # worker finished b
     r.file_ingesting("a.gz")
     doc = read_progress(p)
     assert doc["phases"] == {"queued": 1, "parsing": 1, "parsed": 1, "ingesting": 1}

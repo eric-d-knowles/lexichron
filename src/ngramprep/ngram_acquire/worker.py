@@ -223,6 +223,13 @@ def process_and_ingest_file(
 
                 chunk_paths = writer.finish()
                 entries = writer.entries_total
+                # Tell the parent's progress reporter this file is parsed, even
+                # before the parent gets round to collecting the result.
+                try:
+                    os.replace(os.path.join(spool_root, f"{file_tag}.started"),
+                               os.path.join(spool_root, f"{file_tag}.parsed"))
+                except OSError:
+                    pass
                 msg = (
                     f"SUCCESS: {filename} - {lines_processed:,} lines, "
                     f"{entries:,} entries in {len(chunk_paths)} chunks, "

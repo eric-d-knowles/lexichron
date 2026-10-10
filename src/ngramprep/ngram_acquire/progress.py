@@ -137,27 +137,30 @@ class ProgressReporter:
         if self._ingesting == filename:
             self._ingesting = None
 
-    def _started_files(self) -> set:
-        """Files whose worker has touched its .started marker."""
+    def _marker_files(self) -> tuple:
+        """(started, parsed): files whose worker has touched <idx>_<file>.started,
+        and those it has since renamed to .parsed."""
+        started: set = set()
+        parsed: set = set()
         if not self.spool_dir:
-            return set()
-        found = set()
+            return started, parsed
         try:
             with os.scandir(self.spool_dir) as it:
                 for entry in it:
                     name = entry.name
                     if name.endswith(".started"):
-                        # <idx>_<filename>.started
-                        found.add(name[:-len(".started")].split("_", 1)[-1])
+                        started.add(name[:-len(".started")].split("_", 1)[-1])
+                    elif name.endswith(".parsed"):
+                        parsed.add(name[:-len(".parsed")].split("_", 1)[-1])
         except OSError:
             pass
-        return found
+        return started, parsed
 
     def _update_phases(self) -> None:
         current = list(self.doc["current"])
-        started = self._started_files()
+        started, worker_parsed = self._marker_files()
         ingesting = {self._ingesting} if self._ingesting else set()
-        parsed = {f for f in current if f in self._parsed} - ingesting
+        parsed = {f for f in current if f in self._parsed or f in worker_parsed} - ingesting
         parsing = {f for f in current if f in started} - parsed - ingesting
         queued = set(current) - parsing - parsed - ingesting
         self.doc["phases"] = {"queued": len(queued), "parsing": len(parsing),

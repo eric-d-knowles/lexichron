@@ -169,10 +169,11 @@ def process_files(
                             if progress:
                                 progress.file_failed(filename, msg)
                         finally:
-                            try:
-                                os.remove(os.path.join(spool_path, f"{file_idx:05d}_{filename}.started"))
-                            except OSError:
-                                pass
+                            for ext in (".started", ".parsed"):
+                                try:
+                                    os.remove(os.path.join(spool_path, f"{file_idx:05d}_{filename}{ext}"))
+                                except OSError:
+                                    pass
                             pbar.update(1)
 
                     submit_next(len(done))

@@ -130,7 +130,7 @@ def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch, tmp_path):
     assert entries == 2000 and len(chunks) == 4
     assert len(_collect(chunks)) == 2000
     # Only the chunks and the worker's "I have this file" marker remain.
-    assert sorted(tmp_path.iterdir()) == sorted(list(map(type(tmp_path), chunks)) + [tmp_path / "00001_f.gz.started"])
+    assert sorted(tmp_path.iterdir()) == sorted(list(map(type(tmp_path), chunks)) + [tmp_path / "00001_f.gz.parsed"])
 
 
 def test_worker_gives_up_after_max_attempts(monkeypatch, tmp_path):
