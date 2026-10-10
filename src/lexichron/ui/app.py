@@ -20,6 +20,7 @@ Layout: a tab per concern.
 from __future__ import annotations
 
 import getpass
+import logging
 import os
 import subprocess
 import sys
@@ -532,6 +533,18 @@ class LexichronApp(App):
 
     # -- jobs & runs ----------------------------------------------------------------
     def refresh_jobs(self) -> None:
+        """Periodic refresh. Nothing here may take the app down: a flaky
+        filesystem or a slow Slurm answer shows up in the title line instead."""
+        try:
+            self._refresh_jobs_inner()
+        except Exception as exc:                      # pragma: no cover - defensive
+            logging.getLogger(__name__).warning("refresh failed: %s", exc)
+            try:
+                self.query_one("#run-title", Static).update(f"(refresh failed: {exc}; retrying)")
+            except Exception:
+                pass
+
+    def _refresh_jobs_inner(self) -> None:
         table = self.query_one("#jobs", DataTable)
         table.clear()
         # Job ids of queued/running jobs, or None when Slurm cannot be asked.
@@ -567,11 +580,24 @@ class LexichronApp(App):
         return summarize(doc, job_gone=gone)
 
     def _run_dirs(self) -> List[Path]:
+        """Run directories with a progress file, newest first. Networked file
+        systems can answer a stat with ESTALE while a run is replacing its
+        progress.json, so every probe treats OSError as 'not there right now'."""
         proj = self.project_path
         run_root = proj.parent / ".lexichron" / "runs" if proj else None
-        if not run_root or not run_root.is_dir():
+        try:
+            if not run_root or not run_root.is_dir():
+                return []
+            dirs = []
+            for d in run_root.iterdir():
+                try:
+                    if (d / "progress.json").exists():
+                        dirs.append(d)
+                except OSError:
+                    dirs.append(d)       # being rewritten; read_progress will cope
+            return sorted(dirs, reverse=True)[:20]
+        except OSError:
             return []
-        return sorted((d for d in run_root.iterdir() if (d / "progress.json").exists()), reverse=True)[:20]
 
     def _refresh_runs(self) -> None:
         runs = self.query_one("#runs", DataTable)

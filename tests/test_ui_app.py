@@ -245,3 +245,38 @@ def test_run_whose_job_left_the_queue_is_stopped(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_stale_file_handle_does_not_crash_refresh(tmp_path, monkeypatch):
+    """A networked filesystem can answer stat() with ESTALE while a run
+    rewrites its progress file; the Progress tab must shrug it off."""
+    import errno
+    import json
+    import pathlib
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+    run = tmp_path / ".lexichron" / "runs" / "20261010_144558_acquire"
+    run.mkdir(parents=True)
+    run.joinpath("progress.json").write_text(json.dumps({"state": "running", "started": "2026-10-10T14:45:58+00:00",
+                                                         "updated": "2026-10-10T14:46:58+00:00"}))
+    real_stat = pathlib.Path.stat
+
+    def flaky_stat(self, *a, **kw):
+        if self.name == "progress.json":
+            raise OSError(errno.ESTALE, "Stale file handle", str(self))
+        return real_stat(self, *a, **kw)
+
+    async def scenario():
+        app = LexichronApp(proj)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            monkeypatch.setattr(pathlib.Path, "stat", flaky_stat)
+            app.refresh_jobs()          # must not raise
+            await pilot.pause()
+            monkeypatch.setattr(pathlib.Path, "stat", real_stat)
+            app.refresh_jobs()
+            await pilot.pause()
+            assert app.selected_run == run
+        _assert_clean(app)
+
+    asyncio.run(scenario())
