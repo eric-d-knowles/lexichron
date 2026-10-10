@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
 from dataclasses import replace
 from pathlib import Path
@@ -206,6 +207,17 @@ def prepare_whitelist(filter_config: FilterConfig) -> FilterConfig:
     )
 
     print(f"Loaded {len(whitelist):,} tokens")
+
+    # A whitelist produced by the unigram stage is a list of lemmas. Tokens
+    # are looked up after normalisation, so without a lemmatizer every
+    # inflected form ("women", "running") becomes <UNK>. Say so loudly.
+    if filter_config.apply_lemmatization and filter_config.lemma_gen is None:
+        msg = ("whitelist given but no lemmatizer (lemma_gen=None): tokens will be matched "
+               "as surface forms. If the whitelist came from a lemmatized database, pass "
+               "lemma_gen=CachedSpacyLemmatizer(language=...) so inflections are looked up "
+               "by their lemma.")
+        logging.getLogger(__name__).warning(msg)
+        print(f"WARNING: {msg}")
 
     # Store the loaded whitelist in filter_config for workers
     return replace(filter_config, whitelist=whitelist)
