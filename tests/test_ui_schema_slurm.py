@@ -17,7 +17,13 @@ def test_sections_cover_every_visible_argument():
     assert kinds["ngram_size"] == "choice" and kinds["combined_bigrams"] == "list"
     assert kinds["spool_dir"] == "path"
     assert next(f for f in stage.fields if f.name == "ngram_size").required
-    assert "N-gram size" in next(f for f in stage.fields if f.name == "ngram_size").help
+    size = next(f for f in stage.fields if f.name == "ngram_size")
+    assert size.title == "N-gram size" and "single words" in size.help
+    # docstring help is the fallback for arguments without a HELP entry
+    assert kinds["file_range"] == "range"
+    assert {f.name for f in stage.fields if f.advanced} == {
+        "spool_dir", "chunk_entries", "random_seed", "open_type", "compact_after_ingest"}
+    assert next(f for f in corpus.fields if f.name == "archive_path_stub").advanced
 
 
 def test_parse_args_doc_handles_multiline():

@@ -323,14 +323,15 @@ that uses that environment.)
 
 Tabs:
 
-- **Settings** — a form for every setting of the stage (generated from the
-  stage's own arguments, with their help text), and beside it the exact call
-  that will run, updated as you type. Misspelled or missing settings are
-  reported there. *Save* writes the settings file, by default
-  `<db_path_stub>/lexichron.yaml`; runs, logs and progress go under
-  `<db_path_stub>/.lexichron/`.
+- **Settings** — a form for the stage's settings: corpus directory, language,
+  n-gram size, token type, and so on, with rarely-used settings under
+  *Advanced*. Hover a `?` (or press F1) for help on a setting. Missing or
+  invalid settings are reported at the top as you type. *Save* writes the
+  settings file to `<corpus directory>/lexichron.yaml`; runs, logs and
+  progress go under `<corpus directory>/.lexichron/`. The exact Python call
+  that will run is under *Resolved call* for anyone who wants to check it.
 - **Run** — runs the stage here, streaming its output. For small tests on a
-  login node (set `file_range`) or inside an interactive allocation.
+  login node (set a small file range) or inside an interactive allocation.
 - **Submit** — Slurm account, partition, CPUs, memory and time. *Write batch
   script* writes `lexichron.acquire.sbatch` next to the settings file;
   *Submit* also submits it and shows the job id.

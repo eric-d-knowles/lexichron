@@ -7,8 +7,9 @@ what ``lexichron <stage> file.yaml`` runs from. It is not a "project
 environment" (what ``new-project`` creates), which the UI does not need.
 
 Layout: a tab per concern.
-  Settings — form for the settings file (generated from the stage's signature)
-             and, beside it, the resolved call exactly as --dry-run prints it
+  Settings — form for the settings file (generated from the stage's signature;
+             rarely-used settings under a collapsed "Advanced" heading, and the
+             resolved call exactly as --dry-run prints it under another)
   Run      — run the stage here (login node test, or inside an allocation)
   Submit   — Slurm resources; writes the batch script and submits it through
              the host bridge when one is running
@@ -28,8 +29,8 @@ from textual import on, work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
-    Button, DataTable, Footer, Header, Input, Label, RichLog, Select, Static,
-    Switch, TabbedContent, TabPane,
+    Button, Collapsible, DataTable, Footer, Header, Input, Label, RichLog, Select,
+    Static, Switch, TabbedContent, TabPane,
 )
 
 from lexichron import __version__
@@ -81,6 +82,27 @@ def _from_widget(field: Field, raw: Any) -> Any:
     return str(raw).strip()
 
 
+def _range_from_widgets(first: str, last: str) -> Optional[List[int]]:
+    """Two text boxes -> ``[first, last]`` or None when both are blank."""
+    first, last = first.strip(), last.strip()
+    if not first and not last:
+        return None
+    if not first or not last:
+        raise ConfigError("file range: fill in both the first and the last file, or neither")
+    lo, hi = int(first), int(last)
+    if lo < 0 or hi < lo:
+        raise ConfigError("file range: first must be >= 0 and not after last")
+    return [lo, hi]
+
+
+class FixedValue(Static):
+    """A setting with exactly one valid value: shown as text, still saved."""
+
+    def __init__(self, value: str, **kwargs) -> None:
+        super().__init__(value, **kwargs)
+        self.value = value
+
+
 # ---------------------------------------------------------------------------
 # The app
 # ---------------------------------------------------------------------------
@@ -88,26 +110,33 @@ def _from_widget(field: Field, raw: Any) -> Any:
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
-    #form { width: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
-    #preview { width: 1fr; padding: 0 1; border-left: solid $secondary; }
+    #form { height: 1fr; padding: 0 1; scrollbar-size-vertical: 1; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
-    .field-help { color: $text-muted; padding-left: 24; margin-bottom: 1; }
+    .field-help { color: $text-muted; padding-left: 22; margin-bottom: 1; display: none; }
+    .show-help .field-help { display: block; }
     .row { height: auto; }
-    .row Label { width: 24; }
+    .row Label { width: 22; }
     .row Input, .row Select { width: 1fr; }
+    .row .range-sep { width: auto; padding: 0 1; color: $text-muted; }
     .row Switch { height: 1; border: none; padding: 0; }
-    #dest { padding: 0 1; }
+    .row .spacer { width: 1fr; }
+    .hint { height: 3; content-align: left middle; color: $text-muted; }
+    .row FixedValue { width: 1fr; color: $text-muted; }
+    .row .help-mark { width: 3; color: $text-muted; text-align: center; }
+    Collapsible { margin-top: 1; }
+    CollapsibleTitle { padding: 0; }
+    #dest { padding: 0 1; height: auto; }
     #call { padding: 0 1; }
     #status { color: $warning; padding: 0 1; height: auto; }
     .actions { height: auto; padding: 1 1 0 1; }
     .actions Button { margin-right: 2; }
     #runlog, #joblog { height: 1fr; }
     """
-    BINDINGS = [("ctrl+s", "save", "Save"), ("ctrl+q", "quit", "Quit")]
+    BINDINGS = [("ctrl+s", "save", "Save"), ("f1", "toggle_help", "Help"), ("ctrl+q", "quit", "Quit")]
 
     def __init__(self, project_path: Optional[str | os.PathLike] = None, stage: str = "acquire") -> None:
         super().__init__()
-        # The settings file is optional. Without one, it defaults to
+        # The settings file is optional. Without one, it lives at
         # <db_path_stub>/lexichron.yaml once that field is filled in, so a user
         # who only wants to download a corpus never has to think about it.
         self.explicit_project: Optional[Path] = Path(project_path).resolve() if project_path else None
@@ -124,12 +153,6 @@ class LexichronApp(App):
     @property
     def project_path(self) -> Optional[Path]:
         """Where the settings file is (or will be) saved."""
-        try:
-            typed = self.query_one("#project-path", Input).value.strip()
-        except Exception:
-            typed = ""
-        if typed:
-            return Path(typed).expanduser().resolve()
         if self.explicit_project:
             return self.explicit_project
         stub = (self.config.get("corpus") or {}).get("db_path_stub")
@@ -140,7 +163,7 @@ class LexichronApp(App):
     def _require_project_path(self) -> Path:
         p = self.project_path
         if p is None:
-            raise ConfigError("set corpus.db_path_stub (or a settings file path) first")
+            raise ConfigError("fill in the corpus directory first")
         return p
 
     # -- layout -----------------------------------------------------------------
@@ -148,26 +171,27 @@ class LexichronApp(App):
         yield Header()
         with TabbedContent(initial="tab-project"):
             with TabPane("Settings", id="tab-project"):
-                with Horizontal():
-                    with VerticalScroll(id="form"):
-                        with Horizontal(classes="row"):
-                            yield Label("settings file")
-                            yield Input(value=str(self.explicit_project or ""), id="project-path",
-                                        placeholder=f"(optional; defaults to <db_path_stub>/{SETTINGS_FILENAME})",
-                                        compact=True)
-                        for sec in self.sections:
-                            if sec.name == "slurm":
-                                continue
-                            yield Static(f"[{sec.name}]", classes="section")
-                            for f in sec.fields:
+                yield Static("", id="dest")
+                yield Static("", id="status")
+                with VerticalScroll(id="form"):
+                    for sec in self.sections:
+                        if sec.name == "slurm":
+                            continue
+                        yield Static(sec.name.capitalize(), classes="section")
+                        for f in sec.fields:
+                            if not f.advanced:
                                 yield from self._field_widgets(sec.name, f)
-                    with Vertical(id="preview"):
-                        yield Static("", id="dest")
-                        yield Static("", id="status")
-                        with Horizontal(classes="actions"):
-                            yield Button("Save settings", id="save", variant="primary")
-                        yield Static("Resolved call", classes="section")
+                    advanced = [(sec.name, f) for sec in self.sections for f in sec.fields if f.advanced]
+                    if advanced:
+                        with Collapsible(title="Advanced", collapsed=True, id="advanced"):
+                            for sec_name, f in advanced:
+                                yield from self._field_widgets(sec_name, f)
+                    with Collapsible(title="Resolved call (what --dry-run prints)", collapsed=True,
+                                     id="call-box"):
                         yield Static("", id="call")
+                with Horizontal(classes="actions"):
+                    yield Button("Save settings", id="save", variant="primary")
+                    yield Static("  F1 shows help for every setting; hover a ? for one.", classes="hint")
             with TabPane("Run", id="tab-run"):
                 with Horizontal(classes="actions"):
                     yield Button("Run here", id="run", variant="success")
@@ -175,7 +199,7 @@ class LexichronApp(App):
                 yield RichLog(id="runlog", wrap=True, highlight=False, markup=False)
             with TabPane("Submit", id="tab-submit"):
                 with VerticalScroll():
-                    yield Static("[slurm]", classes="section")
+                    yield Static("Slurm resources", classes="section")
                     for f in SLURM_FIELDS.fields:
                         yield from self._field_widgets("slurm", f)
                     with Horizontal(classes="actions"):
@@ -194,24 +218,46 @@ class LexichronApp(App):
     def _field_widgets(self, section: str, f: Field):
         wid = f"f-{section}-{f.name}"
         current = (self.config.get(section) or {}).get(f.name, f.default)
-        label = f.name + (" *" if f.required else "")
+        label = f.title + (" *" if f.required else "")
         with Horizontal(classes="row"):
             yield Label(label)
             if f.kind == "bool":
-                yield Switch(value=bool(current), id=wid)
+                w = Switch(value=bool(current), id=wid)
+                w.tooltip = f.help or None
+                yield w
+                w = Static("", classes="spacer")
+            elif f.kind == "choice" and f.choices and len(f.choices) == 1:
+                w = FixedValue(f.choices[0], id=wid)   # only one valid value
             elif f.kind == "choice" and f.choices:
                 opts = [(c, c) for c in f.choices]
-                if current is None and len(f.choices) == 1:
-                    current = f.choices[0]          # only one valid value: preselect it
                 val = str(current) if current is not None else Select.NULL
                 if val is not Select.NULL and val not in f.choices:
                     opts.append((val, val))
-                yield Select(opts, value=val, allow_blank=True, id=wid, compact=True)
+                w = Select(opts, value=val, allow_blank=True, id=wid, compact=True)
+            elif f.kind == "range":
+                lo, hi = ("", "")
+                if isinstance(current, (list, tuple)) and len(current) == 2:
+                    lo, hi = str(current[0]), str(current[1])
+                w = Input(value=lo, id=wid, compact=True, placeholder="first (blank = all)", type="integer")
+                w.tooltip = f.help or None
+                yield w
+                yield Static("to", classes="range-sep")
+                w = Input(value=hi, id=f"{wid}-end", compact=True, placeholder="last", type="integer")
             else:
-                yield Input(value=_to_widget_text(current), id=wid, compact=True,
-                            placeholder=f"({f.kind}{', optional' if not f.required else ''})")
+                hint = {"path": "directory", "list": "comma-separated", "int": "number"}.get(f.kind, f.kind)
+                w = Input(value=_to_widget_text(current), id=wid, compact=True,
+                          placeholder=f"({hint}{', optional' if not f.required else ''})")
+            w.tooltip = f.help or None
+            yield w
+            mark = Static("?" if f.help else "", classes="help-mark")
+            mark.tooltip = f.help or None
+            yield mark
         if f.help:
             yield Static(f.help, classes="field-help")
+
+    def action_toggle_help(self) -> None:
+        """F1: show or hide the help line under every setting."""
+        self.screen.toggle_class("show-help")
 
     def on_mount(self) -> None:
         jobs = self.query_one("#jobs", DataTable)
@@ -224,8 +270,8 @@ class LexichronApp(App):
         self.set_interval(10, self.refresh_jobs)
         if not self.bridge or not self.bridge.available():
             self.query_one("#submit-status", Static).update(
-                "No host bridge: 'Submit' and the job table need the UI started through "
-                "the project's .venv/lexichron-ui launcher. 'Write batch script' still works.")
+                "No host helper: 'Submit' and the job table need the UI started with the "
+                "lexichron-ui command (not from inside the image). 'Write batch script' still works.")
 
     # -- form -> config -----------------------------------------------------------
     def _collect(self) -> Dict[str, Any]:
@@ -235,9 +281,14 @@ class LexichronApp(App):
             for f in sec.fields:
                 w = self.query_one(f"#f-{sec.name}-{f.name}")
                 try:
-                    v = _from_widget(f, w.value)
+                    if f.kind == "range":
+                        v = _range_from_widgets(w.value, self.query_one(f"#f-{sec.name}-{f.name}-end").value)
+                    else:
+                        v = _from_widget(f, w.value)
+                except ConfigError:
+                    raise
                 except ValueError:
-                    raise ConfigError(f"{sec.name}.{f.name}: not a valid {f.kind}")
+                    raise ConfigError(f"{f.title}: not a valid {f.kind}")
                 if v is None or (f.kind == "bool" and v == f.default) or v == f.default and not f.required:
                     continue
                 vals[f.name] = v
@@ -256,15 +307,22 @@ class LexichronApp(App):
             return
         dest = self.project_path
         self.query_one("#dest", Static).update(
-            f"Settings file: {dest if dest else '(set corpus.db_path_stub)'}")
+            f"Settings file: {dest if dest else '(fill in the corpus directory)'}")
         try:
             kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
         except ConfigError as exc:
             call.update("(fill in the required settings)")
-            status.update(str(exc))
+            status.update(self._friendly(str(exc)))
             return
         call.update(_format_call(self.func, kwargs))
         status.update("")
+
+    def _friendly(self, message: str) -> str:
+        """Replace ``section.key`` names in a config error with the form's labels."""
+        for sec in self.sections:
+            for f in sec.fields:
+                message = message.replace(f"{sec.name}.{f.name}", f.title)
+        return message
 
     @on(Input.Changed)
     @on(Select.Changed)
@@ -422,7 +480,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     parser = argparse.ArgumentParser(prog="lexichron ui", description="Terminal UI for lexichron.")
     parser.add_argument("project", nargs="?", default=None,
-                        help=f"settings YAML file (optional; defaults to <db_path_stub>/{SETTINGS_FILENAME})")
+                        help=f"settings YAML file to open (default: <corpus directory>/{SETTINGS_FILENAME})")
     parser.add_argument("--stage", default="acquire", choices=sorted(STAGES))
     args = parser.parse_args(argv)
     LexichronApp(args.project, args.stage).run()

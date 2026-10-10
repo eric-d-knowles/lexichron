@@ -1,11 +1,13 @@
-"""Headless smoke test of the Textual app (only where textual is installed)."""
+"""Headless tests of the Textual app (only where textual is installed)."""
 import asyncio
 
 import pytest
 
 textual = pytest.importorskip("textual")
 
-from lexichron.ui.app import LexichronApp  # noqa: E402
+from textual.widgets import Collapsible, Select  # noqa: E402
+
+from lexichron.ui.app import FixedValue, LexichronApp  # noqa: E402
 
 
 def _assert_clean(app):
@@ -18,18 +20,35 @@ def test_app_builds_form_and_preview(tmp_path):
     proj = tmp_path / "project.yaml"
     proj.write_text(
         "corpus:\n  release: '20200217'\n  language: eng-us\n  db_path_stub: /data/\n"
-        "acquire:\n  ngram_size: 2\n  ngram_type: tagged\n  workers: 4\n"
+        "acquire:\n  ngram_size: 2\n  ngram_type: tagged\n  workers: 4\n  file_range: [3, 7]\n"
     )
 
     async def scenario():
         app = LexichronApp(proj)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
-            call = app.query_one("#call").content
-            text = str(call)
+            text = str(app.query_one("#call").content)
             assert "download_and_ingest_to_rocksdb(" in text
             assert "ngram_size=2" in text and "repo_corpus_id='eng-us'" in text
-            assert app.query_one("#status").content == "" or str(app.query_one("#status").content) == ""
+            assert "file_range=(3, 7)" in text
+            assert str(app.query_one("#status").content) == ""
+            # the file range is two boxes
+            assert app.query_one("#f-acquire-file_range").value == "3"
+            assert app.query_one("#f-acquire-file_range-end").value == "7"
+            # the only release is fixed text, not a menu
+            assert isinstance(app.query_one("#f-corpus-release"), FixedValue)
+            # rarely-used settings and the call are collapsed by default
+            assert app.query_one("#advanced", Collapsible).collapsed
+            assert app.query_one("#call-box", Collapsible).collapsed
+            assert app.query_one("#f-acquire-spool_dir") is not None
+            # labels are plain language, not parameter names
+            labels = [str(l.content) for l in app.query(".row Label")]
+            assert "Corpus directory *" in labels and "Token type" in labels
+            assert not any(l.startswith("db_path_stub") for l in labels)
+            # help is hidden until F1
+            assert not app.screen.has_class("show-help")
+            await pilot.press("f1")
+            assert app.screen.has_class("show-help")
             # change a field; preview follows
             app.query_one("#f-acquire-workers").value = "8"
             await pilot.pause()
@@ -41,6 +60,8 @@ def test_app_builds_form_and_preview(tmp_path):
         import yaml
         saved = yaml.safe_load(proj.read_text())
         assert saved["acquire"]["workers"] == 8 and saved["corpus"]["language"] == "eng-us"
+        assert saved["acquire"]["file_range"] == [3, 7]
+        assert saved["corpus"]["release"] == "20200217"
 
     asyncio.run(scenario())
 
@@ -50,8 +71,7 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
         app = LexichronApp(None)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
-            assert "(set corpus.db_path_stub)" in str(app.query_one("#dest").content)
-            from textual.widgets import Select
+            assert "(fill in the corpus directory)" in str(app.query_one("#dest").content)
             assert app.query_one("#f-corpus-language", Select).value is Select.NULL
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
             app.query_one("#f-corpus-language").value = "eng"
@@ -59,9 +79,28 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
             await pilot.pause()
             assert app.project_path == tmp_path / "corpora" / "lexichron.yaml"
             assert "repo_corpus_id='eng'" in str(app.query_one("#call").content)
+            # a half-filled range is reported in plain words, no call shown
+            app.query_one("#f-acquire-file_range").value = "0"
+            await pilot.pause()
+            assert "first and the last file" in str(app.query_one("#status").content)
+            app.query_one("#f-acquire-file_range-end").value = "0"
+            await pilot.pause()
+            assert "file_range=(0, 0)" in str(app.query_one("#call").content)
             app.action_save()
             await pilot.pause()
         _assert_clean(app)
         assert (tmp_path / "corpora" / "lexichron.yaml").exists()
+
+    asyncio.run(scenario())
+
+
+def test_missing_required_reported_with_labels(tmp_path):
+    async def scenario():
+        app = LexichronApp(None)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            status = str(app.query_one("#status").content)
+            assert "Corpus directory" in status and "db_path_stub" not in status
+        _assert_clean(app)
 
     asyncio.run(scenario())
