@@ -47,13 +47,16 @@ def make_ngram_type_predicate(
     suffixes = tuple(f"_{t}" for t in tags)
 
     if ngram_type == "all":
-        return _pred_all_nonempty
-
-    if ngram_type == "tagged":
+        pred = partial(_pred_all_nonempty)
+    elif ngram_type == "tagged":
         # functools.partial is picklable when the underlying function and args are picklable
-        return partial(_pred_tagged, suffixes=suffixes)
-
-    if ngram_type == "untagged":
-        return partial(_pred_untagged, suffixes=suffixes)
-
-    raise ValueError("ngram_type must be 'tagged', 'untagged', or 'all'.")
+        pred = partial(_pred_tagged, suffixes=suffixes)
+    elif ngram_type == "untagged":
+        pred = partial(_pred_untagged, suffixes=suffixes)
+    else:
+        raise ValueError("ngram_type must be 'tagged', 'untagged', or 'all'.")
+    # Describe the predicate so the compiled parser can apply the same filter
+    # without calling back into Python (see io/parse_cy.pyx).
+    pred.ngram_type = ngram_type
+    pred.suffixes = suffixes
+    return pred

@@ -1,8 +1,8 @@
 # lexichron project file.
 #
-# Run a stage with:   lexichron acquire project.yaml
-# Override a value:   lexichron acquire project.yaml --set acquire.ngram_size=2
-# See the call only:  lexichron acquire project.yaml --dry-run
+# Run a stage with:   lexichron acquire lexichron.yaml
+# Override a value:   lexichron acquire lexichron.yaml --set acquire.ngram_size=2
+# See the call only:  lexichron acquire lexichron.yaml --dry-run
 #
 # `corpus` is shared by every stage. Each other section holds the settings of
 # one stage, named exactly as in that stage's Python function.

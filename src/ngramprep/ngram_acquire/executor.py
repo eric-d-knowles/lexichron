@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import logging.handlers
 import multiprocessing as mp
+import os
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 from pathlib import PurePosixPath
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Type
@@ -13,6 +14,7 @@ import rocks_shim as rs
 
 from ngramprep.ngram_acquire.worker import process_and_ingest_file, DEFAULT_CHUNK_ENTRIES
 from ngramprep.ngram_acquire.batch_writer import ChunkIngestor
+from ngramprep.ngram_acquire.progress import ProgressReporter
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +32,7 @@ def process_files(
         spool_dir: Optional[str] = None,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         write_batch_size: Optional[int] = None,  # accepted for compatibility; chunk_entries governs
+        progress: Optional[ProgressReporter] = None,
 ) -> Tuple[List[str], List[str], int, int, int]:
     """
     Process files concurrently and ingest results into RocksDB.
@@ -50,6 +53,7 @@ def process_files(
         spool_dir: Directory for chunk files (default: a fresh temp directory)
         chunk_entries: Entries per chunk file
         write_batch_size: Ignored (kept so older callers do not break)
+        progress: Optional reporter updated as files start, finish or fail
 
     Returns:
         Tuple of (success_msgs, failure_msgs, total_entries_written,
@@ -72,6 +76,8 @@ def process_files(
     spool_ctx = tempfile.TemporaryDirectory(prefix="ngram_acquire_spool_", dir=spool_dir)
     spool_path = spool_ctx.name
     logger.info("Spool directory: %s (chunk size %s entries)", spool_path, f"{chunk_entries:,}")
+    if progress:
+        progress.set_spool_dir(spool_path)
 
     try:
         with tqdm(
@@ -96,7 +102,7 @@ def process_files(
 
             with executor_class(**kwargs) as executor:
                 it = iter(urls)
-                futures: Dict[object, str] = {}
+                futures: Dict[object, Tuple[str, int]] = {}
                 max_in_flight = max(1, workers * 2)
                 idx = 0
 
@@ -108,6 +114,8 @@ def process_files(
                         except StopIteration:
                             return
                         idx += 1
+                        if progress:
+                            progress.file_started(PurePosixPath(url).name)
                         fut = executor.submit(
                             process_and_ingest_file,
                             url,
@@ -118,35 +126,54 @@ def process_files(
                             spool_dir=spool_path,
                             chunk_entries=chunk_entries,
                         )
-                        futures[fut] = url
+                        futures[fut] = (url, idx)
 
                 submit_next(max_in_flight)
 
                 while futures:
                     done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                    if progress:
+                        for fut in done:
+                            progress.file_parsed(PurePosixPath(futures[fut][0]).name)
 
                     for fut in done:
-                        url = futures.pop(fut)
+                        url, file_idx = futures.pop(fut)
                         filename = PurePosixPath(url).name
                         chunk_paths: List[str] = []
                         try:
                             result_msg, chunk_paths, uncompressed_bytes, _entries = fut.result()
 
                             if result_msg.startswith("SUCCESS"):
-                                ingestor.ingest_file(filename, chunk_paths)
+                                if progress:
+                                    progress.file_ingesting(filename)
+                                ingestor.ingest_file(filename, chunk_paths,
+                                                     uncompressed_bytes=uncompressed_bytes)
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
                                 logger.info("Processed: %s", filename)
+                                if progress:
+                                    progress.file_done(filename, entries=_entries,
+                                                       chunks=len(chunk_paths),
+                                                       uncompressed_bytes=uncompressed_bytes)
                             else:
                                 ChunkIngestor.discard(chunk_paths)
                                 failure_msgs.append(result_msg)
+                                if progress:
+                                    progress.file_failed(filename, result_msg)
 
                         except Exception as exc:
                             ChunkIngestor.discard(chunk_paths)
                             msg = f"ERROR: {filename} - {exc}"
                             failure_msgs.append(msg)
                             logger.error(msg)
+                            if progress:
+                                progress.file_failed(filename, msg)
                         finally:
+                            for ext in (".started", ".parsed"):
+                                try:
+                                    os.remove(os.path.join(spool_path, f"{file_idx:05d}_{filename}{ext}"))
+                                except OSError:
+                                    pass
                             pbar.update(1)
 
                     submit_next(len(done))

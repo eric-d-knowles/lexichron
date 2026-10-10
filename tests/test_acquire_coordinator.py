@@ -22,3 +22,19 @@ def test_select_file_subset():
     import pytest
     with pytest.raises(ValueError):
         select_file_subset(urls, (2, 9))
+
+
+def test_processed_totals_sums_marker_figures():
+    from ngramprep.ngram_acquire.coordinator import processed_totals
+    from ngramprep.ngram_acquire.db.metadata import processed_key, processed_value
+
+    class DB:
+        store = {
+            processed_key("a.gz"): processed_value(entries=10, uncompressed_bytes=1000, chunks=1),
+            processed_key("b.gz"): processed_value(entries=5, uncompressed_bytes=500, chunks=1),
+            processed_key("old.gz"): b"1",
+        }
+        def get(self, k): return self.store.get(k)
+
+    urls = [f"http://x/{n}" for n in ("a.gz", "b.gz", "old.gz", "new.gz")]
+    assert processed_totals(urls, DB()) == {"files": 3, "entries": 15, "bytes": 1500, "unsized": 1}

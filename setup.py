@@ -33,6 +33,11 @@ extensions = [
         extra_compile_args=["-O3", "-std=c++17"],
     ),
     Extension(
+        "ngramprep.ngram_acquire.io.parse_cy",
+        sources=["src/ngramprep/ngram_acquire/io/parse_cy.pyx"],
+        extra_compile_args=["-O3"],
+    ),
+    Extension(
         "ngramprep.utilities.count_items",
         sources=["src/ngramprep/utilities/count_items.pyx"],
         language="c++",  # or "c" if your code is C, not C++

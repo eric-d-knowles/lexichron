@@ -14,9 +14,11 @@ from ngramprep.ngram_acquire.coordinator import (
     discover_files,
     select_file_subset,
     filter_processed_files,
+    processed_totals,
     randomize_file_order,
 )
 from ngramprep.ngram_acquire.executor import process_files
+from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES
 from ngramprep.ngram_acquire.reporter import print_pipeline_header, print_final_summary
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
@@ -59,6 +61,7 @@ def download_and_ingest_to_rocksdb(
         combined_bigrams: Optional[set] = None,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         spool_dir: Optional[str] = None,
+        progress_path: Optional[str] = None,
 ) -> None:
     """
     Main pipeline: discover, download, parse, and ingest ngram files into RocksDB.
@@ -101,6 +104,9 @@ def download_and_ingest_to_rocksdb(
         spool_dir: Where chunk files are written (default: the system temp
             directory, e.g. $TMPDIR; node-local storage is ideal). Needs room
             for about workers x 2 chunks.
+        progress_path: If given, a JSON progress document is kept up to date
+            at this path for other processes to read (see
+            :mod:`ngramprep.ngram_acquire.progress`).
 
     Raises:
         AcquisitionError: If any file failed after retries. The summary is
@@ -123,6 +129,7 @@ def download_and_ingest_to_rocksdb(
     # Log to a file next to the database unless the caller configured logging.
     # INFO (per-file progress, batch writes) goes to the file; the console
     # shows the pipeline's own banner and progress bar, plus warnings.
+    log_file = None
     if not logging.getLogger().hasHandlers():
         log_dir = Path(os.path.dirname(db_path)) / "logs"
         log_file = setup_logger(
@@ -131,6 +138,8 @@ def download_and_ingest_to_rocksdb(
         )
         print(f"Log file: {log_file}")
     logger.info("Database path: %s", db_path)
+    progress = ProgressReporter(progress_path, stage="acquire",
+                                db_path=db_path, log_path=log_file)
 
     # Handle existing database
     if overwrite_db and os.path.exists(db_path):
@@ -172,8 +181,13 @@ def download_and_ingest_to_rocksdb(
     with open_db(db_path, profile=open_type, create_if_missing=True) as db:
         # Resume mode: skip already-processed files
         files_to_skip = 0
+        prior = None
         if not overwrite_db:
+            prior = processed_totals(file_urls_to_use, db)
             file_urls_to_use, files_to_skip = filter_processed_files(file_urls_to_use, db)
+
+        progress.set_totals(files_total=len(file_urls_to_use) + files_to_skip,
+                            files_skipped=files_to_skip, prior=prior)
 
         # Optional randomization
         if random_seed is not None:
@@ -211,12 +225,15 @@ def download_and_ingest_to_rocksdb(
             combined_bigrams=combined_bigrams,
             spool_dir=spool_dir,
             chunk_entries=chunk_entries,
+            progress=progress,
         )
         # Database is automatically flushed by context manager on exit
 
-        # Optional post-ingestion compaction (only for a complete run)
+        # Optional post-ingestion compaction (only for a complete run). On a
+        # large database this is the longest single step of the run.
         if compact_after_ingest and not failure:
-            _perform_compaction(db, db_path)
+            with progress.long_phase("compacting"):
+                _perform_compaction(db, db_path)
 
     # Report final statistics
     end_time = datetime.now()
@@ -236,6 +253,7 @@ def download_and_ingest_to_rocksdb(
     if failure:
         for msg in failure:
             logger.error("Failed file: %s", msg)
+        progress.finish("failed", f"{len(failure)} file(s) failed")
         raise AcquisitionError(
             f"{len(failure)} of {len(success) + len(failure)} files failed "
             f"(see log for details); re-run with overwrite_db=False to retry "
@@ -244,7 +262,10 @@ def download_and_ingest_to_rocksdb(
 
     # Optional archiving: compress DB to archive directory
     if archive_path_stub is not None:
-        _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+        with progress.long_phase("archiving"):
+            _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+
+    progress.finish("done")
 
     # Return None to avoid Jupyter displaying the path
     # (the path is already printed in the summary)

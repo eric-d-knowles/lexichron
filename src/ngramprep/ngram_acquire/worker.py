@@ -15,6 +15,35 @@ from ngramprep.ngram_acquire.io.download import stream_download_with_retries
 from ngramprep.ngram_acquire.io.parse import parse_line
 from ngramprep.ngram_acquire.spool import ChunkWriter
 
+try:                                   # compiled fast path (see io/parse_cy.pyx)
+    from ngramprep.ngram_acquire.io.parse_cy import FALLBACK as _FALLBACK, parse_packed as _parse_packed
+except ImportError:                    # pragma: no cover - built without the extension
+    _parse_packed = None
+    _FALLBACK = object()
+
+_FAST_MODES = {"all": 0, "tagged": 1, "untagged": 2}
+_READ_BLOCK = 1 << 20
+
+
+def _iter_lines(stream):
+    """Yield the lines of a binary stream (without their newline), reading in
+    large blocks: much cheaper than readline() per line. A final line without
+    a newline is yielded too. Byte totals are the caller's: sum the blocks."""
+    tail = b""
+    read = stream.read
+    while True:
+        block = read(_READ_BLOCK)
+        if not block:
+            break
+        yield len(block), None               # (bytes read, no line): for byte accounting
+        lines = block.split(b"\n")
+        lines[0] = tail + lines[0]
+        tail = lines.pop()
+        for line in lines:
+            yield 0, line
+    if tail:
+        yield 0, tail
+
 if TYPE_CHECKING:
     from ngram_acquire.io.parse import NgramRecord
 
@@ -124,6 +153,17 @@ def process_and_ingest_file(
     spool_root = spool_dir or tempfile.gettempdir()
     file_tag = f"{worker_id:05d}_{filename}"
 
+    # Use the compiled parser when the filter is one it knows and no bigram
+    # combining is requested; it hands anything unusual back to parse_line.
+    fast_mode = _FAST_MODES.get(getattr(filter_pred, "ngram_type", None))
+    fast = _parse_packed is not None and combined_bigrams is None and fast_mode is not None
+    fast_suffixes = tuple(s.encode("ascii") for s in getattr(filter_pred, "suffixes", ())) if fast else ()
+    # Tell the parent (which reports progress) that a worker has this file.
+    try:
+        open(os.path.join(spool_root, f"{file_tag}.started"), "w").close()
+    except OSError:
+        pass
+
     try:
         last_error = ""
         for attempt in range(1, max_attempts + 1):
@@ -148,9 +188,17 @@ def process_and_ingest_file(
 
                     # Process gzipped content line by line
                     with gzip.GzipFile(fileobj=resp.raw, mode="rb") as gz:
-                        for raw in gz:
-                            uncompressed_bytes += len(raw)
+                        for nread, raw in _iter_lines(gz):
+                            if raw is None:
+                                uncompressed_bytes += nread
+                                continue
                             lines_processed += 1
+                            if fast:
+                                hit = _parse_packed(raw, fast_mode, fast_suffixes)
+                                if hit is not _FALLBACK:
+                                    if hit is not None:
+                                        writer.add(hit[0], hit[1])
+                                    continue
                             try:
                                 key, rec = parse_line(
                                     raw.decode("utf-8"),
@@ -175,6 +223,13 @@ def process_and_ingest_file(
 
                 chunk_paths = writer.finish()
                 entries = writer.entries_total
+                # Tell the parent's progress reporter this file is parsed, even
+                # before the parent gets round to collecting the result.
+                try:
+                    os.replace(os.path.join(spool_root, f"{file_tag}.started"),
+                               os.path.join(spool_root, f"{file_tag}.parsed"))
+                except OSError:
+                    pass
                 msg = (
                     f"SUCCESS: {filename} - {lines_processed:,} lines, "
                     f"{entries:,} entries in {len(chunk_paths)} chunks, "
