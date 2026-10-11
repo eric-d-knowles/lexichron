@@ -192,8 +192,11 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
 SLURM_FIELDS = Section("slurm", [
     Field("account", "text", "", True, help="Slurm account, e.g. torch_pr_600_general", label="Account"),
     Field("partition", "text", "", False, help="Partition (leave empty for the default)", label="Partition"),
-    Field("cpus", "int", 20, True, help="CPUs for the job (also used as the worker count unless set)", label="CPUs"),
-    Field("mem", "text", "16G", True, help="Memory, e.g. 16G or 64G", label="Memory"),
+    # Acquisition throughput flattens out around 40 workers (the single merging
+    # parent becomes the limit); 28G covers 40 workers on 5-grams.
+    Field("cpus", "int", 40, True, help="CPUs for the job (also used as the worker count unless set). "
+          "Acquisition gains little beyond 40.", label="CPUs"),
+    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.7G per worker.", label="Memory"),
     Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS", label="Time limit"),
     Field("job_name", "text", "lexichron", False, help="Job name shown in squeue", label="Job name"),
 ])

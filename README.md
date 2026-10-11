@@ -337,9 +337,11 @@ Tabs:
   the job's progress.
 - **Run** — runs the stage here, streaming its output. For small tests on a
   login node (set a small file range) or inside an interactive allocation.
-- **Submit** — Slurm account, partition, CPUs, memory and time. *Write batch
-  script* writes `lexichron.acquire.sbatch` next to the settings file;
-  *Submit* also submits it and shows the job id.
+- **Submit** — Slurm account, partition, CPUs, memory and time. The defaults
+  (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
+  single process that merges their output into RocksDB becomes the limit.
+  *Write batch script* writes `lexichron.acquire.sbatch` next to the settings
+  file; *Submit* also submits it and shows the job id.
 - **Progress** — the latest runs, newest first, whether started with *Run
   here* or by a Slurm job: a progress bar, files done, entries written, rate,
   elapsed time and time left, the files being worked on, and the tail of the
