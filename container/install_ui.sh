@@ -108,11 +108,21 @@ cat > "$BIN_DIR/lexichron-ui" <<LAUNCHER
 # lexichron terminal UI inside the image. Usage: lexichron-ui [lexichron.yaml]
 set -u
 $PRELUDE
-BRIDGE_DIR="\$HOME/.lexichron/bridge"
+# One bridge directory per UI session, so two sessions (another terminal, a
+# tmux window, another login node) never serve each other's requests.
+# Directories left on this host by sessions whose launcher is gone are removed.
+host="\$(hostname -s 2>/dev/null || hostname)"
+for d in "\$HOME"/.lexichron/bridge/"\$host"-*/; do
+  [ -d "\$d" ] || continue
+  pid="\${d%/}"; pid="\${pid##*-}"
+  case "\$pid" in *[!0-9]*|"") continue ;; esac
+  kill -0 "\$pid" 2>/dev/null || rm -rf "\$d"
+done
+BRIDGE_DIR="\$HOME/.lexichron/bridge/\$host-\$\$"
 mkdir -p "\$BRIDGE_DIR"
 bash "\$HOME/.lexichron/host_bridge.sh" "\$BRIDGE_DIR" &
 BRIDGE_PID=\$!
-trap 'touch "\$BRIDGE_DIR/stop"; kill \$BRIDGE_PID 2>/dev/null' EXIT
+trap 'touch "\$BRIDGE_DIR/stop"; kill \$BRIDGE_PID 2>/dev/null; wait \$BRIDGE_PID 2>/dev/null; rm -rf "\$BRIDGE_DIR"' EXIT
 # (no exec: the EXIT trap above must run to stop the helper)
 apptainer exec \$binds --env LEXICHRON_BRIDGE_DIR="\$BRIDGE_DIR" "\$img" lexichron ui "\$@"
 exit \$?
