@@ -9,6 +9,9 @@
 #   response: BRIDGE_DIR/res/<id>.json   {"rc": 0, "stdout": "...", "stderr": "..."}
 # Only the commands listed in ALLOWED are run. The loop exits when
 # BRIDGE_DIR/stop exists or its parent process goes away.
+#
+# A request is claimed by renaming it; if two bridges ever watch one directory
+# (two UI sessions started on one bridge dir), each request still runs once.
 set -u
 
 BRIDGE_DIR="${1:?usage: host_bridge.sh BRIDGE_DIR}"
@@ -32,8 +35,10 @@ while :; do
     for req in "$BRIDGE_DIR"/req/*.json; do
         [ -e "$req" ] || continue
         id="$(basename "$req" .json)"
+        claimed="$req.$$"
+        mv "$req" "$claimed" 2>/dev/null || continue     # another bridge got it first
         # Parse with python (present on every HPC login node); fall back to refusing.
-        mapfile -t parsed < <(python3 - "$req" <<'PY'
+        mapfile -t parsed < <(python3 - "$claimed" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1]))
 print(d.get("cmd", ""))
@@ -43,14 +48,15 @@ PY
 ) || parsed=()
         cmd="${parsed[0]:-}"
         args=("${parsed[@]:1}")
-        rm -f "$req"
+        rm -f "$claimed"
 
         out="$BRIDGE_DIR/res/$id.json"
         tmp="$out.tmp"
+        errf="$BRIDGE_DIR/res/$id.err.$$"
         case " $ALLOWED " in
             *" $cmd "*)
-                stdout="$("$cmd" "${args[@]}" 2>"$BRIDGE_DIR/res/$id.err")"; rc=$?
-                stderr="$(cat "$BRIDGE_DIR/res/$id.err")"; rm -f "$BRIDGE_DIR/res/$id.err"
+                stdout="$("$cmd" "${args[@]}" 2>"$errf")"; rc=$?
+                stderr="$(cat "$errf" 2>/dev/null)"; rm -f "$errf"
                 ;;
             *)
                 rc=126; stdout=""; stderr="command not allowed by bridge: '$cmd' (allowed: $ALLOWED)"

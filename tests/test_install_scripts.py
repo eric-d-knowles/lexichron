@@ -72,7 +72,11 @@ def test_install_ui_writes_both_commands(env):
         assert "/opt" in text                                # extra bind carried over
     assert (env["home"] / ".lexichron" / "host_bridge.sh").exists()
     assert "exec apptainer exec" in (bin_dir / "lexichron").read_text()
-    assert "exec apptainer" not in (bin_dir / "lexichron-ui").read_text()   # trap must run
+    ui = (bin_dir / "lexichron-ui").read_text()
+    assert "exec apptainer" not in ui                                       # trap must run
+    # one bridge directory per session, named by host and launcher pid
+    assert 'BRIDGE_DIR="$HOME/.lexichron/bridge/$host-$$"' in ui and "kill -0" in ui
+    assert "rm -rf \"$BRIDGE_DIR\"" in ui                                  # removed on exit
 
 
 def test_lexichron_wrapper_runs_in_image_and_repulls_when_missing(env):

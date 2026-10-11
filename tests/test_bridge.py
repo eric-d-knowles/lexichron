@@ -52,3 +52,29 @@ def test_bridge_refuses_other_commands(bridge):
 def test_missing_bridge_raises(tmp_path):
     with pytest.raises(BridgeUnavailable):
         HostBridge(tmp_path / "nope").run("squeue")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_two_bridges_on_one_dir_run_each_request_once(tmp_path):
+    """Requests are claimed atomically: a second bridge on the same directory
+    (two UI sessions) must not run sbatch a second time."""
+    fake = tmp_path / "bin"; fake.mkdir()
+    count = tmp_path / "count"
+    (fake / "sbatch").write_text(f'#!/bin/sh\necho x >> {count}\nsleep 0.5\necho "77;torch"\n')
+    (fake / "sbatch").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}")
+    procs = [subprocess.Popen(["bash", str(BRIDGE_SH), str(tmp_path / "bridge")], env=env) for _ in range(2)]
+    b = HostBridge(tmp_path / "bridge", poll_s=0.05)
+    for _ in range(100):
+        if b.available():
+            break
+        time.sleep(0.05)
+    try:
+        for _ in range(5):
+            assert b.sbatch("/x/p.sbatch") == "77"
+        time.sleep(1.0)
+        assert count.read_text().count("x") == 5
+    finally:
+        (tmp_path / "bridge" / "stop").touch()
+        for p in procs:
+            p.wait(timeout=5)
