@@ -25,8 +25,8 @@ def _assert_clean(app):
 def test_app_builds_form_and_preview(tmp_path):
     proj = tmp_path / "project.yaml"
     proj.write_text(
-        "corpus:\n  release: '20200217'\n  language: eng-us\n  db_path_stub: /data/\n"
-        "acquire:\n  ngram_size: 2\n  ngram_type: tagged\n  workers: 4\n  file_range: [3, 7]\n"
+        "corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 2\n  db_path_stub: /data/\n"
+        "acquire:\n  ngram_type: tagged\n  workers: 4\n  file_range: [3, 7]\n"
     )
 
     async def scenario():
@@ -81,7 +81,7 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
             assert app.query_one("#f-corpus-language", Select).value is Select.NULL
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
             app.query_one("#f-corpus-language").value = "eng"
-            app.query_one("#f-acquire-ngram_size").value = "1"
+            app.query_one("#f-corpus-ngram_size").value = "1"
             await pilot.pause()
             # the settings file goes beside the database it describes
             assert app.project_path == tmp_path / "corpora" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml"
@@ -174,7 +174,7 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
             await pilot.pause()
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corp")
             app.query_one("#f-corpus-language").value = "eng"
-            app.query_one("#f-acquire-ngram_size").value = "1"
+            app.query_one("#f-corpus-ngram_size").value = "1"
             await pilot.pause()
             app.action_save()
             await pilot.pause()
@@ -188,7 +188,7 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
             assert app.query_one("#f-corpus-language").value == "eng"
             assert "(reopened from last time)" in str(app.query_one("#dest").content)
             # changing which corpus it describes moves the settings file with it
-            app.query_one("#f-acquire-ngram_size").value = "2"
+            app.query_one("#f-corpus-ngram_size").value = "2"
             await pilot.pause()
             assert app.project_path == tmp_path / "corp" / "20200217" / "eng" / "2gram_files" / "lexichron.yaml"
         _assert_clean(app)
@@ -243,6 +243,38 @@ def test_run_whose_job_left_the_queue_is_stopped(tmp_path):
             jobs = app.query_one("#jobs", DataTable)
             assert str(jobs.get_row_at(0)[0]) == "200"
         _assert_clean(app)
+
+    asyncio.run(scenario())
+
+
+def test_stage_selector_switches_form_and_keeps_other_sections(tmp_path):
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
+                    "acquire:\n  workers: 4\nfilter:\n  min_len: 4\n")
+
+    async def scenario():
+        from textual.widgets import Select
+        app = LexichronApp(proj)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            assert app.stage == "acquire"
+            assert app.query_one("#stage-acquire").display and not app.query_one("#stage-filter").display
+            assert "download_and_ingest_to_rocksdb(" in str(app.query_one("#call").content)
+            app.query_one("#stage", Select).value = "filter"
+            await pilot.pause()
+            assert app.stage == "filter"
+            assert app.query_one("#stage-filter").display and not app.query_one("#stage-acquire").display
+            call = str(app.query_one("#call").content)
+            assert "filter_ngrams(" in call and "min_len=4" in call and "ngram_size=1" in call
+            assert app.project_path == proj          # explicitly opened file stays the target
+            app.action_save()
+            await pilot.pause()
+        _assert_clean(app)
+        import yaml
+        saved = yaml.safe_load(proj.read_text())
+        # both stages' settings survive a save made while the other stage is shown
+        assert saved["acquire"]["workers"] == 4 and saved["filter"]["min_len"] == 4
+        assert saved["corpus"]["ngram_size"] == 1
 
     asyncio.run(scenario())
 

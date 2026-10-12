@@ -33,6 +33,7 @@ From: public.ecr.aws/docker/library/python:3.11-slim-bookworm
     install.sh /opt/lexichron/install.sh
     examples /opt/lexichron/examples
     tests /opt/lexichron/tests
+    scripts /opt/lexichron/scripts
 
 %post
     set -eu

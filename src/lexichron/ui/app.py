@@ -95,6 +95,8 @@ def _from_widget(field: Field, raw: Any) -> Any:
         return None
     if isinstance(raw, str) and not raw.strip():
         return None
+    if field.kind == "optbool":
+        return {"yes": True, "no": False}.get(str(raw))
     if field.kind == "int" or (field.kind == "choice" and field.name == "ngram_size"):
         return int(str(raw).strip())
     if field.kind == "float":
@@ -145,6 +147,7 @@ class LexichronApp(App):
     .show-help .field-help { display: block; }
     .row { height: auto; }
     .row Label { width: 22; }
+    .stage-box { height: auto; }
     .row Input, .row Select { width: 1fr; }
     .row .range-sep { width: auto; padding: 0 1; color: $text-muted; }
     .row Switch { height: 1; border: none; padding: 0; }
@@ -187,9 +190,23 @@ class LexichronApp(App):
             if last:
                 self.explicit_project = last.resolve()
                 self.reopened = True
+        # Every stage's form is built up front; the stage selector shows one.
         self.stage = stage
-        self.func = _resolve(STAGES[stage][0])
-        self.sections: List[Section] = stage_sections(self.func, stage) + [SLURM_FIELDS]
+        self.stage_funcs = {name: _resolve(dotted) for name, (dotted, _) in STAGES.items()}
+        self.stage_sections: Dict[str, Section] = {}
+        corpus = Section("corpus")
+        seen = set()
+        for name, func in self.stage_funcs.items():
+            corp, sec = stage_sections(func, name)
+            self.stage_sections[name] = sec
+            for f in corp.fields:               # union of the stages' corpus settings
+                if f.name not in seen:
+                    seen.add(f.name)
+                    corpus.fields.append(f)
+                elif f.required:
+                    next(c for c in corpus.fields if c.name == f.name).required = True
+        self.corpus_section = corpus
+        self.sections: List[Section] = [corpus] + list(self.stage_sections.values()) + [SLURM_FIELDS]
         self.config: Dict[str, Any] = {}
         if self.explicit_project and self.explicit_project.exists():
             self.config = load_project(self.explicit_project)
@@ -211,13 +228,17 @@ class LexichronApp(App):
             return self.explicit_project
         return corpus_dir / SETTINGS_FILENAME if corpus_dir else None
 
+    @property
+    def func(self):
+        return self.stage_funcs[self.stage]
+
     def _corpus_dir(self, config: Dict[str, Any]) -> Optional[Path]:
         """The directory of the database these settings describe, or None
         until the corpus directory, release, language and n-gram size are set."""
         corpus = config.get("corpus") or {}
         stage = config.get(self.stage) or {}
         stub, release, lang = corpus.get("db_path_stub"), corpus.get("release"), corpus.get("language")
-        n = stage.get("ngram_size")
+        n = corpus.get("ngram_size") or stage.get("ngram_size")
         if not (stub and release and lang and n):
             return None
         root = Path(str(stub)).expanduser().resolve()
@@ -237,18 +258,34 @@ class LexichronApp(App):
                 yield Static("", id="dest")
                 yield Static("", id="status")
                 with VerticalScroll(id="form"):
-                    for sec in self.sections:
-                        if sec.name == "slurm":
-                            continue
-                        yield Static(sec.name.capitalize(), classes="section")
-                        for f in sec.fields:
-                            if not f.advanced:
-                                yield from self._field_widgets(sec.name, f)
-                    advanced = [(sec.name, f) for sec in self.sections for f in sec.fields if f.advanced]
-                    if advanced:
-                        with Collapsible(title="Advanced", collapsed=True, id="advanced"):
-                            for sec_name, f in advanced:
-                                yield from self._field_widgets(sec_name, f)
+                    with Horizontal(classes="row"):
+                        yield Label("Stage")
+                        sel = Select([(name, name) for name in STAGES], value=self.stage,
+                                     allow_blank=False, id="stage", compact=True)
+                        sel.tooltip = "\n".join(f"{n}: {d}" for n, (_, d) in STAGES.items())
+                        yield sel
+                        mark = Static("?", classes="help-mark")
+                        mark.tooltip = sel.tooltip
+                        yield mark
+                    yield Static("Corpus", classes="section")
+                    for f in self.corpus_section.fields:
+                        if not f.advanced:
+                            yield from self._field_widgets("corpus", f)
+                    for name, sec in self.stage_sections.items():
+                        with Vertical(id=f"stage-{name}", classes="stage-box"):
+                            yield Static(name.capitalize(), classes="section")
+                            for f in sec.fields:
+                                if not f.advanced:
+                                    yield from self._field_widgets(name, f)
+                    with Collapsible(title="Advanced", collapsed=True, id="advanced"):
+                        for f in self.corpus_section.fields:
+                            if f.advanced:
+                                yield from self._field_widgets("corpus", f)
+                        for name, sec in self.stage_sections.items():
+                            with Vertical(id=f"adv-{name}", classes="stage-box"):
+                                for f in sec.fields:
+                                    if f.advanced:
+                                        yield from self._field_widgets(name, f)
                     with Collapsible(title="Resolved call (what --dry-run prints)", collapsed=True,
                                      id="call-box"):
                         yield Static("", id="call")
@@ -300,6 +337,10 @@ class LexichronApp(App):
                 w.tooltip = f.help or None
                 yield w
                 w = Static("", classes="spacer")
+            elif f.kind == "optbool":
+                val = Select.NULL if current is None else ("yes" if current else "no")
+                w = Select([("yes", "yes"), ("no", "no")], value=val, allow_blank=True, id=wid, compact=True,
+                           prompt="(default)")
             elif f.kind == "choice" and f.choices and len(f.choices) == 1:
                 w = FixedValue(f.choices[0], id=wid)   # only one valid value
             elif f.kind == "choice" and f.choices:
@@ -318,7 +359,7 @@ class LexichronApp(App):
                 yield Static("to", classes="range-sep")
                 w = Input(value=hi, id=f"{wid}-end", compact=True, placeholder="last", type="integer")
             else:
-                hint = {"path": "directory", "list": "comma-separated", "int": "number"}.get(f.kind, f.kind)
+                hint = {"path": "path", "list": "comma-separated", "int": "number"}.get(f.kind, f.kind)
                 w = Input(value=_to_widget_text(current), id=wid, compact=True,
                           placeholder=f"({hint}{', optional' if not f.required else ''})")
             w.tooltip = f.help or None
@@ -333,7 +374,20 @@ class LexichronApp(App):
         """F1: show or hide the help line under every setting."""
         self.screen.toggle_class("show-help")
 
+    def _show_stage(self, stage: str) -> None:
+        self.stage = stage
+        for name in self.stage_sections:
+            self.query_one(f"#stage-{name}").display = name == stage
+            self.query_one(f"#adv-{name}").display = name == stage
+
+    @on(Select.Changed, "#stage")
+    def _stage_changed(self, event: Select.Changed) -> None:
+        if event.value is not Select.NULL and event.value != self.stage:
+            self._show_stage(str(event.value))
+            self._refresh_preview()
+
     def on_mount(self) -> None:
+        self._show_stage(self.stage)
         jobs = self.query_one("#jobs", DataTable)
         jobs.add_columns("Job", "Name", "State", "Elapsed", "Limit", "Nodes", "Reason")
         jobs.cursor_type = "row"
@@ -388,7 +442,8 @@ class LexichronApp(App):
             f"Settings file: {dest if dest else '(fill in the corpus directory, language and n-gram size)'}"
             + ("  (reopened from last time)" if self.reopened else ""))
         try:
-            kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k != "slurm"}, self.stage)
+            kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k in ("corpus", self.stage)},
+                                self.stage)
         except ConfigError as exc:
             call.update("(fill in the required settings)")
             status.update(self._friendly(str(exc)))

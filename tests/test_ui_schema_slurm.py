@@ -8,16 +8,17 @@ from ngramprep.ngram_acquire import download_and_ingest_to_rocksdb as acquire
 
 def test_sections_cover_every_visible_argument():
     corpus, stage = stage_sections(acquire, "acquire")
-    assert [f.name for f in corpus.fields] == ["release", "language", "db_path_stub", "archive_path_stub"]
+    assert [f.name for f in corpus.fields] == ["release", "language", "ngram_size", "db_path_stub", "archive_path_stub"]
     names = {f.name for f in stage.fields}
-    assert {"ngram_size", "ngram_type", "workers", "overwrite_db", "combined_bigrams", "chunk_entries"} <= names
+    assert {"ngram_type", "workers", "overwrite_db", "combined_bigrams", "chunk_entries"} <= names
+    assert "ngram_size" not in names
     assert "progress_path" not in names and "write_batch_size" not in names
     kinds = {f.name: f.kind for f in stage.fields}
     assert kinds["overwrite_db"] == "bool" and kinds["workers"] == "int"
-    assert kinds["ngram_size"] == "choice" and kinds["combined_bigrams"] == "list"
+    assert kinds["combined_bigrams"] == "list"
     assert kinds["spool_dir"] == "path"
-    assert next(f for f in stage.fields if f.name == "ngram_size").required
-    size = next(f for f in stage.fields if f.name == "ngram_size")
+    size = next(f for f in corpus.fields if f.name == "ngram_size")
+    assert size.required and size.kind == "choice"
     assert size.title == "N-gram size" and "single words" in size.help
     # docstring help is the fallback for arguments without a HELP entry
     assert kinds["file_range"] == "range"

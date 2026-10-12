@@ -37,7 +37,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.2.0}
+  version = {0.3.0}
 }
 ```
 
@@ -135,7 +135,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.2.0 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.3.0 bash install.sh`.
 
 That is all that is needed to download and process corpora. Steps 2 and 3
 below are for people who want to work with lexichron from their own notebooks
@@ -147,7 +147,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.2.0.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.3.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -167,7 +167,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.2.0)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.3.0)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -217,7 +217,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.2.0.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.3.0.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -297,17 +297,51 @@ example, `--name=gender_semantics --display-name="Python (gender semantics)"`.
 Pipeline stages can also be run from a settings file instead of a notebook.
 The file holds the settings a notebook's setup cells would hold, named exactly
 as in the stage's Python function; `examples/lexichron.yaml` is a commented
-template. Currently the acquisition stage is available this way:
+template. One file describes one corpus: a shared `corpus` section (release,
+language, n-gram size, database directory) and a section per stage.
 
 ```bash
-lexichron acquire lexichron.yaml                       # run
-lexichron acquire lexichron.yaml --set acquire.ngram_size=2   # override a setting
-lexichron acquire lexichron.yaml --dry-run             # show the call, don't run it
+lexichron acquire lexichron.yaml                       # download and ingest
+lexichron filter lexichron.yaml                        # filter the ingested database
+lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
+lexichron filter lexichron.yaml --dry-run              # show the call, don't run it
 ```
 
 Misspelled or missing settings are reported before anything runs. Inside the
 container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml` (or a
 project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
+
+### The filter stage
+
+`lexichron filter` turns the acquired database (`<n>grams.db`, every raw
+n-gram as Google wrote it) into `<n>grams_processed.db`, where the text is
+normalized and the noise removed. Each token is lowercased, lemmatized
+(*women* → *woman*, with spaCy's tables for the corpus's language) and then
+either checked against a vocabulary or put through the rule filters:
+stopwords, tokens that are not purely alphabetic (ASCII letters only for
+English), and tokens shorter than `min_len` become `<UNK>`. N-grams with
+fewer than `min_context_tokens` real tokens are dropped, and years can be
+binned. Raw n-grams that collapse onto the same processed key have their
+year counts summed.
+
+The stage is run twice per corpus:
+
+1. **Unigrams**, with no vocabulary. Besides the processed database this
+   writes `1grams_processed.db/whitelist.txt`: the `output_vocabulary_top_n`
+   most frequent lemmas, optionally only those present in every year of
+   `output_vocabulary_year_range` and optionally spell-checked.
+2. **Longer n-grams**, with `vocabulary` pointing at that whitelist. Now a
+   token is kept only if its lemma is in the vocabulary; `always_include`
+   keeps focal tokens the unigram stage would have dropped as stopwords
+   (*he*, *she*, ...).
+
+The work is split into key ranges balanced by data volume (from the source
+database's own file metadata, so there is no pre-scan), worker processes
+scan their ranges and spool results to node-local disk, and one process
+merges everything into the destination. Memory is bounded by `chunk_entries`
+per worker rather than by a database handle per worker, so all the CPUs of
+an allocation can be used. A run that is interrupted resumes from the ranges
+it had finished (`mode: resume`); `mode: restart` starts over.
 
 ## Terminal user interface
 
@@ -323,9 +357,10 @@ that uses that environment.)
 
 Tabs:
 
-- **Settings** — a form for the stage's settings: corpus directory, language,
-  n-gram size, token type, and so on, with rarely-used settings under
-  *Advanced*. Hover a `?` (or press F1) for help on a setting. Missing or
+- **Settings** — a *Stage* selector (`acquire` or `filter`) and a form for
+  that stage's settings: the corpus section shared by every stage (directory,
+  release, language, n-gram size) and the stage's own, with rarely-used
+  settings under *Advanced*. Hover a `?` (or press F1) for help on a setting. Missing or
   invalid settings are reported at the top as you type. *Save* writes the
   settings file beside the database it describes,
   `<corpus directory>/<release>/<language>/<n>gram_files/lexichron.yaml`, so
@@ -340,17 +375,17 @@ Tabs:
 - **Submit** — Slurm account, partition, CPUs, memory and time. The defaults
   (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
   single process that merges their output into RocksDB becomes the limit.
-  *Write batch script* writes `lexichron.acquire.sbatch` next to the settings
+  *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
   file; *Submit* also submits it and shows the job id.
 - **Progress** — the latest runs, newest first, whether started with *Run
-  here* or by a Slurm job: a progress bar, files done, entries written, rate,
-  elapsed time and time left, the files being worked on, and the tail of the
-  run's log, refreshed every few seconds. (Every run writes
+  here* or by a Slurm job: a progress bar, files (or work units) done,
+  entries written, rate, elapsed time and time left, what is being worked on,
+  and the tail of the run's log, refreshed every few seconds. (Every run writes
   `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.2.0.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.3.0.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 

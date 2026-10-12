@@ -33,6 +33,11 @@ def test_summarize_running_with_eta():
     assert s["eta_s"] == 1500 and not s["stale"]
     assert s["headline"] == "running job 123 on cs001 · 4/14 files (29%)"
     assert "6,000,000 entries" in s["detail"] and "about 25m00s left" in s["detail"]
+    # a filter run counts work units and reports scanned/kept
+    doc2, _ = _doc(unit_label="work units", counters={"scanned": 1000, "kept": 250}, uncompressed_bytes=0)
+    s2 = summarize(doc2, now)
+    assert "4/14 work units" in s2["headline"] and "1,000 scanned, 250 kept (25.0%)" in s2["detail"]
+    assert "parsed" not in s2["detail"]
     assert s["current"] == ["a.gz"]
 
 
@@ -153,7 +158,7 @@ def test_compacting_phase_is_reported():
     doc["phase_started"] = (now - timedelta(minutes=12)).isoformat(timespec="seconds")
     s = summarize(doc, now)
     assert s["state_label"] == "compacting" and s["phase"] == "compacting"
-    assert s["headline"].startswith("compacting the database (all files ingested; 12m00s so far)")
+    assert s["headline"].startswith("compacting the database (all work ingested) (12m00s so far)")
     assert s["eta_s"] is None and "left" not in s["detail"]
     # a compaction whose heartbeat stopped is flagged like any other silent run
     assert summarize(doc, now + timedelta(minutes=20))["state_label"] == "running?"

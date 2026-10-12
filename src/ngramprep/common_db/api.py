@@ -89,10 +89,23 @@ def prefix_scan(db: rs.DB, prefix: bytes) -> Iterator[KV]:
         del it
 
 
+def new_iterator(db: rs.DB, *, fill_cache: bool = True, readahead_size: int = 0):
+    """An iterator over ``db``. With rocks-shim >= 0.4 a one-pass scan can
+    ask not to fill the block cache (``fill_cache=False``) and for explicit
+    readahead; older shims ignore both."""
+    try:
+        return db.iterator(fill_cache=fill_cache, readahead_size=readahead_size)
+    except TypeError:
+        return db.iterator()
+
+
 def range_scan(
         db: rs.DB,
         lower: bytes = b"",
         upper_exclusive: Optional[bytes] = None,
+        *,
+        fill_cache: bool = True,
+        readahead_size: int = 0,
 ) -> Iterator[KV]:
     """
     Scan key-value pairs in range [lower, upper_exclusive).
@@ -101,6 +114,9 @@ def range_scan(
         db: RocksDB database handle
         lower: Inclusive lower bound (default: scan from start)
         upper_exclusive: Exclusive upper bound (default: scan to end)
+        fill_cache: False for a one-pass scan that should not fill the block
+            cache (needs rocks-shim >= 0.4; ignored otherwise)
+        readahead_size: Explicit readahead in bytes for sequential scans
     """
     # Normalize bytes-like inputs to bytes
     if not isinstance(lower, (bytes, bytearray, memoryview)):
@@ -114,7 +130,7 @@ def range_scan(
         if isinstance(upper_exclusive, (bytearray, memoryview)):
             upper_exclusive = bytes(upper_exclusive)
 
-    it = db.iterator()
+    it = new_iterator(db, fill_cache=fill_cache, readahead_size=readahead_size)
     try:
         it.seek(lower)
         while it.valid():

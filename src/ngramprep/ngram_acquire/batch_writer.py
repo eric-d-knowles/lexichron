@@ -3,11 +3,11 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Iterable, List
+from typing import Iterable, List, Optional
 
 import rocks_shim as rs
 
-from ngramprep.ngram_acquire.db.metadata import processed_key, processed_value
+from ngramprep.ngram_acquire.db.metadata import PROCESSED_PREFIX, processed_key, processed_value
 from ngramprep.ngram_acquire.spool import read_chunk
 
 logger = logging.getLogger(__name__)
@@ -29,26 +29,29 @@ class ChunkIngestor:
     with its marker even if the process is killed afterwards.
     """
 
-    def __init__(self, db: rs.DB, *, disable_wal: bool = True) -> None:
+    def __init__(self, db: rs.DB, *, disable_wal: bool = True,
+                 marker_prefix: bytes = PROCESSED_PREFIX) -> None:
         self.db = db
         self.disable_wal = disable_wal
+        self.marker_prefix = marker_prefix
         self.total_entries_written = 0
         self.write_batches = 0
         self.files_completed = 0
 
     def ingest_file(self, filename: str, chunk_paths: Iterable[str], *,
-                    uncompressed_bytes: int = 0) -> int:
+                    uncompressed_bytes: int = 0, extra: Optional[dict] = None) -> int:
         """Ingest all chunks of one shard, then mark it processed (recording
-        its entry count and uncompressed size) and persist."""
+        its entry count, uncompressed size and any ``extra`` figures) and
+        persist."""
         chunk_paths = list(chunk_paths)
         written = 0
         for path in chunk_paths:
             written += self._ingest_chunk(path)
 
         with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
-            wb.put(processed_key(filename),
+            wb.put(self.marker_prefix + filename.encode("utf-8"),
                    processed_value(entries=written, uncompressed_bytes=uncompressed_bytes,
-                                   chunks=len(chunk_paths)))
+                                   chunks=len(chunk_paths), extra=extra))
         self.db.finalize_bulk()
 
         self.files_completed += 1
@@ -61,9 +64,16 @@ class ChunkIngestor:
         n = 0
         try:
             with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
-                for key, value in read_chunk(path):
-                    wb.merge(key, value)
-                    n += 1
+                if hasattr(wb, "merge_batch"):
+                    # One call into C++ for the whole chunk (rocks-shim >= merge_batch).
+                    items = list(read_chunk(path))
+                    wb.merge_batch(items)
+                    n = len(items)
+                    del items
+                else:
+                    for key, value in read_chunk(path):
+                        wb.merge(key, value)
+                        n += 1
         except Exception:
             logger.error("DB write error ingesting chunk %s; aborting to prevent data loss", path)
             raise

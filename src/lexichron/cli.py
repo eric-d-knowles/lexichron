@@ -29,6 +29,10 @@ STAGES: Dict[str, tuple[str, str]] = {
         "ngramprep.ngram_acquire:download_and_ingest_to_rocksdb",
         "Download Google Books n-gram files and ingest them into RocksDB",
     ),
+    "filter": (
+        "lexichron.stages.filter:filter_ngrams",
+        "Filter a raw n-gram database (lowercase, lemmatize, stopwords, vocabulary)",
+    ),
 }
 
 

@@ -24,7 +24,10 @@ HIDDEN = {"progress_path", "write_batch_size"}
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
-            "open_type", "compact_after_ingest"}
+            "open_type", "compact_after_ingest",
+            # filter
+            "work_units", "smart_partitioning", "samples_per_worker", "text_language",
+            "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
 # single entry is shown as fixed text rather than a menu.
@@ -34,12 +37,19 @@ CHOICES: Dict[str, List[str]] = {
     "ngram_type": ["tagged", "untagged", "all"],
     "open_type": ["write:packed24", "write", "read:packed24", "read"],
     "language": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"],
+    "mode": ["resume", "restart"],
+    "text_language": ["en", "fr", "de", "it", "es", "ru", "he", "zh"],
 }
 
 # Preferred order within a section (what to get, then how); anything not listed
 # follows in signature order.
-ORDER = ["release", "language", "db_path_stub",
-         "ngram_size", "ngram_type", "combined_bigrams", "overwrite_db", "file_range", "workers"]
+ORDER = ["release", "language", "ngram_size", "db_path_stub",
+         "ngram_type", "combined_bigrams", "overwrite_db", "file_range",
+         # filter
+         "lowercase", "lemmatize", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
+         "min_context_tokens", "bin_size", "vocabulary", "always_include",
+         "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
+         "workers"]
 
 # Plain-language labels for the form (settings-file keys stay as they are).
 LABELS: Dict[str, str] = {
@@ -58,6 +68,27 @@ LABELS: Dict[str, str] = {
     "compact_after_ingest": "Compact when done",
     "chunk_entries": "Chunk size",
     "spool_dir": "Spool directory",
+    # filter
+    "text_language": "Text language",
+    "lowercase": "Lowercase",
+    "lemmatize": "Lemmatize",
+    "drop_stopwords": "Drop stopwords",
+    "alpha_only": "Letters only",
+    "ascii_only": "ASCII letters only",
+    "min_len": "Min token length",
+    "min_context_tokens": "Min real tokens",
+    "bin_size": "Year bin size",
+    "vocabulary": "Vocabulary file",
+    "vocabulary_top_n": "Vocabulary top N",
+    "always_include": "Always keep",
+    "output_vocabulary": "Write vocabulary",
+    "output_vocabulary_top_n": "Vocabulary size",
+    "output_vocabulary_year_range": "Vocabulary years",
+    "output_vocabulary_spell_check": "Spell-check vocabulary",
+    "mode": "Mode",
+    "work_units": "Work units",
+    "smart_partitioning": "Balanced work units",
+    "samples_per_worker": "Sampling size",
 }
 
 # User-facing help, where the docstring is too terse or too technical.
@@ -83,13 +114,35 @@ HELP: Dict[str, str] = {
     "chunk_entries": "Entries per spooled chunk. Lower on small allocations, raise on large nodes.",
     "spool_dir": "Where workers write chunk files (blank = $TMPDIR; node-local disk is ideal).",
     "archive_path_stub": "If set, compress the finished database into this directory (.tar.zst).",
+    # filter
+    "text_language": "Language for stopwords and lemmatization (spaCy code). Default: from the corpus.",
+    "lowercase": "Lowercase every token.",
+    "lemmatize": "Reduce tokens to their lemma (women -> woman). Also applied before the vocabulary lookup.",
+    "drop_stopwords": "Replace stopwords with <UNK>.",
+    "alpha_only": "Replace tokens that are not purely alphabetic (numbers, punctuation) with <UNK>.",
+    "ascii_only": "With 'Letters only', also reject letters outside A-Z. Default: on for English only.",
+    "min_len": "Replace tokens shorter than this with <UNK>.",
+    "min_context_tokens": "Drop n-grams with fewer than this many non-<UNK> tokens (1 for unigrams, 2+ for multigrams).",
+    "bin_size": "Aggregate years into bins: 1 = annual, 5 = five-year bins.",
+    "vocabulary": ("Vocabulary file from the unigram stage (its whitelist.txt). Tokens not in it become <UNK> "
+                   "and the other filters are skipped. Leave blank for unigrams."),
+    "vocabulary_top_n": "Use only the first N tokens of the vocabulary file.",
+    "always_include": "Comma-separated tokens kept even if not in the vocabulary (e.g. he, she, his, her).",
+    "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. On for unigrams, off for multigrams.",
+    "output_vocabulary_top_n": "How many of the most frequent tokens the vocabulary keeps.",
+    "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
+    "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",
+    "mode": "resume = continue from what the destination already has; restart = delete it first.",
+    "work_units": "Key ranges the work is split into (default: 4 x workers). More = better balance.",
+    "smart_partitioning": "Balance the key ranges by sampling the source first (recommended).",
+    "samples_per_worker": "Reservoir size per sampling worker.",
 }
 
 
 @dataclass
 class Field:
     name: str                 # key in the settings file
-    kind: str                 # "text" | "int" | "float" | "bool" | "choice" | "list" | "path" | "range"
+    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range"
     default: Any = None
     required: bool = False
     choices: Optional[List[str]] = None
@@ -137,17 +190,23 @@ def parse_args_doc(doc: Optional[str]) -> Dict[str, str]:
 def _kind_for(annotation: Any, default: Any, name: str) -> str:
     if name in CHOICES:
         return "choice"
-    if name == "file_range":
+    if name.endswith("_range"):
         return "range"
+    if name == "vocabulary":
+        return "path"
     if name.endswith(("_stub", "_dir", "_path")):
         return "path"
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)
+    optional = False
     if origin is typing.Union and type(None) in args:   # Optional[X]
+        optional = True
         inner = [a for a in args if a is not type(None)]
         annotation = inner[0] if len(inner) == 1 else annotation
         origin = typing.get_origin(annotation); args = typing.get_args(annotation)
     text = str(annotation)
+    if annotation is bool and optional and default is None:
+        return "optbool"                                  # yes / no / leave to the default
     if annotation is bool or isinstance(default, bool):
         return "bool"
     if annotation is int or isinstance(default, int) and not isinstance(default, bool):

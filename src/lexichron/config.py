@@ -10,10 +10,10 @@ Example::
     corpus:
       release: "20200217"
       language: eng-us
+      ngram_size: 1
       db_path_stub: /scratch/me/NLP_corpora/Google_Books/
 
     acquire:
-      ngram_size: 1
       ngram_type: tagged
       workers: 45
       overwrite_db: false
@@ -52,6 +52,23 @@ def load_project(path: str | Path) -> Dict[str, Any]:
     for name, section in data.items():
         if section is not None and not isinstance(section, dict):
             raise ConfigError(f"{path}: section '{name}' must be a mapping")
+    return _migrate(data)
+
+
+# Keys that moved between sections in earlier versions, as (old section, key)
+# -> new section. Files written by those versions keep loading; the UI saves
+# them in the new place.
+_MOVED_KEYS = {("acquire", "ngram_size"): "corpus", ("filter", "ngram_size"): "corpus"}
+
+
+def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
+    for (old_section, key), new_section in _MOVED_KEYS.items():
+        section = data.get(old_section)
+        if isinstance(section, dict) and key in section:
+            value = section.pop(key)
+            target = data.setdefault(new_section, None) or {}
+            target.setdefault(key, value)
+            data[new_section] = target
     return data
 
 
@@ -86,6 +103,7 @@ def apply_overrides(config: Dict[str, Any], overrides: list[str]) -> Dict[str, A
 CORPUS_KEY_MAP = {
     "release": "repo_release_id",
     "language": "repo_corpus_id",
+    "ngram_size": "ngram_size",
     "db_path_stub": "db_path_stub",
     "archive_path_stub": "archive_path_stub",
 }

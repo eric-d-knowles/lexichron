@@ -53,7 +53,8 @@ class DensitySampler:
 
         start = start_key if start_key is not None else b""
 
-        for key, _ in range_scan(db, start, end_key):
+        # A one-pass scan: do not pull every block through the block cache.
+        for key, _ in range_scan(db, start, end_key, fill_cache=False, readahead_size=2 << 20):
             # Skip metadata keys
             if key.startswith(metadata_prefix):
                 continue

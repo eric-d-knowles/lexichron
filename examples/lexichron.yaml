@@ -1,8 +1,8 @@
-# lexichron project file.
+# lexichron settings file: one corpus, one section per stage.
 #
-# Run a stage with:   lexichron acquire lexichron.yaml
-# Override a value:   lexichron acquire lexichron.yaml --set acquire.ngram_size=2
-# See the call only:  lexichron acquire lexichron.yaml --dry-run
+# Run a stage with:   lexichron acquire lexichron.yaml      lexichron filter lexichron.yaml
+# Override a value:   lexichron acquire lexichron.yaml --set acquire.workers=20
+# See the call only:  lexichron filter lexichron.yaml --dry-run
 #
 # `corpus` is shared by every stage. Each other section holds the settings of
 # one stage, named exactly as in that stage's Python function.
@@ -10,11 +10,11 @@
 corpus:
   release: "20200217"          # Google Books Ngrams release (YYYYMMDD)
   language: eng-us             # corpus id: eng, eng-us, eng-gb, fre, ger, ita, rus, spa, heb, chi-sim
+  ngram_size: 1                # 1-5
   db_path_stub: /scratch/USERNAME/NLP_corpora/Google_Books/
   # archive_path_stub: /scratch/USERNAME/NLP_corpora/archives/   # optional .tar.zst archive after ingest
 
 acquire:
-  ngram_size: 1                # 1-5
   ngram_type: tagged           # all | tagged | untagged
   workers: 45
   overwrite_db: false
@@ -25,3 +25,23 @@ acquire:
   # spool_dir: /tmp            # where chunks are spooled (node-local disk is ideal)
   # file_range: [0, 10]        # process only files 0-9 (for a quick test)
   # combined_bigrams: [human being, human beings]   # hyphenated into single tokens
+
+filter:
+  # text_language: en          # default: derived from the corpus (eng-us -> en)
+  lowercase: true
+  lemmatize: true
+  drop_stopwords: true
+  alpha_only: true
+  # ascii_only: true           # default: on for English, off otherwise
+  min_len: 3
+  min_context_tokens: 1        # 1 for unigrams; 2+ for multigrams
+  bin_size: 1                  # 5 = five-year bins
+  # vocabulary: /scratch/USERNAME/NLP_corpora/Google_Books/20200217/eng-us/1gram_files/1grams_processed.db/whitelist.txt
+  # always_include: [he, she, his, her]
+  output_vocabulary: true      # write <database>/whitelist.txt (unigrams)
+  output_vocabulary_top_n: 30000
+  output_vocabulary_year_range: [1968, 2019]
+  output_vocabulary_spell_check: true
+  workers: 20
+  mode: resume                 # resume | restart
+  compact_after_ingest: true
