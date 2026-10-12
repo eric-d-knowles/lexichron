@@ -58,6 +58,7 @@ def plan_units(
     if units:
         log(f"Created {len(units)} work units balanced by SST file sizes")
         return units
+    log("Too few SST files to partition by their boundaries; sampling the source instead")
 
     # A few sampling processes are enough: each one is a full scan of its
     # share of the keys, and each holds a RocksDB handle with its block cache.
