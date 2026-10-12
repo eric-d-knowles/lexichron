@@ -70,13 +70,10 @@ def prepare_paths(pipeline_config: PipelineConfig) -> dict[str, Path]:
         'tmp_dir': pipeline_config.tmp_dir.resolve(),
     }
 
-    # Store partition cache in parent directory (not in tmp_dir) so it survives restarts
-    # The cache is based on source DB characteristics, not processing state
-    paths['cache_dir'] = paths['tmp_dir'].parent / ".partition_cache"
-    paths['base'] = paths['cache_dir']  # Used by PartitionCache
-    paths['work_tracker'] = paths['tmp_dir'] / "work_tracker.db"
-    paths['output_dir'] = paths['tmp_dir'] / "worker_outputs"
-
+    # The engine keeps its partition inside the destination database and
+    # spools chunks under $TMPDIR, so nothing of a run lives in tmp_dir any
+    # more; the directory is only cleaned up if an older run left it behind.
+    paths['cache_dir'] = None
     return paths
 
 
@@ -88,9 +85,9 @@ def prepare_directories(
     Clean and create necessary directories based on mode.
 
     Mode behavior:
-        - "restart": Wipes output DB and temp directory (including cache)
+        - "restart": Wipes the output DB (and any leftover temp directory)
         - "resume": Preserves all existing state
-        - "reprocess": Wipes output DB but preserves temp directory (cache)
+        - "reprocess": Wipes the output DB
 
     Args:
         temp_paths: Dictionary of pipeline paths
@@ -104,16 +101,12 @@ def prepare_directories(
 
     temp_paths['dst_db'].parent.mkdir(parents=True, exist_ok=True)
 
-    # Clean temp directory only for restart mode (reprocess preserves cache)
-    if mode == 'restart' and temp_paths['tmp_dir'].exists():
-        shutil.rmtree(temp_paths['tmp_dir'])
-
-    # Create temp directories
-    temp_paths['tmp_dir'].mkdir(parents=True, exist_ok=True)
-    temp_paths['output_dir'].mkdir(exist_ok=True)
-
-    # Create cache directory (survives restarts, outside of tmp_dir)
-    temp_paths['cache_dir'].mkdir(parents=True, exist_ok=True)
+    # Leftovers of the retired pipeline (its shard directory and partition
+    # cache) are removed on restart; nothing is created.
+    if mode == 'restart':
+        for leftover in (temp_paths['tmp_dir'], temp_paths['tmp_dir'].parent / ".partition_cache"):
+            if leftover.exists():
+                shutil.rmtree(leftover)
 
 
 def prepare_vocabulary_index(filter_config: FilterConfig) -> FilterConfig:

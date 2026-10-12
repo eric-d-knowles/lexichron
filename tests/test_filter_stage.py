@@ -108,3 +108,26 @@ def test_flat_keyword_api_builds_same_configs(rocks, tmp_path):
                              spool_dir=str(tmp_path))
     assert set(fake_rocks.dump(out)) == {b"cat", b"woman", b"run"}
     assert not paths["whitelist"].exists()
+
+
+def test_a_run_leaves_no_temporary_directories(rocks, tmp_path, monkeypatch):
+    """The engine spools under $TMPDIR and keeps its partition in the
+    destination; the retired pipeline's processing_tmp and .partition_cache
+    must not reappear next to the databases."""
+    from ngramprep.ngram_filter.config import FilterConfig, PipelineConfig
+    from ngramprep.ngram_filter.pipeline.orchestrator import build_processed_db
+    src = tmp_path / "corpus" / "1grams.db"
+    src.parent.mkdir(parents=True)
+    db = fake_rocks.open(str(src), mode="rw", create_if_missing=True)
+    with db.write_batch() as wb:
+        for i in range(300):
+            wb.put(f"word{i}".encode(), _packed((1990, 1, 1)))
+    db.close()
+    spool = tmp_path / "spool"; spool.mkdir()
+    pc = PipelineConfig(src_db=src, dst_db=src.parent / "1grams_processed.db",
+                        tmp_dir=src.parent / "processing_tmp", mode="restart", num_workers=2,
+                        num_initial_work_units=8, output_whitelist_path=None, compact_after_ingest=False)
+    build_processed_db(filter_config=FilterConfig(min_len=1, alpha_only=False), pipeline_config=pc,
+                       spool_dir=str(spool))
+    assert sorted(p.name for p in src.parent.iterdir()) == ["1grams.db", "1grams_processed.db"]
+    assert list(spool.iterdir()) == []
