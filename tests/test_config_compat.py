@@ -43,3 +43,20 @@ def test_ui_resaves_old_file_in_the_new_layout(tmp_path):
     asyncio.run(scenario())
     saved = yaml.safe_load(proj.read_text())
     assert saved["corpus"]["ngram_size"] == 5 and "ngram_size" not in saved["acquire"]
+
+
+def test_dropped_filter_keys_are_ignored(tmp_path):
+    p = tmp_path / "lexichron.yaml"
+    p.write_text(textwrap.dedent(f"""
+        corpus:
+          release: '20200217'
+          language: eng-us
+          ngram_size: 1
+          db_path_stub: {tmp_path}
+        filter:
+          smart_partitioning: true
+          samples_per_worker: 50000
+          min_len: 4
+        """))
+    cfg = load_project(p)
+    assert cfg["filter"] == {"min_len": 4}

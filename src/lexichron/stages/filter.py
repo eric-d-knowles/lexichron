@@ -44,8 +44,6 @@ def filter_ngrams(
     mode: str = "resume",
     work_units: Optional[int] = None,
     compact_after_ingest: bool = True,
-    smart_partitioning: bool = True,
-    samples_per_worker: int = 50_000,
     chunk_entries: int = 200_000,
     spool_dir: Optional[str] = None,
     progress_path: Optional[str] = None,
@@ -89,10 +87,9 @@ def filter_ngrams(
         mode: "resume" continues from the destination's markers; "restart"
             deletes the destination first
         work_units: Number of key ranges to split the work into (default:
-            4 x workers, at least 64; more = better balance)
+            4 x workers, at least 64). The ranges are balanced by data
+            volume from the source's file metadata.
         compact_after_ingest: Compact the destination at the end
-        smart_partitioning: Balance the key ranges by sampling the source
-        samples_per_worker: Reservoir size per sampling worker
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)
         progress_path: Progress document for this run (set by the CLI)
@@ -130,7 +127,7 @@ def filter_ngrams(
         src_db=paths["src_db"], dst_db=paths["dst_db"], tmp_dir=paths["tmp_dir"],
         num_workers=workers or max(1, (__import__("os").cpu_count() or 2) - 1),
         num_initial_work_units=work_units, mode=mode,
-        use_smart_partitioning=smart_partitioning, samples_per_worker=int(samples_per_worker),
+        use_smart_partitioning=True,
         compact_after_ingest=compact_after_ingest,
         output_whitelist_path=paths["whitelist"] if output_vocabulary else None,
         output_whitelist_top_n=output_vocabulary_top_n,

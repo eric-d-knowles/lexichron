@@ -36,7 +36,7 @@ def test_filter_ngrams_from_plain_settings(rocks, no_spacy, tmp_path):
     paths = derive_paths(str(stub), 1, "20200217", "eng")
     _raw_unigrams(str(paths["src_db"]))
     out = stage.filter_ngrams(1, "20200217", "eng", str(stub), workers=2, mode="restart",
-                              smart_partitioning=False, output_vocabulary_top_n=2,
+                              output_vocabulary_top_n=2,
                               spool_dir=str(tmp_path), progress_path=str(tmp_path / "p.json"))
     data = fake_rocks.dump(out)
     assert set(data) == {b"cat", b"woman", b"run"}
@@ -52,7 +52,7 @@ def test_vocabulary_mode_lemmatizes_before_lookup(rocks, no_spacy, tmp_path):
     vocab.write_text("cat\t100\nwoman\t5\n")
     out = stage.filter_ngrams(1, "20200217", "eng", str(stub), vocabulary=str(vocab),
                               always_include=["the"], workers=2, mode="restart",
-                              smart_partitioning=False, output_vocabulary=False, spool_dir=str(tmp_path))
+                              output_vocabulary=False, spool_dir=str(tmp_path))
     data = fake_rocks.dump(out)
     # cats -> cat (in vocab), women -> woman (in vocab), "the" kept via always_include,
     # running -> run (not in vocab) and the rest -> <UNK> -> dropped (min_context_tokens=1)

@@ -61,6 +61,11 @@ def load_project(path: str | Path) -> Dict[str, Any]:
 _MOVED_KEYS = {("acquire", "ngram_size"): "corpus", ("filter", "ngram_size"): "corpus"}
 
 
+# Keys that no longer exist: dropped on load (the behaviour they selected
+# is now the only one), so files written by earlier versions still run.
+_DROPPED_KEYS = {("filter", "smart_partitioning"), ("filter", "samples_per_worker")}
+
+
 def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
     for (old_section, key), new_section in _MOVED_KEYS.items():
         section = data.get(old_section)
@@ -69,6 +74,10 @@ def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
             target = data.setdefault(new_section, None) or {}
             target.setdefault(key, value)
             data[new_section] = target
+    for section_name, key in _DROPPED_KEYS:
+        section = data.get(section_name)
+        if isinstance(section, dict):
+            section.pop(key, None)
     return data
 
 

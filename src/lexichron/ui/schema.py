@@ -26,7 +26,7 @@ HIDDEN = {"progress_path", "write_batch_size"}
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             "open_type", "compact_after_ingest",
             # filter
-            "work_units", "smart_partitioning", "samples_per_worker", "text_language",
+            "work_units", "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
@@ -87,8 +87,6 @@ LABELS: Dict[str, str] = {
     "output_vocabulary_spell_check": "Spell-check vocabulary",
     "mode": "Mode",
     "work_units": "Work units",
-    "smart_partitioning": "Balanced work units",
-    "samples_per_worker": "Sampling size",
 }
 
 # User-facing help, where the docstring is too terse or too technical.
@@ -133,9 +131,7 @@ HELP: Dict[str, str] = {
     "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
     "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",
     "mode": "resume = continue from what the destination already has; restart = delete it first.",
-    "work_units": "Key ranges the work is split into (default: 4 x workers). More = better balance.",
-    "smart_partitioning": "Balance the key ranges by sampling the source first (recommended).",
-    "samples_per_worker": "Reservoir size per sampling worker.",
+    "work_units": "Key ranges the work is split into, balanced by data volume (default: 4 x workers).",
 }
 
 
