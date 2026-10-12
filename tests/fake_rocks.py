@@ -96,6 +96,19 @@ class DB:
     def get_property(self, name):
         return str(len(self.data))
 
+    # SST metadata as rocks-shim 0.6 reports it: the fake pretends the sorted
+    # keys were flushed into files of `file_keys` entries each.
+    file_keys = 100
+
+    def live_files(self):
+        keys = sorted(self.data)
+        files = []
+        for i in range(0, len(keys), self.file_keys):
+            chunk = keys[i:i + self.file_keys]
+            size = sum(len(k) + len(self.data[k]) for k in chunk)
+            files.append((chunk[0], chunk[-1], size, 1))
+        return files
+
     def close(self):
         self.closed = True
 

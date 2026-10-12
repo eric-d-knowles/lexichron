@@ -142,3 +142,50 @@ def test_worker_scans_without_filling_the_cache(rocks, tmp_path):
     chunks, scanned, kept, _ = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
     assert scanned == 21 and kept == 20 and len(chunks) == 1
     assert fake_rocks._REGISTRY[str(src)].last_iterator_opts == (False, 2 << 20)
+
+
+def test_units_from_sst_metadata_balance_by_size():
+    from ngramprep.rangemap.units import units_from_live_files
+    # 64 files of 1 MB over a..., then 64 files of 1 MB at the far end; one
+    # 64 MB file of bookkeeping keys that must be ignored
+    files = [(f"a{i:03d}".encode(), f"a{i:03d}z".encode(), 1 << 20, 1) for i in range(64)]
+    files += [(f"z{i:03d}".encode(), f"z{i:03d}z".encode(), 1 << 20, 1) for i in range(64)]
+    files.append((b"__processed__/a", b"__processed__/z", 64 << 20, 1))
+    units = units_from_live_files(files, 8)
+    assert len(units) == 8 and units[0].start_key is None and units[-1].end_key is None
+    cuts = [u.end_key for u in units[:-1]]
+    assert cuts == sorted(cuts) and len(set(cuts)) == len(cuts)
+    # half the data is in the a-files, half in the z-files: the middle cut is at the boundary
+    assert sum(c < b"b" for c in cuts) == 3 and cuts[3] >= b"z"
+    # too few files -> None, so the caller samples instead
+    assert units_from_live_files(files[:5], 8) is None
+
+
+def test_plan_units_uses_sst_metadata_when_the_store_offers_it(rocks, tmp_path):
+    from ngramprep.rangemap.units import plan_units
+    src = tmp_path / "src.db"
+    _make_source(str(src), n=5000)                     # 10k keys -> 100 fake files
+    units = plan_units(src, 16, smart=True, log=lambda *_: None)
+    assert len(units) == 16
+    # every unit covers about the same amount of data (bytes, not keys: the
+    # source's values are 24 bytes in one half of the key space, 48 in the other)
+    data = {k: v for k, v in fake_rocks.dump(src).items() if not k.startswith(b"__")}
+    sizes = []
+    for u in units:
+        lo = u.start_key or b""
+        sizes.append(sum(len(k) + len(v) for k, v in data.items()
+                         if k >= lo and (u.end_key is None or k < u.end_key)))
+    assert sum(sizes) == sum(len(k) + len(v) for k, v in data.items())
+    assert max(sizes) <= 1.5 * min(sizes), sizes
+
+
+def test_plan_units_falls_back_to_sampling_without_live_files(rocks, tmp_path, monkeypatch):
+    from ngramprep.rangemap import units as units_mod
+    src = tmp_path / "src.db"
+    _make_source(str(src), n=200)
+    monkeypatch.setattr(fake_rocks.DB, "live_files", None)   # as if rocks-shim < 0.6
+    called = {}
+    monkeypatch.setattr(units_mod, "create_smart_work_units",
+                        lambda **kw: called.update(kw) or units_mod.create_uniform_work_units(kw["num_units"]))
+    units = units_mod.plan_units(src, 16, smart=True, log=lambda *_: None)
+    assert len(units) == 16 and called["num_sampling_workers"] == 8   # capped pool
