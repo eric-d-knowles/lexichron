@@ -126,7 +126,7 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
             done = _marker_stats(dst, units)
             todo = [u for u in units if u.unit_id not in done]
             prior = {"files": len(done),
-                     "entries": sum(int(d.get("entries", 0)) for d in done.values()),
+                     "entries": sum(int(d.get("kept", d.get("entries", 0))) for d in done.values()),
                      "bytes": 0, "unsized": 0}
             progress.set_totals(files_total=len(units), files_skipped=len(done), prior=prior)
             log(f"{len(units)} work units: {len(done)} already done, {len(todo)} to process "
@@ -169,11 +169,14 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                                                            extra={"scanned": scanned, "kept": kept})
                             scanned_total += scanned
                             kept_total += kept
-                            progress.file_done(u.unit_id, entries=written, chunks=len(chunk_paths),
+                            # Progress reports the records kept, which is the same
+                            # whatever the partition; `written` (entries in the chunk
+                            # files) varies with how many duplicates met inside a chunk.
+                            progress.file_done(u.unit_id, entries=kept, chunks=len(chunk_paths),
                                                uncompressed_bytes=0,
                                                counters={"scanned": scanned, "kept": kept})
-                            logger.info("Unit %s: scanned %s, kept %s, %.1fs", u.unit_id,
-                                        f"{scanned:,}", f"{kept:,}", secs)
+                            logger.info("Unit %s: scanned %s, kept %s (%s entries after in-chunk merging), %.1fs",
+                                        u.unit_id, f"{scanned:,}", f"{kept:,}", f"{written:,}", secs)
                         except Exception as exc:
                             ChunkIngestor.discard(chunk_paths)
                             msg = f"{u.unit_id}: {exc}"

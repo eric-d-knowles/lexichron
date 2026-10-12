@@ -88,6 +88,10 @@ def test_engine_maps_merges_marks_and_resumes(rocks, tmp_path):
     doc = read_progress(progress_path)
     assert doc["files_total"] == 8 and doc["files_done"] == 8 and doc["unit_label"] == "work units"
     assert doc["counters"] == {"scanned": 1010, "kept": 1000}
+    # Entries reports records kept, not chunk-file entries: the latter depends
+    # on how many duplicate output keys were merged inside a chunk, so it
+    # would differ between partitions of the same source.
+    assert doc["entries_written"] == 1000
     assert doc["phase"] == "ingesting" and doc["state"] == "running"   # caller finishes it
 
     # resume: nothing to do, partition reused, output unchanged
