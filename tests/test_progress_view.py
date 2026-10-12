@@ -178,3 +178,14 @@ def test_long_phase_heartbeat_keeps_updated_fresh(tmp_path):
     assert read_progress(p)["phase"] == "ingesting"       # back to normal after the phase
     r.finish("done")
     assert read_progress(p)["state"] == "done"
+
+
+def test_filter_runs_describe_work_units_not_files():
+    from lexichron.ui.progress_view import summarize
+    doc = {"stage": "filter", "state": "running", "unit_label": "work units", "files_total": 80,
+           "files_done": 10, "entries_written": 1000, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T00:01:00+00:00", "current": ["u1", "u2", "u3"],
+           "phases": {"parsing": 2, "parsed": 1}}
+    s = summarize(doc, now=__import__("datetime").datetime.fromisoformat("2026-10-12T00:01:00+00:00"), job_gone=False)
+    assert s["current_text"] == "3 work units in flight: 2 scanning · 1 scanned, waiting to ingest"
+    assert "10/80 work units" in s["headline"]

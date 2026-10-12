@@ -34,11 +34,11 @@ filter:
   alpha_only: true
   # ascii_only: true           # default: on for English, off otherwise
   min_len: 3
-  min_context_tokens: 1        # 1 for unigrams; 2+ for multigrams
+  # min_context_tokens: 2      # default: 1 for unigrams, 2 for longer n-grams
   bin_size: 1                  # 5 = five-year bins
-  # vocabulary: /scratch/USERNAME/NLP_corpora/Google_Books/20200217/eng-us/1gram_files/1grams_processed.db/whitelist.txt
+  # vocabulary: ...            # default for 2-5-grams: this corpus's 1grams_processed.db/whitelist.txt
   # always_include: [he, she, his, her]
-  output_vocabulary: true      # write <database>/whitelist.txt (unigrams)
+  # output_vocabulary: true    # write <database>/whitelist.txt; default: unigrams only
   output_vocabulary_top_n: 30000
   output_vocabulary_year_range: [1968, 2019]
   output_vocabulary_spell_check: true

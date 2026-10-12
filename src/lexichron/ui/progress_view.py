@@ -154,20 +154,27 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         detail.append(f"about {fmt_duration(eta)} left")
     current = list(doc.get("current") or [])
     phases = doc.get("phases") or {}
+    # What a worker does with a unit differs by stage: acquisition downloads
+    # and parses a file, filtering scans a key range.
+    if doc.get("stage") == "filter":
+        phase_labels = (("queued", "waiting for a worker"), ("parsing", "scanning"),
+                        ("parsed", "scanned, waiting to ingest"), ("ingesting", "ingesting"))
+    else:
+        phase_labels = (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
+                        ("parsed", "parsed, waiting to ingest"), ("ingesting", "ingesting"))
     if not current:
         current_text = ""
     elif phases:
         bits = []
-        for key, label in (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
-                           ("parsed", "parsed, waiting to ingest"), ("ingesting", "ingesting")):
+        for key, label in phase_labels:
             n = int(phases.get(key, 0))
             if n:
                 bits.append(f"{n} {label}")
-        current_text = f"{len(current)} files in flight: " + " · ".join(bits)
+        current_text = f"{len(current)} {unit} in flight: " + " · ".join(bits)
         if doc.get("ingesting"):
             current_text += f"  ({doc['ingesting']})"
     else:
-        current_text = f"{len(current)} files in flight"
+        current_text = f"{len(current)} {unit} in flight"
     corpus = doc.get("corpus") or {}
     corpus_text = ""
     if corpus and (corpus.get("files") or 0) > 0:

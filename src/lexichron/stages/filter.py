@@ -31,12 +31,12 @@ def filter_ngrams(
     alpha_only: bool = True,
     ascii_only: Optional[bool] = None,
     min_len: int = 3,
-    min_context_tokens: int = 1,
+    min_context_tokens: Optional[int] = None,
     bin_size: int = 1,
     vocabulary: Optional[str] = None,
     vocabulary_top_n: Optional[int] = None,
     always_include: Optional[List[str]] = None,
-    output_vocabulary: bool = True,
+    output_vocabulary: Optional[bool] = None,
     output_vocabulary_top_n: Optional[int] = 30_000,
     output_vocabulary_year_range: Optional[Tuple[int, int]] = None,
     output_vocabulary_spell_check: bool = False,
@@ -69,16 +69,19 @@ def filter_ngrams(
         ascii_only: With alpha_only, also reject letters outside A-Z. Default:
             on for English, off for other languages
         min_len: Replace tokens shorter than this with <UNK>
-        min_context_tokens: Drop n-grams with fewer than this many non-<UNK> tokens
+        min_context_tokens: Drop n-grams with fewer than this many non-<UNK>
+            tokens. Default: 1 for unigrams, 2 for longer n-grams
         bin_size: Aggregate years into bins (1 = annual, 5 = five-year bins)
         vocabulary: Vocabulary file (one token per line, counts optional):
             tokens not in it become <UNK> and the other filters are skipped.
-            Typically the unigram stage's output for the same corpus.
+            Unigrams use none. Longer n-grams default to this corpus's own
+            unigram vocabulary (<...>/1gram_files/1grams_processed.db/whitelist.txt),
+            which the unigram filter writes; the stage refuses to run without one.
         vocabulary_top_n: Use only the first N tokens of the vocabulary file
         always_include: Tokens kept even if not in the vocabulary (e.g. focal
             terms the unigram stage dropped as stopwords: he, she, ...)
         output_vocabulary: Write a vocabulary file from the result
-            (<database>/whitelist.txt). Meant for unigrams.
+            (<database>/whitelist.txt). Default: on for unigrams, off otherwise
         output_vocabulary_top_n: Keep the N most frequent tokens
         output_vocabulary_year_range: Only tokens present in every year of
             [start, end], e.g. [1968, 2019]
@@ -103,6 +106,19 @@ def filter_ngrams(
     lang = text_language or text_language_for(repo_corpus_id)
     if ascii_only is None:
         ascii_only = lang == "en"
+    ngram_size = int(ngram_size)
+    if min_context_tokens is None:
+        min_context_tokens = 1 if ngram_size == 1 else 2
+    if output_vocabulary is None:
+        output_vocabulary = ngram_size == 1
+    if vocabulary is None and ngram_size > 1:
+        unigram = derive_paths(db_path_stub, 1, str(repo_release_id), str(repo_corpus_id))["whitelist"]
+        if not unigram.exists():
+            raise FileNotFoundError(
+                f"{ngram_size}-grams are filtered against a vocabulary, and none was given or found at "
+                f"{unigram}. Run the unigram filter for this corpus first, or set vocabulary.")
+        vocabulary = str(unigram)
+        print(f"Vocabulary:   {vocabulary} (this corpus's unigram vocabulary)")
 
     stop_set = None
     if drop_stopwords and vocabulary is None:
@@ -122,7 +138,7 @@ def filter_ngrams(
         always_include=set(always_include) if always_include else None,
         bin_size=int(bin_size),
     )
-    paths = derive_paths(db_path_stub, int(ngram_size), str(repo_release_id), str(repo_corpus_id))
+    paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     pipeline_config = PipelineConfig(
         src_db=paths["src_db"], dst_db=paths["dst_db"], tmp_dir=paths["tmp_dir"],
         num_workers=workers or max(1, (__import__("os").cpu_count() or 2) - 1),

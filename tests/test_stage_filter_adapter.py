@@ -57,3 +57,32 @@ def test_vocabulary_mode_lemmatizes_before_lookup(rocks, no_spacy, tmp_path):
     # cats -> cat (in vocab), women -> woman (in vocab), "the" kept via always_include,
     # running -> run (not in vocab) and the rest -> <UNK> -> dropped (min_context_tokens=1)
     assert set(data) == {b"cat", b"woman", b"the"}
+
+
+def _raw_bigrams(path):
+    import struct
+    db = fake_rocks.open(path, mode="rw", create_if_missing=True)
+    with db.write_batch() as wb:
+        for key in (b"the cat", b"cats run", b"women run", b"the the"):
+            wb.put(key, struct.pack("<3Q", 1990, 2, 1))
+    db.close()
+
+
+def test_multigrams_default_to_the_corpus_unigram_vocabulary(rocks, no_spacy, tmp_path):
+    stub = tmp_path / "corpora"
+    paths2 = derive_paths(str(stub), 2, "20200217", "eng")
+    _raw_bigrams(str(paths2["src_db"]))
+    # no unigram whitelist yet: refuse rather than filter 2-grams without a vocabulary
+    with pytest.raises(FileNotFoundError) as exc:
+        stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path))
+    assert "unigram filter" in str(exc.value)
+    # the unigram stage's output is picked up automatically
+    wl = derive_paths(str(stub), 1, "20200217", "eng")["whitelist"]
+    wl.parent.mkdir(parents=True)
+    wl.write_text("cat\t100\nrun\t50\n")
+    out = stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path))
+    data = fake_rocks.dump(out)
+    # min_context_tokens defaults to 2 for bigrams: only n-grams with two vocabulary lemmas survive
+    assert set(data) == {b"cat run"}
+    # and no whitelist is written for multigrams by default
+    assert not paths2["whitelist"].exists()

@@ -20,11 +20,11 @@ __all__ = ["Field", "Section", "stage_sections", "SLURM_FIELDS", "parse_args_doc
            "LABELS", "HELP", "ADVANCED"]
 
 # Settings that are not meaningful in a form (set by the CLI / runtime).
-HIDDEN = {"progress_path", "write_batch_size"}
+HIDDEN = {"progress_path", "write_batch_size", "open_type"}   # open_type: write:packed24 is the only sensible value
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
-            "open_type", "compact_after_ingest",
+            "compact_after_ingest",
             # filter
             "work_units", "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path"}
@@ -92,7 +92,7 @@ LABELS: Dict[str, str] = {
 # User-facing help, where the docstring is too terse or too technical.
 HELP: Dict[str, str] = {
     "release": "Google Books n-gram release. Only the February 2020 release is supported.",
-    "language": "Which Google Books corpus to download (eng = all English, eng-us, eng-gb, eng-fiction, ...).",
+    "language": "Which Google Books corpus (eng = all English, eng-us, eng-gb, eng-fiction, ...).",
     "db_path_stub": ("Where Google Books corpora are kept, e.g. /scratch/<you>/NLP_corpora/Google_Books. "
                      "Each corpus goes in <dir>/<release>/<language>/<n>gram_files/, with its database, "
                      "this settings file and its run logs. Created if missing."),
@@ -108,7 +108,7 @@ HELP: Dict[str, str] = {
                          "working class, middle class  ->  working-class, middle-class."),
     "random_seed": "Seed for shuffling the download order (blank = no shuffle).",
     "open_type": "RocksDB profile. Leave at write:packed24 unless you know why.",
-    "compact_after_ingest": "Fold the per-file data into a compact database when done (recommended).",
+    "compact_after_ingest": "Compact the database when done (recommended).",
     "chunk_entries": "Entries per spooled chunk. Lower on small allocations, raise on large nodes.",
     "spool_dir": "Where workers write chunk files (blank = $TMPDIR; node-local disk is ideal).",
     "archive_path_stub": "If set, compress the finished database into this directory (.tar.zst).",
@@ -120,18 +120,20 @@ HELP: Dict[str, str] = {
     "alpha_only": "Replace tokens that are not purely alphabetic (numbers, punctuation) with <UNK>.",
     "ascii_only": "With 'Letters only', also reject letters outside A-Z. Default: on for English only.",
     "min_len": "Replace tokens shorter than this with <UNK>.",
-    "min_context_tokens": "Drop n-grams with fewer than this many non-<UNK> tokens (1 for unigrams, 2+ for multigrams).",
+    "min_context_tokens": "Drop n-grams with fewer than this many non-<UNK> tokens. Blank: 1 for unigrams, 2 for longer n-grams.",
     "bin_size": "Aggregate years into bins: 1 = annual, 5 = five-year bins.",
-    "vocabulary": ("Vocabulary file from the unigram stage (its whitelist.txt). Tokens not in it become <UNK> "
-                   "and the other filters are skipped. Leave blank for unigrams."),
+    "vocabulary": ("Vocabulary file (whitelist.txt): tokens not in it become <UNK> and the other filters are "
+                   "skipped. Blank: none for unigrams; for longer n-grams, this corpus's own unigram vocabulary, "
+                   "which the unigram filter writes."),
     "vocabulary_top_n": "Use only the first N tokens of the vocabulary file.",
     "always_include": "Comma-separated tokens kept even if not in the vocabulary (e.g. he, she, his, her).",
-    "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. On for unigrams, off for multigrams.",
+    "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams, off for longer n-grams.",
     "output_vocabulary_top_n": "How many of the most frequent tokens the vocabulary keeps.",
     "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
     "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",
     "mode": "resume = continue from what the destination already has; restart = delete it first.",
     "work_units": "Key ranges the work is split into, balanced by data volume (default: 4 x workers).",
+    "filter.workers": "Parallel filtering workers. Blank = one per CPU, minus one. Slurm jobs use the job's CPU count automatically.",
 }
 
 
@@ -234,7 +236,7 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
         required = p.default is inspect.Parameter.empty
         key = api_to_corpus.get(pname, pname)
         f = Field(key, _kind_for(ann, default, key), default, required,
-                  CHOICES.get(key), HELP.get(key) or docs.get(pname, ""),
+                  CHOICES.get(key), HELP.get(f"{stage}.{key}") or HELP.get(key) or docs.get(pname, ""),
                   api_name=pname if key != pname else None,
                   label=LABELS.get(key), advanced=key in ADVANCED)
         (corpus if pname in api_to_corpus else stage_sec).fields.append(f)
