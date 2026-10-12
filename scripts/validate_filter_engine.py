@@ -111,6 +111,13 @@ def main():
 
     from ngramprep.ngram_acquire.db.build_path import build_db_path
     src = Path(build_db_path(args.stub, args.ngram_size, args.release, args.language))
+    if not (src / "CURRENT").exists():
+        release_dir = Path(args.stub) / args.release
+        found = sorted(p.parent.parent.name + "/" + p.parent.name
+                       for p in release_dir.glob(f"*/{args.ngram_size}gram_files/{args.ngram_size}grams.db/CURRENT"))
+        sys.exit(f"no acquired database at {src}\n"
+                 f"corpora with {args.ngram_size}-gram databases under {release_dir}: "
+                 + (", ".join(found) if found else "none") + "\n(check --language and --release)")
     base = src.parent
     legacy_dst = base / f"{args.ngram_size}grams_processed.legacy.db"
     engine_dst = base / f"{args.ngram_size}grams_processed.engine.db"
