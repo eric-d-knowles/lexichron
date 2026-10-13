@@ -245,6 +245,8 @@ class LexichronApp(App):
         bridge_dir = default_bridge_dir()
         self.bridge: Optional[HostBridge] = HostBridge(bridge_dir) if bridge_dir else None
         self._status: Dict[str, Any] = {"jobs": None, "jobs_error": "", "docs": [], "selected": None, "log_lines": []}
+        self._gathering = False
+        self._squeue_at = float("-inf")
         self.proc: Optional[subprocess.Popen] = None
 
     @property
@@ -639,31 +641,44 @@ class LexichronApp(App):
         self.notify(f"Removed {removed} run{'s' if removed != 1 else ''}")
 
     # -- jobs & runs ----------------------------------------------------------------
+    SQUEUE_EVERY_S = 15.0        # Slurm is asked this often; the run files every refresh
+
     def refresh_jobs(self) -> None:
         """Periodic refresh. All the waiting (Slurm through the bridge, the
         run directories and progress files on a networked filesystem, the
         log tail) happens in a worker thread; the UI thread only paints the
-        snapshot, so typing never stalls behind a slow squeue."""
+        snapshot, so typing never stalls behind a slow squeue. A refresh
+        that is still waiting is left alone rather than joined by another:
+        a slow squeue must not be asked again before it has answered."""
+        if self._gathering:
+            return
+        self._gathering = True
         self._gather_status()
 
-    @work(thread=True, exclusive=True, group="status")
+    @work(thread=True, group="status")
     def _gather_status(self) -> None:
         try:
             snap = self._collect_status()
         except Exception as exc:                      # pragma: no cover - defensive
             logging.getLogger(__name__).warning("refresh failed: %s", exc)
             snap = {"error": str(exc)}
+        finally:
+            self._gathering = False
         self.call_from_thread(self._apply_status, snap)
 
     def _collect_status(self) -> Dict[str, Any]:
         """Everything the Progress tab shows, gathered off the UI thread."""
-        jobs: Optional[List[dict]] = None
-        jobs_error = ""
-        if self.bridge and self.bridge.available():
+        import time as _time
+        jobs: Optional[List[dict]] = self._status.get("jobs")
+        jobs_error = self._status.get("jobs_error", "")
+        if self.bridge and self.bridge.available() and \
+                _time.monotonic() - self._squeue_at >= self.SQUEUE_EVERY_S:
             try:
                 jobs = self.bridge.squeue(user=getpass.getuser())
+                jobs_error = ""
             except (BridgeUnavailable, TimeoutError) as exc:
                 jobs_error = str(exc)
+            self._squeue_at = _time.monotonic()
         dirs = self._run_dirs()
         docs = [(d, read_progress(d / "progress.json")) for d in dirs]
         selected = self.selected_run if self.selected_run in dirs else (dirs[0] if dirs else None)
