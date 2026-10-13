@@ -38,6 +38,7 @@ filter:
   bin_size: 1                  # 5 = five-year bins
   # vocabulary: ...            # default for 2-5-grams: this corpus's 1grams_processed.db/whitelist.txt
   # always_include: [he, she, his, her]
+  # pivot: true               # year-keyed database for training; default: 2-5-grams only
   # output_vocabulary: true    # write <database>/whitelist.txt; default: unigrams only
   output_vocabulary_top_n: 30000
   output_vocabulary_year_range: [1968, 2019]

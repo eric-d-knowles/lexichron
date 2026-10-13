@@ -43,7 +43,7 @@ def filter_ngrams(
     output_vocabulary_spell_check: bool = False,
     workers: Optional[int] = None,
     mode: str = "resume",
-    output: Optional[str] = None,
+    pivot: Optional[bool] = None,
     compact_after_ingest: bool = True,
     chunk_entries: int = 200_000,
     spool_dir: Optional[str] = None,
@@ -94,12 +94,11 @@ def filter_ngrams(
         workers: Worker processes (default: CPUs - 1)
         mode: "resume" continues from the destination's markers; "restart"
             deletes the destination first
-        output: "processed" writes <n>grams_processed.db (keyed by n-gram, a
-            packed year list each; the vocabulary is built from it) or
-            "pivoted" writes <n>grams_pivoted.db (keyed year-first, one
-            record per year and n-gram, what training reads) in one pass
-            from the raw database. Default: processed for unigrams, pivoted
-            for longer n-grams
+        pivot: Write <n>grams_pivoted.db (keyed year-first, one record per
+            year and n-gram: what training reads) in one pass from the raw
+            database, instead of <n>grams_processed.db (keyed by n-gram, a
+            packed year list each: what the vocabulary is built from).
+            Default: off for unigrams, on for longer n-grams
         compact_after_ingest: Compact the destination at the end
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)
@@ -117,15 +116,14 @@ def filter_ngrams(
     ngram_size = int(ngram_size)
     if min_context_tokens is None:
         min_context_tokens = 1 if ngram_size == 1 else 2
-    if output is None:
-        output = "processed" if ngram_size == 1 else "pivoted"
-    if output not in ("processed", "pivoted"):
-        raise ValueError(f"output must be 'processed' or 'pivoted', not {output!r}")
+    if pivot is None:
+        pivot = ngram_size > 1
+    output = "pivoted" if pivot else "processed"
     if output_vocabulary is None:
-        output_vocabulary = output == "processed" and ngram_size == 1
-    if output_vocabulary and output == "pivoted":
-        raise ValueError("a vocabulary is built from a processed database; set output to processed "
-                         "or turn off output_vocabulary")
+        output_vocabulary = not pivot and ngram_size == 1
+    if output_vocabulary and pivot:
+        raise ValueError("a vocabulary is built from an n-gram-keyed database; turn off pivot "
+                         "or output_vocabulary")
     if no_vocabulary and vocabulary:
         raise ValueError("no_vocabulary is set but a vocabulary file is given as well; choose one")
     if vocabulary is None and ngram_size > 1 and not no_vocabulary:

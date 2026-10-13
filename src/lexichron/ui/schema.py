@@ -26,7 +26,7 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type"}   # open_type: write
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             "compact_after_ingest",
             # filter
-            "text_language", "output",
+            "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
@@ -38,7 +38,6 @@ CHOICES: Dict[str, List[str]] = {
     "open_type": ["write:packed24", "write", "read:packed24", "read"],
     "language": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"],
     "mode": ["resume", "restart"],
-    "output": ["processed", "pivoted"],
     "text_language": ["en", "fr", "de", "it", "es", "ru", "he", "zh"],
 }
 
@@ -49,7 +48,7 @@ ORDER = ["release", "language", "ngram_size", "db_path_stub",
          # filter
          "lowercase", "lemmatize", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
          "min_context_tokens", "bin_size", "vocabulary", "no_vocabulary", "always_include",
-         "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
+         "pivot", "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
          "workers"]
 
 # Plain-language labels for the form (settings-file keys stay as they are).
@@ -81,7 +80,7 @@ LABELS: Dict[str, str] = {
     "bin_size": "Year bin size",
     "vocabulary": "Vocabulary file",
     "no_vocabulary": "No vocabulary",
-    "output": "Output",
+    "pivot": "Pivot by year",
     "vocabulary_top_n": "Vocabulary top N",
     "always_include": "Always keep",
     "output_vocabulary": "Write vocabulary",
@@ -128,7 +127,7 @@ HELP: Dict[str, str] = {
                    "skipped. Blank: none for unigrams; for longer n-grams, this corpus's own unigram vocabulary, "
                    "which the unigram filter writes."),
     "no_vocabulary": "Filter 2-5-grams with the rule filters alone, without a vocabulary. Rarely wanted: the result is far larger.",
-    "output": "Blank: a processed database (keyed by n-gram) for unigrams, which the vocabulary comes from; a pivoted database (keyed by year, what training reads) for longer n-grams.",
+    "pivot": "Write the database keyed by year then n-gram (what training reads) instead of by n-gram (what the vocabulary is built from). Blank: off for unigrams, on for longer n-grams.",
     "vocabulary_top_n": "Use only the first N tokens of the vocabulary file.",
     "always_include": "Comma-separated tokens kept even if not in the vocabulary (e.g. he, she, his, her).",
     "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams, off for longer n-grams.",

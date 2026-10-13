@@ -339,7 +339,7 @@ each time:
    n-gram, one record per (year, n-gram), which is what training reads.
    Filtering and pivoting are one pass over the raw database; raw spellings
    that collapse onto one n-gram are summed by the database's merge
-   operator. (`output: processed` writes an n-gram-keyed database instead.)
+   operator. (*Pivot by year* off writes an n-gram-keyed database instead.)
 
 The work is split into key ranges balanced by data volume (from the source
 database's own file metadata, so there is no pre-scan), worker processes

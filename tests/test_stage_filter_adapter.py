@@ -78,14 +78,14 @@ def test_multigrams_default_to_the_corpus_unigram_vocabulary(rocks, no_spacy, tm
     assert "unigram filter" in str(exc.value)
     # the explicit override: rule filters only (the_the -> dropped, cats_run -> cat run)
     out = stage.filter_ngrams(2, "20200217", "eng", str(stub), no_vocabulary=True, workers=2, mode="restart",
-                              output="processed", spool_dir=str(tmp_path))
+                              pivot=False, spool_dir=str(tmp_path))
     assert b"cat run" in fake_rocks.dump(out)
     # the unigram stage's output is picked up automatically
     wl = derive_paths(str(stub), 1, "20200217", "eng")["whitelist"]
     wl.parent.mkdir(parents=True)
     wl.write_text("cat\t100\nrun\t50\n")
     out = stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path),
-                              output="processed", progress_path=str(tmp_path / "p.json"))
+                              pivot=False, progress_path=str(tmp_path / "p.json"))
     data = fake_rocks.dump(out)
     # the run records which vocabulary it applied, for the Progress tab
     import json
