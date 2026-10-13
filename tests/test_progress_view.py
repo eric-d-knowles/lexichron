@@ -249,9 +249,15 @@ def test_meters_keep_the_three_record_counts_apart():
            "updated": "2026-10-12T00:10:00+00:00", "counters": {"lines": 1234, "inserted": 500},
            "corpus": {"files": 40, "entries": 2000, "bytes": 20 << 30, "lines": 5000, "unsized": 0}}
     groups = dict(meters(acq, summarize(acq, now=now, job_gone=False)))
-    records = {label: value for label, value, _ in groups["Records"]}
-    assert records == {"Lines read": "1,234", "Parsed": "5.0 GB", "Inserted": "500", "In database": "—"}
-    assert [label for label, _, _ in groups["Whole corpus"]] == ["Files", "Lines read", "Inserted", "Parsed"]
+    session = {label: value for label, value, _ in groups["Records \u2013 this session"]}
+    assert session == {"Lines read": "1,234", "Parsed": "5.0 GB", "Inserted": "500"}
+    # the database is cumulative over acquisition jobs, so it sits with the corpus totals; no file count there
+    corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
+    assert corpus == {"Lines read": "5,000", "Parsed": "20.0 GB", "Inserted": "2,000", "In database": "\u2014"}
+    # a filter document written before the unit label was recorded still counts work units
+    old = {"stage": "filter", "state": "running", "files_total": 8, "files_done": 1, "entries_written": 1,
+           "started": "2026-10-12T00:00:00+00:00", "updated": "2026-10-12T00:10:00+00:00"}
+    assert dict(meters(old, summarize(old, now=now, job_gone=False)))["Progress"][0][0] == "Work units"
 
 
 def test_in_flight_meters_follow_the_stage():

@@ -130,7 +130,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     else:
         status = state
     parts = [status + (f" {where_txt}" if where_txt else "")]
-    unit = doc.get("unit_label") or "files"
+    unit = unit_label(doc)
     if total:
         parts.append(f"{done}/{total} {unit}" + (f" ({percent:.0f}%)" if percent is not None else ""))
     else:
@@ -227,6 +227,13 @@ def _pct(part: float, whole: float) -> str:
     return f"{100.0 * part / whole:.1f}%" if whole else ""
 
 
+def unit_label(doc: Dict[str, Any]) -> str:
+    """What a run's progress counts: files for acquisition, work units (key
+    ranges) for filtering. Filter documents written before the label was
+    recorded still count work units."""
+    return doc.get("unit_label") or ("work units" if doc.get("stage") == "filter" else "files")
+
+
 def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
     """Groups of ``(label, value, note)`` for one run, from its progress
     document and :func:`summarize`'s figures. The groups depend on the stage.
@@ -238,7 +245,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
     stage = doc.get("stage") or "acquire"
     counters = doc.get("counters") or {}
     database = doc.get("database") or {}
-    unit = doc.get("unit_label") or "files"
+    unit = unit_label(doc)
     done, total, failed = info["done"], info["total"], info["failed"]
 
     progress_tiles = [
@@ -294,24 +301,24 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             tiles.append(("Too few real tokens", f"{dropped:,}", _pct(dropped, ngrams) + " of n-grams"))
             groups.append(("Dropped by rule", tiles))
     else:
+        # This session's figures, then the running totals over every
+        # acquisition job that has contributed to the database. The database
+        # itself is cumulative, so its record count belongs with the latter.
         lines = int(counters.get("lines", 0))
-        groups.append(("Records", [
+        groups.append(("Records \u2013 this session", [
             ("Lines read", f"{lines:,}", "raw data lines"),
             ("Parsed", fmt_bytes(float(doc.get("uncompressed_bytes") or 0)), "uncompressed"),
             ("Inserted", f"{int(counters.get('inserted', doc.get('entries_written', 0))):,}", "to the database"),
-            db_tile(),
         ]))
         corpus = doc.get("corpus") or {}
-        if (corpus.get("files") or 0) > 0:
-            all_files = int(doc.get("files_total", 0))
-            tiles = [("Files", f"{int(corpus['files']):,}/{all_files:,}" if all_files else f"{int(corpus['files']):,}",
-                      "across all jobs")]
-            if corpus.get("lines"):
-                tiles.append(("Lines read", f"{int(corpus['lines']):,}", ""))
-            tiles += [("Inserted", f"{int(corpus.get('entries', 0)):,}", ""),
-                      ("Parsed", fmt_bytes(float(corpus.get("bytes", 0))), "uncompressed")]
-            unsized = int(corpus.get("unsized", 0))
-            if unsized:
-                tiles.append(("Unsized", f"{unsized:,}", "files done before sizes were recorded"))
-            groups.append(("Whole corpus", tiles))
+        tiles = []
+        if "lines" in corpus:
+            tiles.append(("Lines read", f"{int(corpus.get('lines', 0)):,}", "raw data lines"))
+        tiles += [("Parsed", fmt_bytes(float(corpus.get("bytes", 0))), "uncompressed"),
+                  ("Inserted", f"{int(corpus.get('entries', 0)):,}", "to the database"),
+                  db_tile()]
+        unsized = int(corpus.get("unsized", 0))
+        if unsized:
+            tiles.append(("Unsized", f"{unsized:,}", "files done before sizes were recorded"))
+        groups.append(("Records \u2013 entire corpus", tiles))
     return groups

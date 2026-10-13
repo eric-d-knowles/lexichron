@@ -387,12 +387,15 @@ Tabs:
   file; *Submit* also submits it and shows the job id.
 - **Progress** — the latest runs, newest first, whether started with *Run
   here* or by a Slurm job: a progress bar, what is being worked on, the
-  run's inputs, a grid of meters, and the tail of the run's log, refreshed
-  every few seconds. The meters keep three record counts apart: what was
-  *read* (raw data lines for acquisition, source records for filtering),
-  what was *inserted* into the database (fewer: records with the same key
-  merge before insertion) and what the final database *holds* (fewer again,
-  exact once compacted). A filter run also shows what each rule removed:
+  run's inputs, a grid of meters, and the tail of the run's log (collapsed;
+  click *Log* to open it), refreshed every few seconds. The meters keep
+  three record counts apart: what was *read* (raw data lines for
+  acquisition, source records for filtering), what was *inserted* into the
+  database (fewer: records with the same key merge before insertion) and
+  what the final database *holds* (fewer again, exact once compacted). An
+  acquisition run shows this session's figures and, since the database
+  accumulates over acquisition jobs, the totals for the entire corpus with
+  the database's count among them. A filter run also shows what each rule removed:
   tokens that were not alphabetic, too short, stopwords or not in the
   vocabulary, and n-grams dropped for having too few real tokens. The
   Runs table's *Records* column is the records kept so far while a run is
