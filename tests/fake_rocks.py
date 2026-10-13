@@ -7,6 +7,8 @@ needs. Install with ``monkeypatch.setattr(api, "rs", fake_rocks)``.
 """
 from __future__ import annotations
 
+import builtins
+
 import bisect
 import json
 import os
@@ -93,6 +95,18 @@ class DB:
     def compact_all(self):
         self.compactions += 1
 
+    def ingest(self, paths, move=True, write_global_seqno=False):
+        import os
+        import pickle
+        for p in paths:
+            with builtins.open(p, "rb") as fh:
+                _compression, entries = pickle.load(fh)
+            for kind, k, v in entries:
+                self._apply(kind, k, v)
+            self.ingests = getattr(self, "ingests", 0) + 1
+            if move:
+                os.remove(p)
+
     def get_property(self, name):
         if name == "rocksdb.total-sst-files-size":
             return str(sum(len(k) + len(v) for k, v in self.data.items()))
@@ -113,6 +127,41 @@ class DB:
 
     def close(self):
         self.closed = True
+
+
+class SstFileWriter:
+    """Writes a 'file' that the fake DB can ingest: a pickled list of
+    (kind, key, value) entries, kind 'put' or 'merge', in sorted key order."""
+
+    def __init__(self, *, compression="none", compression_level=3):
+        if compression not in ("none", "lz4", "zstd"):
+            raise ValueError(f"Unknown compression: {compression}")
+        self.compression = compression
+        self.path = None
+        self.entries = []
+
+    def open(self, path):
+        self.path = path
+
+    def put(self, k, v):
+        self._add("put", k, v)
+
+    def merge(self, k, v):
+        self._add("merge", k, v)
+
+    def _add(self, kind, k, v):
+        if self.entries and bytes(k) <= self.entries[-1][1]:
+            raise RuntimeError("keys must be added in increasing order")
+        self.entries.append((kind, bytes(k), bytes(v)))
+
+    def finish(self):
+        import pickle
+        with builtins.open(self.path, "wb") as fh:
+            pickle.dump((self.compression, self.entries), fh)
+
+    def file_size(self):
+        import os
+        return os.path.getsize(self.path) if self.path else 0
 
 
 def open(path, mode="rw", profile="", create_if_missing=False, **_):

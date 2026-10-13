@@ -39,14 +39,23 @@ class ChunkIngestor:
         self.files_completed = 0
 
     def ingest_file(self, filename: str, chunk_paths: Iterable[str], *,
-                    uncompressed_bytes: int = 0, extra: Optional[dict] = None) -> int:
+                    uncompressed_bytes: int = 0, extra: Optional[dict] = None,
+                    entries: Optional[int] = None) -> int:
         """Ingest all chunks of one shard, then mark it processed (recording
         its entry count, uncompressed size and any ``extra`` figures) and
-        persist."""
+        persist. A chunk is replayed through a write batch, or, when it is an
+        SST file (``.sst``, see SstChunkWriter), ingested as a file; the
+        caller passes ``entries`` for those, since a file ingest does not
+        count them."""
         chunk_paths = list(chunk_paths)
         written = 0
         for path in chunk_paths:
-            written += self._ingest_chunk(path)
+            if path.endswith(".sst"):
+                self._ingest_sst(path)
+            else:
+                written += self._ingest_chunk(path)
+        if entries is not None:
+            written = int(entries)
 
         with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
             wb.put(self.marker_prefix + filename.encode("utf-8"),
@@ -85,6 +94,23 @@ class ChunkIngestor:
         except OSError as exc:
             logger.warning("Could not remove ingested chunk %s: %s", path, exc)
         return n
+
+    def _ingest_sst(self, path: str) -> None:
+        # One file per call: a unit's chunks overlap one another in key space
+        # (output keys are not in source order), and files ingested together
+        # must not overlap. The file is moved, not copied.
+        try:
+            self.db.ingest([path], move=True)
+        except Exception:
+            logger.error("SST ingest error for %s; aborting to prevent data loss", path)
+            raise
+        self.write_batches += 1
+        logger.info("Ingested SST %s", os.path.basename(path))
+        if os.path.exists(path):                  # a store that copied rather than moved
+            try:
+                os.remove(path)
+            except OSError:
+                pass
 
     @staticmethod
     def discard(chunk_paths: Iterable[str]) -> None:

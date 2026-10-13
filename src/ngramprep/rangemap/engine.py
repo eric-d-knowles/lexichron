@@ -58,6 +58,8 @@ class RangeMapConfig:
     chunk_entries: int = 200_000
     spool_dir: Optional[Path] = None         # default: system temp (node-local in Slurm)
     compact_after: bool = True
+    output: str = "chunks"                   # "chunks" (replayed by the parent) | "sst" (ingested as files)
+    sst_compression: str = "zstd"
     progress: Optional[ProgressReporter] = None
     log: Callable[[str], None] = print
 
@@ -150,7 +152,8 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                         progress.file_started(u.unit_id)
                         fut = pool.submit(map_unit, index_of[u.unit_id], u.unit_id, u.start_key, u.end_key,
                                           str(cfg.src_db), None, spool_path, cfg.chunk_entries,
-                                          cfg.read_profile)
+                                          cfg.read_profile, output=cfg.output,
+                                          sst_compression=cfg.sst_compression)
                         futures[fut] = u
 
                 submit_next(max_in_flight)
@@ -163,9 +166,9 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                         tag = f"{index_of[u.unit_id]:05d}_{u.unit_id}"
                         chunk_paths: List[str] = []
                         try:
-                            chunk_paths, scanned, kept, secs, stats = fut.result()
+                            chunk_paths, scanned, kept, secs, stats, entries = fut.result()
                             progress.file_ingesting(u.unit_id)
-                            written = ingestor.ingest_file(u.unit_id, chunk_paths,
+                            written = ingestor.ingest_file(u.unit_id, chunk_paths, entries=entries,
                                                            extra={"scanned": scanned, "kept": kept, **stats})
                             scanned_total += scanned
                             kept_total += kept

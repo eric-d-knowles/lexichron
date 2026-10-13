@@ -134,3 +134,45 @@ def chunk_entry_count(path: str | os.PathLike) -> int:
     for _ in read_chunk(path):
         n += 1
     return n
+
+
+class SstChunkWriter(ChunkWriter):
+    """Like :class:`ChunkWriter`, but each chunk is written as a sorted SST
+    file of *merge* operands (rocks-shim >= 0.8), so the parent ingests it as
+    a file instead of replaying its records through a write batch. Meant for
+    stages whose output is many times larger than their input: the parent's
+    single-writer path would otherwise be the bottleneck. Duplicate keys
+    across chunks and units are summed by the database's merge operator at
+    compaction, exactly as with replayed chunks.
+    """
+
+    def __init__(self, spool_dir, file_tag: str, chunk_entries: int, merge_fn, *,
+                 compression: str = "zstd") -> None:
+        super().__init__(spool_dir, file_tag, chunk_entries, merge_fn)
+        self.compression = compression
+
+    def _spill(self) -> None:
+        if not self.pending:
+            return
+        from ngramprep.common_db.api import rs       # the store in use (or a test double)
+        idx = len(self.part_paths)
+        path = self.spool_dir / f"{self.file_tag}.{idx:05d}.sst.part"
+        writer = rs.SstFileWriter(compression=self.compression)
+        writer.open(str(path))
+        for key in sorted(self.pending):            # SST files are written in key order
+            kb = key if isinstance(key, bytes) else key.encode("utf-8")
+            writer.merge(kb, self.pending[key])
+        writer.finish()
+        self.part_paths.append(path)
+        self.entries_total += len(self.pending)
+        self.pending = {}
+
+    def finish(self) -> List[str]:
+        self._spill()
+        published: List[str] = []
+        for part in self.part_paths:
+            final = part.with_name(part.name[:-len(".part")])      # x.00001.sst.part -> x.00001.sst
+            os.replace(part, final)
+            published.append(str(final))
+        self.part_paths = []
+        return published

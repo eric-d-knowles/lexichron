@@ -145,7 +145,7 @@ def test_worker_scans_without_filling_the_cache(rocks, tmp_path):
     from ngramprep.rangemap.worker import map_unit
     src = tmp_path / "src.db"
     _make_source(str(src), n=10)
-    chunks, scanned, kept, _, _stats = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
+    chunks, scanned, kept, _, _stats, _written = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
     assert scanned == 21 and kept == 20 and len(chunks) == 1
     assert fake_rocks._REGISTRY[str(src)].last_iterator_opts == (False, 2 << 20)
 
@@ -195,3 +195,40 @@ def test_plan_units_falls_back_to_sampling_without_live_files(rocks, tmp_path, m
                         lambda **kw: called.update(kw) or units_mod.create_uniform_work_units(kw["num_units"]))
     units = units_mod.plan_units(src, 16, smart=True, log=lambda *_: None)
     assert len(units) == 16 and called["num_sampling_workers"] == 8   # capped pool
+
+
+class ExplodeMapper(Mapper):
+    """A pivot in miniature: one (ngram, packed years) -> one record per
+    year, keyed year-first, lowercased. Duplicates across raw keys must be
+    summed by the database."""
+
+    def build(self):
+        def fn(key, value):
+            if b"drop" in key:
+                return None
+            out = []
+            for i in range(0, len(value), 24):
+                year, n, v = struct.unpack("<3Q", value[i:i + 24])
+                out.append((struct.pack(">I", year) + key.lower(), value[i:i + 24]))
+            return out
+        return fn
+
+
+def test_sst_output_with_one_to_many_mapper(rocks, tmp_path):
+    src = tmp_path / "src.db"
+    dst = tmp_path / "dst.db"
+    _make_source(str(src), n=200)                       # Word_i (1990) and word_i (1990, 2000)
+    cfg = RangeMapConfig(src_db=src, dst_db=dst, mapper=ExplodeMapper(), num_units=8, workers=2,
+                         smart_partitioning=False, chunk_entries=50, spool_dir=tmp_path,
+                         compact_after=True, output="sst")
+    res = run_rangemap(cfg)
+    out = fake_rocks.dump(dst)
+    # 200 words x 2 years, keyed year-first
+    data = {k: v for k, v in out.items() if not k.startswith(b"__")}
+    assert len(data) == 400
+    assert _unpack(data[struct.pack(">I", 1990) + b"word7"]) == [(1990, 8, 2)]    # Word7 + word7 summed
+    assert _unpack(data[struct.pack(">I", 2000) + b"word7"]) == [(2000, 2, 2)]
+    assert res.kept == 600 and res.scanned == 404                 # 200 raw keys -> 1 + 2 records; drops skipped
+    assert fake_rocks._REGISTRY[str(dst)].ingests > 0             # chunks arrived as files
+    assert not [p for p in tmp_path.rglob("*.sst*")]              # and were consumed
+    assert sum(d["entries"] for d in fake_rocks.markers(dst).values()) <= 600   # entries per unit, after in-chunk merging
