@@ -53,7 +53,7 @@ class RangeMapConfig:
     samples_per_worker: int = 50_000
     use_cached_partition: bool = True
     partition_cache_dir: Optional[Path] = None
-    read_profile: str = "read:packed24"
+    read_profile: str = "scan:packed24"
     write_profile: str = "write:packed24"
     chunk_entries: int = 200_000
     spool_dir: Optional[Path] = None         # default: system temp (node-local in Slurm)

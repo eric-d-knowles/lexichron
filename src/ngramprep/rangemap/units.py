@@ -37,7 +37,7 @@ def plan_units(
     use_cache: bool = True,
     num_sampling_workers: Optional[int] = None,
     samples_per_worker: int = 50_000,
-    read_profile: str = "read:packed24",
+    read_profile: str = "scan:packed24",
     log=print,
 ) -> List[WorkUnit]:
     """Cut the source key space into ``num_units`` ranges.

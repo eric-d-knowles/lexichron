@@ -1,6 +1,6 @@
 """lexichron command-line interface and project configuration."""
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
 
 # Images built by hand from a branch (the `dev`, `filter`, ... tags) carry a
 # build stamp written by the container workflow into lexichron/_build.py, so

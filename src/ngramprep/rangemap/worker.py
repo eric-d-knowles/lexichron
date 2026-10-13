@@ -40,7 +40,7 @@ def map_unit(
     mapper,                       # Mapper (picklable); built in this process
     spool_dir: str,
     chunk_entries: int,
-    read_profile: str = "read:packed24",
+    read_profile: str = "scan:packed24",
     merge_fn: Callable[[bytes, bytes], bytes] = merge_packed_records,
 ) -> UnitResult:
     """Scan ``[start_key, end_key)`` of ``src_db``, apply ``mapper`` to every

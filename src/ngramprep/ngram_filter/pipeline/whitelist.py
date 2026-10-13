@@ -37,7 +37,7 @@ __all__ = [
 def _db_from(db_or_path: Union[str, Path, "rs.DB"]):
     """
     Yield an open rocks-shim DB. If a path is provided, open with read-optimized
-    profile when available (profile="read").
+    profile when available (profile="scan": one pass, bounded memory).
     """
     if hasattr(db_or_path, "iterator") and callable(getattr(db_or_path, "iterator")):
         # Assume it's a rocks-shim DB-like object
@@ -45,7 +45,7 @@ def _db_from(db_or_path: Union[str, Path, "rs.DB"]):
     else:
         path = str(Path(db_or_path))
         # Use your rocks-shim context manager. If "read" is unsupported, shim can ignore it.
-        with open_db(path, mode="r", profile="read") as db:
+        with open_db(path, mode="r", profile="scan") as db:
             yield db
 
 

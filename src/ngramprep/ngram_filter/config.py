@@ -82,7 +82,7 @@ class PipelineConfig:
     progress_every_s: float = 60.0
 
     # Reader/Writer profiles
-    reader_profile: str = "read:packed24"
+    reader_profile: str = "scan:packed24"   # one pass per worker: bounded memory (rocks-shim >= 0.7)
     writer_profile: str = 'write:packed24'
     writer_disable_wal: bool = True
 
