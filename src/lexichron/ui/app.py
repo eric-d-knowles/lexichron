@@ -196,7 +196,7 @@ class LexichronApp(App):
     #run-title { text-style: bold; }
     #run-bar { width: 1fr; margin: 0 0 1 0; }
     #run-bar Bar { width: 1fr; }
-    #run-headline, #run-current, #run-inputs { height: auto; }
+    #run-headline, #run-inputs { height: auto; }
     #meters { height: auto; }
     .meter-group { height: auto; color: $text-muted; margin: 1 0 0 0; }
     .meter-grid { layout: grid; grid-size: 4; grid-gutter: 0 1; grid-rows: auto; height: auto; }
@@ -348,11 +348,11 @@ class LexichronApp(App):
                         yield Static("", id="run-title")
                         yield ProgressBar(total=None, show_eta=False, id="run-bar")
                         yield Static("", id="run-headline")
-                        yield Static("", id="run-current", classes="muted")
                         yield Static("", id="run-inputs", classes="muted")
                         yield Static("", id="run-message")
                         yield Meters(id="meters")
-                        yield RichLog(id="run-log", wrap=False, highlight=False, markup=False)
+                        with Collapsible(title="Log", collapsed=True, id="run-log-box"):
+                            yield RichLog(id="run-log", wrap=False, highlight=False, markup=False)
                     yield Static("Slurm jobs", classes="section")
                     yield DataTable(id="jobs")
                     with Horizontal(classes="actions"):
@@ -788,7 +788,7 @@ class LexichronApp(App):
                              "that corpus's runs will appear here.")
             else:
                 title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
-            for wid in ("#run-headline", "#run-current", "#run-inputs", "#run-message"):
+            for wid in ("#run-headline", "#run-inputs", "#run-message"):
                 self.query_one(wid, Static).update("")
             bar.update(total=None, progress=0)
             return
@@ -803,7 +803,6 @@ class LexichronApp(App):
         else:
             bar.update(total=None, progress=0)
         self.query_one("#run-headline", Static).update(info["headline"])
-        self.query_one("#run-current", Static).update(info["current_text"] or " ")
         self.query_one("#run-inputs", Static).update(info["inputs_text"] or " ")
         self.query_one("#run-message", Static).update(info["message"])
         self.query_one("#meters", Meters).show(meters(doc, info))

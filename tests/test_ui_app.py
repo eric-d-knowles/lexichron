@@ -159,7 +159,9 @@ def test_progress_tab_shows_selected_run(tmp_path):
             assert "running job 42 on n1 · 2/10 files (20%)" in str(app.query_one("#run-headline").content)
             bar = app.query_one("#run-bar", ProgressBar)
             assert bar.total == 10 and bar.progress == 2
-            assert "1 files in flight" in str(app.query_one("#run-current").content)
+            from lexichron.ui.app import Meters
+            assert "1 files in flight" not in str(app.query_one("#run-headline").content)
+            assert app.query_one("#run-log-box").collapsed            # log tail is folded away by default
             assert app._log_shown[1] == ("first", "second", "third")
             # the log pane follows the file
             log.write_text("first\nsecond\nthird\nfourth\n")

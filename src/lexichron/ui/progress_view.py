@@ -259,6 +259,17 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
                 "after compaction" if database.get("compacted") else "estimate: not yet compacted")
 
     groups = [("Progress", progress_tiles)]
+    current = list(doc.get("current") or [])
+    phases = doc.get("phases") or {}
+    if current and phases:
+        if stage == "filter":
+            labels = (("queued", "Waiting for a worker"), ("parsing", "Scanning"),
+                      ("parsed", "Scanned, waiting to ingest"), ("ingesting", "Ingesting"))
+        else:
+            labels = (("queued", "Waiting for a worker"), ("parsing", "Downloading & parsing"),
+                      ("parsed", "Parsed, waiting to ingest"), ("ingesting", "Ingesting"))
+        tiles = [(label, f"{int(phases.get(key, 0)):,}", "") for key, label in labels]
+        groups.append((f"In flight: {len(current):,} {unit}", tiles))
     if stage == "filter":
         scanned = int(counters.get("scanned", 0))
         kept = int(counters.get("kept", 0))

@@ -252,3 +252,18 @@ def test_meters_keep_the_three_record_counts_apart():
     records = {label: value for label, value, _ in groups["Records"]}
     assert records == {"Lines read": "1,234", "Parsed": "5.0 GB", "Inserted": "500", "In database": "—"}
     assert [label for label, _, _ in groups["Whole corpus"]] == ["Files", "Lines read", "Inserted", "Parsed"]
+
+
+def test_in_flight_meters_follow_the_stage():
+    from lexichron.ui.progress_view import meters, summarize
+    import datetime
+    now = datetime.datetime.fromisoformat("2026-10-12T00:01:00+00:00")
+    doc = {"stage": "filter", "state": "running", "unit_label": "work units", "files_total": 80,
+           "files_done": 3, "entries_written": 10, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T00:01:00+00:00", "current": ["a", "b", "c"],
+           "phases": {"queued": 1, "parsing": 2, "parsed": 0, "ingesting": 0}}
+    groups = dict(meters(doc, summarize(doc, now=now, job_gone=False)))
+    assert groups["In flight: 3 work units"] == [("Waiting for a worker", "1", ""), ("Scanning", "2", ""),
+                                                 ("Scanned, waiting to ingest", "0", ""), ("Ingesting", "0", "")]
+    doc.update(stage="acquire", unit_label="files")
+    assert [l for l, _, _ in dict(meters(doc, summarize(doc, now=now, job_gone=False)))["In flight: 3 files"]][1] == "Downloading & parsing"
