@@ -87,7 +87,9 @@ def test_engine_maps_merges_marks_and_resumes(rocks, tmp_path):
     # progress document
     doc = read_progress(progress_path)
     assert doc["files_total"] == 8 and doc["files_done"] == 8 and doc["unit_label"] == "work units"
-    assert doc["counters"] == {"scanned": 1010, "kept": 1000}
+    c = doc["counters"]
+    assert c["scanned"] == 1010 and c["kept"] == 1000
+    assert 500 <= c["inserted"] <= 1000                # records handed to the DB, after in-chunk merging
     # Entries reports records kept, not chunk-file entries: the latter depends
     # on how many duplicate output keys were merged inside a chunk, so it
     # would differ between partitions of the same source.
@@ -143,7 +145,7 @@ def test_worker_scans_without_filling_the_cache(rocks, tmp_path):
     from ngramprep.rangemap.worker import map_unit
     src = tmp_path / "src.db"
     _make_source(str(src), n=10)
-    chunks, scanned, kept, _ = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
+    chunks, scanned, kept, _, _stats = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
     assert scanned == 21 and kept == 20 and len(chunks) == 1
     assert fake_rocks._REGISTRY[str(src)].last_iterator_opts == (False, 2 << 20)
 

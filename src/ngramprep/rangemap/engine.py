@@ -163,18 +163,21 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                         tag = f"{index_of[u.unit_id]:05d}_{u.unit_id}"
                         chunk_paths: List[str] = []
                         try:
-                            chunk_paths, scanned, kept, secs = fut.result()
+                            chunk_paths, scanned, kept, secs, stats = fut.result()
                             progress.file_ingesting(u.unit_id)
                             written = ingestor.ingest_file(u.unit_id, chunk_paths,
-                                                           extra={"scanned": scanned, "kept": kept})
+                                                           extra={"scanned": scanned, "kept": kept, **stats})
                             scanned_total += scanned
                             kept_total += kept
-                            # Progress reports the records kept, which is the same
-                            # whatever the partition; `written` (entries in the chunk
-                            # files) varies with how many duplicates met inside a chunk.
+                            # Three distinct figures: records scanned from the source,
+                            # records the mapper kept (the same whatever the partition),
+                            # and records handed to the database (`written`: fewer than
+                            # kept by the duplicates merged inside a chunk). The mapper's
+                            # own counters (per-rule token fates) ride along.
                             progress.file_done(u.unit_id, entries=kept, chunks=len(chunk_paths),
                                                uncompressed_bytes=0,
-                                               counters={"scanned": scanned, "kept": kept})
+                                               counters={"scanned": scanned, "kept": kept,
+                                                         "inserted": written, **stats})
                             logger.info("Unit %s: scanned %s, kept %s (%s entries after in-chunk merging), %.1fs",
                                         u.unit_id, f"{scanned:,}", f"{kept:,}", f"{written:,}", secs)
                         except Exception as exc:

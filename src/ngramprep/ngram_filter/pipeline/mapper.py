@@ -32,4 +32,5 @@ class FilterMapper(Mapper):
                 value = bin_year_records(value, bin_size)
             return out, value
 
+        fn.stats_dict = processor.stats_dict      # per-rule token counts (see processor_factory.STAT_NAMES)
         return fn

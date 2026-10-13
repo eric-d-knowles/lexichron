@@ -7,6 +7,13 @@ from typing import Optional, Callable, Iterable, Any, Protocol
 import builtins
 from ..config import FilterConfig
 from .core_cy import process_tokens as _impl_process_tokens  # bytes -> bytes
+from .core_cy import (STAT_SLOTS, STAT_TOKENS, STAT_KEPT, STAT_NOT_ALPHA, STAT_TOO_SHORT,
+                      STAT_STOPWORD, STAT_NOT_IN_VOCAB, STAT_NGRAMS, STAT_NGRAMS_DROPPED)
+
+# Names of the kernel's counters, in slot order; a processor's `.stats`
+# array and `stats_dict()` use them.
+STAT_NAMES = ("tokens", "tokens_kept", "tokens_not_alpha", "tokens_too_short", "tokens_stopword",
+              "tokens_not_in_vocab", "ngrams", "ngrams_dropped_context")
 
 
 class ProcessorProtocol(Protocol):
@@ -45,6 +52,8 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
     always_include_b = _to_bytes_set(cfg.always_include)
 
     outbuf = bytearray()  # reused per-processor
+    import array
+    stats = array.array("Q", [0] * STAT_SLOTS)   # what became of every token and n-gram
 
     def _processor(token_b: bytes) -> Optional[bytes]:
         if not isinstance(token_b, (builtins.bytes, builtins.bytearray)):
@@ -68,7 +77,10 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
             whitelist=cfg.whitelist,
             always_include=always_include_b,
             outbuf=outbuf,
+            stats=stats,
         )
         return out or None
 
+    _processor.stats = stats
+    _processor.stats_dict = lambda: dict(zip(STAT_NAMES, stats))
     return _processor

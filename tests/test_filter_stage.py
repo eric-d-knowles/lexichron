@@ -84,6 +84,14 @@ def test_filter_stage_end_to_end(rocks, tmp_path):
     doc = read_progress(progress_path)
     assert doc["state"] == "done" and doc["stage"] == "filter" and doc["unit_label"] == "work units"
     assert doc["files_total"] == 4 and doc["counters"]["scanned"] == 8 and doc["counters"]["kept"] == 5
+    # the three record counts and what each rule removed: 8 tokens in 8 unigrams;
+    # 'the' stopword, 'a1' not alphabetic, 'ox' too short -> 3 n-grams dropped;
+    # 5 kept records merged into 3 database keys (Cats/cats/cat -> cat)
+    c = doc["counters"]
+    assert c["tokens"] == 8 and c["tokens_kept"] == 5
+    assert (c["tokens_stopword"], c["tokens_not_alpha"], c["tokens_too_short"], c["tokens_not_in_vocab"]) == (1, 1, 1, 0)
+    assert c["ngrams"] == 8 and c["ngrams_dropped_context"] == 3
+    assert 3 <= c["inserted"] <= 5                    # chunk entries: duplicates may merge in a chunk
 
     # a second run in resume mode does nothing and leaves the result alone
     build_processed_db(

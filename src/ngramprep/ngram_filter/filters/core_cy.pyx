@@ -10,6 +10,18 @@ METADATA_PREFIX = b"__"
 FMT = "<QQQ"
 SENTINEL_B = b"<UNK>"
 
+# Slots of the optional `stats` array passed to process_tokens: what became of
+# every token and n-gram, so a run can report how much each rule removed.
+STAT_TOKENS = 0            # tokens seen
+STAT_KEPT = 1              # tokens written as themselves
+STAT_NOT_ALPHA = 2         # replaced by <UNK>: not purely alphabetic
+STAT_TOO_SHORT = 3         # replaced by <UNK>: shorter than min_len
+STAT_STOPWORD = 4          # replaced by <UNK>: a stopword
+STAT_NOT_IN_VOCAB = 5      # replaced by <UNK>: not in the vocabulary
+STAT_NGRAMS = 6            # n-grams seen
+STAT_NGRAMS_DROPPED = 7    # n-grams dropped: fewer than min_context_tokens real tokens
+STAT_SLOTS = 8
+
 # Google Books Ngram tag vocabulary (for recognition/stripping)
 cdef set TAGS_VALID_G = {
     b"NOUN", b"PROPN", b"VERB", b"ADJ", b"ADV",
@@ -107,7 +119,8 @@ cpdef bytes process_tokens(
     object lemma_gen = None,
     object whitelist = None,
     object always_include = None,
-    bytearray outbuf = None
+    bytearray outbuf = None,
+    unsigned long long[::1] stats = None
 ):
     """
     Bytes-only token pipeline:
@@ -117,9 +130,16 @@ cpdef bytes process_tokens(
     always_include: Set of tokens (e.g., b"working-class", b"nuclear") that should
                     always be preserved in whitelist mode regardless of whether they're
                     in the whitelist. Useful for combined bigrams or focal terms.
+    stats: optional array of STAT_SLOTS unsigned 64-bit counters (see STAT_*)
+           that this call adds to: what became of each token and the n-gram.
     """
     cdef Py_ssize_t N = ngram.__len__()
+    cdef bint do_stats = stats is not None
+    if do_stats:
+        stats[STAT_NGRAMS] += 1
     if N == 0:
+        if do_stats:
+            stats[STAT_NGRAMS_DROPPED] += 1
         return b""
 
     # flags
@@ -148,6 +168,7 @@ cpdef bytes process_tokens(
     cdef bytes tok_b, base_b, tag_b, out_token
     cdef Py_ssize_t last_uscore
     cdef bint is_unk
+    cdef int reason            # STAT_* slot for a token replaced by <UNK>
 
     # for lemma path
     cdef object wn_pos      # None or spaCy POS tag ('NOUN'/'VERB'/'ADJ'/'ADV')
@@ -195,6 +216,7 @@ cpdef bytes process_tokens(
             normalized_token = base_b
 
         # BRANCH: whitelist vs. normal filtering
+        reason = -1
         if do_whitelist:
             # Whitelist path: simple check, no other filters
             # Exception: always-include tokens are preserved even if not in whitelist
@@ -205,6 +227,7 @@ cpdef bytes process_tokens(
             else:
                 out_token = SENTINEL_B
                 unk_count += 1
+                reason = STAT_NOT_IN_VOCAB
         else:
             # Normal filtering path: apply all checks
             is_unk = 0
@@ -227,16 +250,27 @@ cpdef bytes process_tokens(
                         except:
                             # Decoding failed, mark as invalid
                             is_unk = 1
+                if is_unk:
+                    reason = STAT_NOT_ALPHA
             if not is_unk and do_shorts and normalized_token.__len__() < min_len:
                 is_unk = 1
+                reason = STAT_TOO_SHORT
             if not is_unk and do_stops and normalized_token in stop_set:
                 is_unk = 1
+                reason = STAT_STOPWORD
 
             if is_unk:
                 out_token = SENTINEL_B
                 unk_count += 1
             else:
                 out_token = normalized_token
+
+        if do_stats:
+            stats[STAT_TOKENS] += 1
+            if reason < 0:
+                stats[STAT_KEPT] += 1
+            else:
+                stats[reason] += 1
 
         # write token (single exit path)
         if token_count > 0:
@@ -247,6 +281,8 @@ cpdef bytes process_tokens(
     # Check if n-gram has sufficient context (at least min_context_tokens non-<UNK> tokens)
     non_unk_count = token_count - unk_count
     if non_unk_count < min_context_tokens:
+        if do_stats:
+            stats[STAT_NGRAMS_DROPPED] += 1
         return b""
 
     return bytes(outbuf)

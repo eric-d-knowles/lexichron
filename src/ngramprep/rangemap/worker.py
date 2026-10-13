@@ -22,8 +22,9 @@ def set_inherited_mapper(mapper) -> None:
     global _INHERITED_MAPPER
     _INHERITED_MAPPER = mapper
 
-# (chunk_paths, scanned, kept, seconds)
-UnitResult = Tuple[list, int, int, float]
+# (chunk_paths, scanned, kept, seconds, stats): stats are the mapper's own
+# counters for the unit (a dict, empty if the mapper keeps none)
+UnitResult = Tuple[list, int, int, float, dict]
 
 try:
     import setproctitle as _setproctitle
@@ -88,4 +89,6 @@ def map_unit(
         os.replace(os.path.join(spool_dir, f"{tag}.started"), os.path.join(spool_dir, f"{tag}.parsed"))
     except OSError:
         pass
-    return chunk_paths, scanned, kept, time.perf_counter() - t0
+    stats_fn = getattr(fn, "stats_dict", None)
+    stats = {k: int(v) for k, v in stats_fn().items()} if stats_fn else {}
+    return chunk_paths, scanned, kept, time.perf_counter() - t0, stats
