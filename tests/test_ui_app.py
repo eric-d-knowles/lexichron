@@ -33,6 +33,8 @@ def test_app_builds_form_and_preview(tmp_path):
         app = LexichronApp(proj)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             text = str(app.query_one("#call").content)
             assert "download_and_ingest_to_rocksdb(" in text
             assert "ngram_size=2" in text and "repo_corpus_id='eng-us'" in text
@@ -77,6 +79,8 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
         app = LexichronApp(None)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             assert "(fill in the corpus directory, language and n-gram size)" in str(app.query_one("#dest").content)
             assert app.query_one("#f-corpus-language", Select).value is Select.NULL
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
@@ -105,6 +109,8 @@ def test_missing_required_reported_with_labels(tmp_path):
     async def scenario():
         app = LexichronApp(None)
         async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
             await pilot.pause()
             status = str(app.query_one("#status").content)
             assert "Corpus directory" in status and "db_path_stub" not in status
@@ -144,6 +150,8 @@ def test_progress_tab_shows_selected_run(tmp_path):
         app = LexichronApp(proj)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             runs = app.query_one("#runs", DataTable)
             assert runs.row_count == 2 and app.selected_run == run       # newest first, selected
             # Records column: kept so far for a running run, the compacted database for a finished one
@@ -156,6 +164,7 @@ def test_progress_tab_shows_selected_run(tmp_path):
             # the log pane follows the file
             log.write_text("first\nsecond\nthird\nfourth\n")
             app.refresh_jobs()
+            await app.workers.wait_for_complete()
             await pilot.pause()
             assert app._log_shown[1][-1] == "fourth"
             # selecting the older run switches the panel
@@ -179,6 +188,8 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
         app = LexichronApp(None)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corp")
             app.query_one("#f-corpus-language").value = "eng"
             app.query_one("#f-corpus-ngram_size").value = "1"
@@ -190,6 +201,8 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
     async def second():
         app = LexichronApp(None)          # no argument, like plain `lexichron-ui`
         async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
             await pilot.pause()
             assert app.reopened and app.project_path == proj
             assert app.query_one("#f-corpus-language").value == "eng"
@@ -243,6 +256,8 @@ def test_run_whose_job_left_the_queue_is_stopped(tmp_path):
         app.bridge = FakeBridge()
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             runs = app.query_one("#runs", DataTable)
             states = [str(runs.get_row_at(i)[1]) for i in range(runs.row_count)]
             assert states == ["running", "stopped"]
@@ -263,6 +278,8 @@ def test_stage_selector_switches_form_and_keeps_other_sections(tmp_path):
         from textual.widgets import Select
         app = LexichronApp(proj)
         async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
             await pilot.pause()
             assert app.stage == "acquire"
             assert app.query_one("#stage-acquire").display and not app.query_one("#stage-filter").display
@@ -309,11 +326,15 @@ def test_stale_file_handle_does_not_crash_refresh(tmp_path, monkeypatch):
         app = LexichronApp(proj)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             monkeypatch.setattr(pathlib.Path, "stat", flaky_stat)
             app.refresh_jobs()          # must not raise
+            await app.workers.wait_for_complete()
             await pilot.pause()
             monkeypatch.setattr(pathlib.Path, "stat", real_stat)
             app.refresh_jobs()
+            await app.workers.wait_for_complete()
             await pilot.pause()
             assert app.selected_run == run
         _assert_clean(app)

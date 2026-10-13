@@ -93,7 +93,7 @@ class HostBridge:
         args = ["--noheader", "--format=%i|%j|%T|%M|%l|%D|%R"]
         if user:
             args += ["--user", user]
-        res = self.run("squeue", args)
+        res = self.run("squeue", args, timeout_s=20.0)   # a periodic refresh must not wait a minute
         rows = []
         for line in res.stdout.splitlines():
             parts = line.split("|")

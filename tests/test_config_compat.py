@@ -37,6 +37,8 @@ def test_ui_resaves_old_file_in_the_new_layout(tmp_path):
         app = LexichronApp(proj)
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
             assert "ngram_size=5" in str(app.query_one("#call").content)
             app.action_save()
             await pilot.pause()

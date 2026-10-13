@@ -244,6 +244,7 @@ class LexichronApp(App):
         self.loaded_dir: Optional[Path] = self._corpus_dir(self.config)
         bridge_dir = default_bridge_dir()
         self.bridge: Optional[HostBridge] = HostBridge(bridge_dir) if bridge_dir else None
+        self._status: Dict[str, Any] = {"jobs": None, "jobs_error": "", "docs": [], "selected": None, "log_lines": []}
         self.proc: Optional[subprocess.Popen] = None
 
     @property
@@ -634,48 +635,67 @@ class LexichronApp(App):
             except OSError as exc:
                 self.notify(f"Could not remove {d.name}: {exc}", severity="error")
         self.selected_run = None
-        self._refresh_runs()
+        self.refresh_jobs()
         self.notify(f"Removed {removed} run{'s' if removed != 1 else ''}")
 
     # -- jobs & runs ----------------------------------------------------------------
     def refresh_jobs(self) -> None:
-        """Periodic refresh. Nothing here may take the app down: a flaky
-        filesystem or a slow Slurm answer shows up in the title line instead."""
+        """Periodic refresh. All the waiting (Slurm through the bridge, the
+        run directories and progress files on a networked filesystem, the
+        log tail) happens in a worker thread; the UI thread only paints the
+        snapshot, so typing never stalls behind a slow squeue."""
+        self._gather_status()
+
+    @work(thread=True, exclusive=True, group="status")
+    def _gather_status(self) -> None:
         try:
-            self._refresh_jobs_inner()
+            snap = self._collect_status()
         except Exception as exc:                      # pragma: no cover - defensive
             logging.getLogger(__name__).warning("refresh failed: %s", exc)
+            snap = {"error": str(exc)}
+        self.call_from_thread(self._apply_status, snap)
+
+    def _collect_status(self) -> Dict[str, Any]:
+        """Everything the Progress tab shows, gathered off the UI thread."""
+        jobs: Optional[List[dict]] = None
+        jobs_error = ""
+        if self.bridge and self.bridge.available():
             try:
-                self.query_one("#run-title", Static).update(f"(refresh failed: {exc}; retrying)")
+                jobs = self.bridge.squeue(user=getpass.getuser())
+            except (BridgeUnavailable, TimeoutError) as exc:
+                jobs_error = str(exc)
+        dirs = self._run_dirs()
+        docs = [(d, read_progress(d / "progress.json")) for d in dirs]
+        selected = self.selected_run if self.selected_run in dirs else (dirs[0] if dirs else None)
+        sel_doc = next((doc for d, doc in docs if d == selected), None)
+        log_lines = tail_lines(sel_doc.get("log_path"), 15) if sel_doc else []
+        return {"jobs": jobs, "jobs_error": jobs_error, "docs": docs, "selected": selected,
+                "log_lines": log_lines}
+
+    def _apply_status(self, snap: Dict[str, Any]) -> None:
+        if "error" in snap:
+            try:
+                self.query_one("#run-title", Static).update(f"(refresh failed: {snap['error']}; retrying)")
             except Exception:
                 pass
-
-    def _refresh_jobs_inner(self) -> None:
+            return
+        self._status = snap
         table = self.query_one("#jobs", DataTable)
         table.clear()
         # Job ids of queued/running jobs, or None when Slurm cannot be asked.
-        self.queued_jobs: Optional[set] = None
-        if self.bridge and self.bridge.available():
-            try:
-                rows = self.bridge.squeue(user=getpass.getuser())
-                ours = self._run_job_ids()
-                rows.sort(key=lambda r: 0 if r["job_id"] in ours else 1)   # lexichron jobs first
-                self.queued_jobs = {r["job_id"] for r in rows}
-                for row in rows:
-                    table.add_row(row["job_id"], row["name"], row["state"], row["elapsed"],
-                                  row["limit"], row["nodes"], row["reason"])
-            except (BridgeUnavailable, TimeoutError) as exc:
-                table.add_row("-", str(exc)[:40], "", "", "", "", "")
-        self._refresh_runs()
-        self._refresh_run_panel()
-
-    def _run_job_ids(self) -> set:
-        ids = set()
-        for d in self._run_dirs():
-            p = read_progress(d / "progress.json")
-            if p and p.get("slurm_job_id"):
-                ids.add(str(p["slurm_job_id"]))
-        return ids
+        self.queued_jobs = None
+        if snap["jobs"] is not None:
+            ours = {str(doc["slurm_job_id"]) for _, doc in snap["docs"] if doc and doc.get("slurm_job_id")}
+            rows = sorted(snap["jobs"], key=lambda r: 0 if r["job_id"] in ours else 1)   # lexichron jobs first
+            self.queued_jobs = {r["job_id"] for r in rows}
+            for row in rows:
+                table.add_row(row["job_id"], row["name"], row["state"], row["elapsed"],
+                              row["limit"], row["nodes"], row["reason"])
+        elif snap["jobs_error"]:
+            table.add_row("-", snap["jobs_error"][:40], "", "", "", "", "")
+        self.selected_run = snap["selected"]
+        self._refresh_runs(snap["docs"])
+        self._refresh_run_panel(snap)
 
     def _summarize(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """summarize() plus what Slurm knows: a 'running' run whose job has
@@ -705,15 +725,11 @@ class LexichronApp(App):
         except OSError:
             return []
 
-    def _refresh_runs(self) -> None:
+    def _refresh_runs(self, docs: List[tuple]) -> None:
         runs = self.query_one("#runs", DataTable)
-        keep = runs.cursor_row
         runs.clear()
-        dirs = self._run_dirs()
-        if self.selected_run not in dirs:
-            self.selected_run = dirs[0] if dirs else None
-        for d in dirs:
-            p = read_progress(d / "progress.json")
+        dirs = [d for d, _ in docs]
+        for d, p in docs:
             if not p:
                 continue
             info = self._summarize(p)
@@ -738,10 +754,16 @@ class LexichronApp(App):
     @on(DataTable.RowHighlighted, "#runs")
     def _run_highlighted(self, event: DataTable.RowHighlighted) -> None:
         if event.row_key is not None and event.row_key.value:
-            self.selected_run = Path(event.row_key.value)
-            self._refresh_run_panel()
+            chosen = Path(event.row_key.value)
+            if chosen == self.selected_run:
+                return
+            self.selected_run = chosen
+            # paint what is already known; the log tail arrives with the next refresh
+            snap = dict(self._status, selected=chosen, log_lines=None)
+            self._refresh_run_panel(snap)
+            self.refresh_jobs()
 
-    def _refresh_run_panel(self) -> None:
+    def _refresh_run_panel(self, snap: Dict[str, Any]) -> None:
         title = self.query_one("#run-title", Static)
         bar = self.query_one("#run-bar", ProgressBar)
         log = self.query_one("#run-log", RichLog)
@@ -755,7 +777,7 @@ class LexichronApp(App):
                 self.query_one(wid, Static).update("")
             bar.update(total=None, progress=0)
             return
-        doc = read_progress(self.selected_run / "progress.json")
+        doc = next((d for p, d in snap.get("docs", []) if p == self.selected_run), None)
         if not doc:
             title.update(f"{self.selected_run.name}: progress file unreadable")
             return
@@ -771,7 +793,9 @@ class LexichronApp(App):
         self.query_one("#run-message", Static).update(info["message"])
         self.query_one("#meters", Meters).show(meters(doc, info))
         # Log tail: only rewrite when it changes, so the pane does not flicker.
-        lines = tail_lines(info["log_path"], 15)
+        lines = snap.get("log_lines")
+        if lines is None:                       # not fetched yet for this run
+            return
         key = (self.selected_run, tuple(lines))
         if key != self._log_shown:
             log.clear()
