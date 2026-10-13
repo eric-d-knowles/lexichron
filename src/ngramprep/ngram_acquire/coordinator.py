@@ -136,7 +136,7 @@ def processed_totals(file_urls: List[str], db: rs.DB) -> Dict[str, int]:
     """What the already-processed files among ``file_urls`` contributed to the
     database: ``{"files", "entries", "bytes", "unsized"}``. ``unsized`` counts
     files whose marker predates per-file figures (their size is unknown)."""
-    totals = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
+    totals = {"files": 0, "entries": 0, "bytes": 0, "lines": 0, "unsized": 0}
     for url in file_urls:
         stats = processed_stats(db, PurePosixPath(url).name)
         if stats is None:
@@ -145,6 +145,7 @@ def processed_totals(file_urls: List[str], db: rs.DB) -> Dict[str, int]:
         if "bytes" in stats:
             totals["entries"] += int(stats.get("entries", 0))
             totals["bytes"] += int(stats.get("bytes", 0))
+            totals["lines"] += int(stats.get("lines", 0))
         else:
             totals["unsized"] += 1
     return totals

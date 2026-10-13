@@ -380,9 +380,15 @@ Tabs:
   *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
   file; *Submit* also submits it and shows the job id.
 - **Progress** — the latest runs, newest first, whether started with *Run
-  here* or by a Slurm job: a progress bar, files (or work units) done,
-  entries written, rate, elapsed time and time left, what is being worked on,
-  and the tail of the run's log, refreshed every few seconds. (Every run writes
+  here* or by a Slurm job: a progress bar, what is being worked on, the
+  run's inputs, a grid of meters, and the tail of the run's log, refreshed
+  every few seconds. The meters keep three record counts apart: what was
+  *read* (raw data lines for acquisition, source records for filtering),
+  what was *inserted* into the database (fewer: records with the same key
+  merge before insertion) and what the final database *holds* (fewer again,
+  exact once compacted). A filter run also shows what each rule removed:
+  tokens that were not alphabetic, too short, stopwords or not in the
+  vocabulary, and n-grams dropped for having too few real tokens. (Every run writes
   `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.

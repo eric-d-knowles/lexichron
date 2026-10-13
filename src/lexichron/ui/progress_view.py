@@ -8,9 +8,9 @@ import os
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-__all__ = ["summarize", "fmt_duration", "fmt_bytes", "fmt_count", "tail_lines"]
+__all__ = ["summarize", "meters", "fmt_duration", "fmt_bytes", "fmt_count", "tail_lines"]
 
 
 def _parse(ts: Optional[str]) -> Optional[datetime]:
@@ -217,3 +217,90 @@ def tail_lines(path: Optional[str | os.PathLike], n: int = 20) -> List[str]:
             return [line.rstrip("\n") for line in deque(fh, maxlen=n)]
     except (OSError, ValueError):
         return []
+
+
+# ---------------------------------------------------------------------------
+# Meters: the figures of a run as labelled values, grouped, for the UI's grid.
+# ---------------------------------------------------------------------------
+
+def _pct(part: float, whole: float) -> str:
+    return f"{100.0 * part / whole:.1f}%" if whole else ""
+
+
+def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
+    """Groups of ``(label, value, note)`` for one run, from its progress
+    document and :func:`summarize`'s figures. The groups depend on the stage.
+
+    Three record counts are kept apart on purpose: what was read (raw data
+    lines, or source records), what was handed to the database (fewer:
+    duplicates merge before insertion), and what the final database holds
+    (fewer again: duplicates merge across insertions, once compacted)."""
+    stage = doc.get("stage") or "acquire"
+    counters = doc.get("counters") or {}
+    database = doc.get("database") or {}
+    unit = doc.get("unit_label") or "files"
+    done, total, failed = info["done"], info["total"], info["failed"]
+
+    progress_tiles = [
+        (unit.capitalize(), f"{done:,}/{total:,}" if total else f"{done:,}",
+         " · ".join(x for x in [(f"{info['percent']:.0f}%" if info["percent"] is not None else ""),
+                                (f"{failed} failed" if failed else ""),
+                                (f"{doc['files_skipped']} already done" if doc.get("files_skipped") else "")] if x)),
+        ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries"),
+        ("Elapsed", fmt_duration(info["elapsed_s"]), ""),
+        ("Remaining", fmt_duration(info["eta_s"]) if info["eta_s"] is not None else "—", "estimate"),
+    ]
+
+    def db_tile():
+        n = database.get("records")
+        if n is None:
+            return ("In database", "—", "after compaction")
+        return ("In database", f"{n:,}",
+                "after compaction" if database.get("compacted") else "estimate: not yet compacted")
+
+    groups = [("Progress", progress_tiles)]
+    if stage == "filter":
+        scanned = int(counters.get("scanned", 0))
+        kept = int(counters.get("kept", 0))
+        groups.append(("Records", [
+            ("Scanned", f"{scanned:,}", "source records"),
+            ("Kept", f"{kept:,}", _pct(kept, scanned) + " of scanned" if scanned else ""),
+            ("Inserted", f"{int(counters.get('inserted', 0)):,}", "to the database"),
+            db_tile(),
+        ]))
+        tokens = int(counters.get("tokens", 0))
+        ngrams = int(counters.get("ngrams", 0))
+        if tokens:
+            # With a vocabulary the kernel applies only the vocabulary rule;
+            # without one, only the three others. Show the rules that ran.
+            with_vocab = bool((doc.get("inputs") or {}).get("vocabulary"))
+            rules = ([("Not in vocabulary", "tokens_not_in_vocab")] if with_vocab else
+                     [("Not alphabetic", "tokens_not_alpha"), ("Too short", "tokens_too_short"),
+                      ("Stopword", "tokens_stopword")])
+            tiles = [(label, f"{int(counters.get(key, 0)):,}", _pct(int(counters.get(key, 0)), tokens) + " of tokens")
+                     for label, key in rules]
+            dropped = int(counters.get("ngrams_dropped_context", 0))
+            tiles.append(("Too few real tokens", f"{dropped:,}", _pct(dropped, ngrams) + " of n-grams"))
+            groups.append(("Dropped by rule", tiles))
+    else:
+        lines = int(counters.get("lines", 0))
+        groups.append(("Records", [
+            ("Lines read", f"{lines:,}", "raw data lines"),
+            ("Parsed", fmt_bytes(float(doc.get("uncompressed_bytes") or 0)), "uncompressed"),
+            ("Inserted", f"{int(counters.get('inserted', doc.get('entries_written', 0))):,}", "to the database"),
+            db_tile(),
+        ]))
+        corpus = doc.get("corpus") or {}
+        if (corpus.get("files") or 0) > 0:
+            all_files = int(doc.get("files_total", 0))
+            tiles = [("Files", f"{int(corpus['files']):,}/{all_files:,}" if all_files else f"{int(corpus['files']):,}",
+                      "across all jobs")]
+            if corpus.get("lines"):
+                tiles.append(("Lines read", f"{int(corpus['lines']):,}", ""))
+            tiles += [("Inserted", f"{int(corpus.get('entries', 0)):,}", ""),
+                      ("Parsed", fmt_bytes(float(corpus.get("bytes", 0))), "uncompressed")]
+            unsized = int(corpus.get("unsized", 0))
+            if unsized:
+                tiles.append(("Unsized", f"{unsized:,}", "files done before sizes were recorded"))
+            groups.append(("Whole corpus", tiles))
+    return groups

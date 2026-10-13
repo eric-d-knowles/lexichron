@@ -230,6 +230,7 @@ class ProgressReporter:
             "files": self._prior["files"] + self.doc["files_done"],
             "entries": self._prior["entries"] + self.doc["entries_written"],
             "bytes": self._prior["bytes"] + self.doc["uncompressed_bytes"],
+            "lines": self._prior.get("lines", 0) + int(self.doc["counters"].get("lines", 0)),
             "unsized": self._prior["unsized"],
         }
 

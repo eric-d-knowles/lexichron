@@ -150,7 +150,7 @@ def test_reporter_adds_prior_to_corpus_totals(tmp_path):
     r.file_started("x.gz")
     r.file_done("x.gz", entries=5, chunks=1, uncompressed_bytes=500)
     doc = read_progress(p)
-    assert doc["corpus"] == {"files": 3, "entries": 15, "bytes": 1500, "unsized": 1}
+    assert doc["corpus"] == {"files": 3, "entries": 15, "bytes": 1500, "lines": 0, "unsized": 1}
 
 
 def test_compacting_phase_is_reported():
@@ -215,3 +215,40 @@ def test_filter_runs_have_no_whole_corpus_line():
            "files_done": 3, "entries_written": 10, "started": "2026-10-12T00:00:00+00:00",
            "updated": "2026-10-12T00:01:00+00:00", "corpus": {"files": 3, "entries": 10, "bytes": 0, "unsized": 0}}
     assert summarize(doc, now=now, job_gone=False)["corpus_text"] == ""
+
+
+def test_meters_keep_the_three_record_counts_apart():
+    from lexichron.ui.progress_view import meters, summarize
+    import datetime
+    now = datetime.datetime.fromisoformat("2026-10-12T00:10:00+00:00")
+    doc = {"stage": "filter", "state": "done", "unit_label": "work units", "files_total": 80, "files_done": 80,
+           "entries_written": 15_436_675, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T00:06:00+00:00", "finished": "2026-10-12T00:06:00+00:00",
+           "counters": {"scanned": 26_291_248, "kept": 15_436_675, "inserted": 10_924_676,
+                        "tokens": 26_291_248, "tokens_kept": 15_436_675, "tokens_not_alpha": 5_000_000,
+                        "tokens_too_short": 1_000_000, "tokens_stopword": 4_854_573, "tokens_not_in_vocab": 0,
+                        "ngrams": 26_291_248, "ngrams_dropped_context": 10_854_573},
+           "database": {"records": 8_210_776, "bytes": 1 << 30, "compacted": True}}
+    groups = dict(meters(doc, summarize(doc, now=now, job_gone=False)))
+    records = {label: (value, note) for label, value, note in groups["Records"]}
+    assert records["Scanned"] == ("26,291,248", "source records")
+    assert records["Kept"] == ("15,436,675", "58.7% of scanned")
+    assert records["Inserted"] == ("10,924,676", "to the database")
+    assert records["In database"] == ("8,210,776", "after compaction")
+    rules = {label: value for label, value, _ in groups["Dropped by rule"]}
+    assert rules == {"Not alphabetic": "5,000,000", "Too short": "1,000,000", "Stopword": "4,854,573",
+                     "Too few real tokens": "10,854,573"}
+    # with a vocabulary only that rule runs, so only it is shown
+    doc["inputs"] = {"vocabulary": "/w.txt"}
+    rules = [label for label, _, _ in dict(meters(doc, summarize(doc, now=now, job_gone=False)))["Dropped by rule"]]
+    assert rules == ["Not in vocabulary", "Too few real tokens"]
+    assert groups["Progress"][0][:2] == ("Work units", "80/80")
+
+    acq = {"stage": "acquire", "state": "running", "files_total": 100, "files_done": 10, "entries_written": 500,
+           "uncompressed_bytes": 5 << 30, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T00:10:00+00:00", "counters": {"lines": 1234, "inserted": 500},
+           "corpus": {"files": 40, "entries": 2000, "bytes": 20 << 30, "lines": 5000, "unsized": 0}}
+    groups = dict(meters(acq, summarize(acq, now=now, job_gone=False)))
+    records = {label: value for label, value, _ in groups["Records"]}
+    assert records == {"Lines read": "1,234", "Parsed": "5.0 GB", "Inserted": "500", "In database": "—"}
+    assert [label for label, _, _ in groups["Whole corpus"]] == ["Files", "Lines read", "Inserted", "Parsed"]

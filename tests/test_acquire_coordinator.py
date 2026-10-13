@@ -37,4 +37,4 @@ def test_processed_totals_sums_marker_figures():
         def get(self, k): return self.store.get(k)
 
     urls = [f"http://x/{n}" for n in ("a.gz", "b.gz", "old.gz", "new.gz")]
-    assert processed_totals(urls, DB()) == {"files": 3, "entries": 15, "bytes": 1500, "unsized": 1}
+    assert processed_totals(urls, DB()) == {"files": 3, "entries": 15, "bytes": 1500, "lines": 0, "unsized": 1}

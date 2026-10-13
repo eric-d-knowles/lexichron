@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 from textual import on, work
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
     Button, Collapsible, DataTable, Footer, Header, Input, Label, ProgressBar,
     RichLog, Select, Static, Switch, TabbedContent, TabPane,
@@ -40,7 +40,7 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.ui.progress_view import fmt_count, fmt_duration, summarize, tail_lines
+from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
 from ngramprep.ngram_acquire.db.build_path import build_db_path
@@ -138,6 +138,33 @@ class FixedValue(Static):
 # The app
 # ---------------------------------------------------------------------------
 
+class Meters(Vertical):
+    """The figures of a run as labelled tiles in a grid, grouped under
+    headings (see progress_view.meters). Tiles are rebuilt only when the
+    set of labels changes; otherwise their values are updated in place, so a
+    refresh every few seconds does not flicker."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._shape: tuple = ()
+
+    def show(self, groups) -> None:
+        shape = tuple((title, tuple(label for label, _, _ in tiles)) for title, tiles in groups)
+        if shape != self._shape:
+            self._shape = shape
+            self.remove_children()
+            for gi, (title, tiles) in enumerate(groups):
+                self.mount(Static(title, classes="meter-group"))
+                grid = Grid(classes="meter-grid")
+                self.mount(grid)
+                for ti, _ in enumerate(tiles):
+                    grid.mount(Static("", classes="meter", id=f"meter-{gi}-{ti}"))
+        for gi, (_, tiles) in enumerate(groups):
+            for ti, (label, value, note) in enumerate(tiles):
+                text = f"[dim]{label}[/]\n[b]{value}[/]" + (f"  [dim]{note}[/]" if note else "")
+                self.query_one(f"#meter-{gi}-{ti}", Static).update(text)
+
+
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
@@ -169,7 +196,11 @@ class LexichronApp(App):
     #run-title { text-style: bold; }
     #run-bar { width: 1fr; margin: 0 0 1 0; }
     #run-bar Bar { width: 1fr; }
-    #run-headline, #run-detail, #run-current, #run-inputs, #run-corpus { height: auto; }
+    #run-headline, #run-current, #run-inputs { height: auto; }
+    #meters { height: auto; }
+    .meter-group { height: auto; color: $text-muted; margin: 1 0 0 0; }
+    .meter-grid { layout: grid; grid-size: 4; grid-gutter: 0 1; grid-rows: auto; height: auto; }
+    .meter { height: auto; border: round $secondary; padding: 0 1; }
     #run-message { color: $warning; height: auto; }
     #run-log { height: 12; border: round $secondary; scrollbar-size-vertical: 1; }
     .muted { color: $text-muted; }
@@ -314,11 +345,10 @@ class LexichronApp(App):
                         yield Static("", id="run-title")
                         yield ProgressBar(total=None, show_eta=False, id="run-bar")
                         yield Static("", id="run-headline")
-                        yield Static("", id="run-detail", classes="muted")
                         yield Static("", id="run-current", classes="muted")
                         yield Static("", id="run-inputs", classes="muted")
-                        yield Static("", id="run-corpus", classes="muted")
                         yield Static("", id="run-message")
+                        yield Meters(id="meters")
                         yield RichLog(id="run-log", wrap=False, highlight=False, markup=False)
                     yield Static("Slurm jobs", classes="section")
                     yield DataTable(id="jobs")
@@ -695,7 +725,7 @@ class LexichronApp(App):
                              "that corpus's runs will appear here.")
             else:
                 title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
-            for wid in ("#run-headline", "#run-detail", "#run-current", "#run-inputs", "#run-corpus", "#run-message"):
+            for wid in ("#run-headline", "#run-current", "#run-inputs", "#run-message"):
                 self.query_one(wid, Static).update("")
             bar.update(total=None, progress=0)
             return
@@ -710,11 +740,10 @@ class LexichronApp(App):
         else:
             bar.update(total=None, progress=0)
         self.query_one("#run-headline", Static).update(info["headline"])
-        self.query_one("#run-detail", Static).update(info["detail"])
         self.query_one("#run-current", Static).update(info["current_text"] or " ")
         self.query_one("#run-inputs", Static).update(info["inputs_text"] or " ")
-        self.query_one("#run-corpus", Static).update(info["corpus_text"] or " ")
         self.query_one("#run-message", Static).update(info["message"])
+        self.query_one("#meters", Meters).show(meters(doc, info))
         # Log tail: only rewrite when it changes, so the pane does not flicker.
         lines = tail_lines(info["log_path"], 15)
         key = (self.selected_run, tuple(lines))
