@@ -175,6 +175,11 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
             current_text += f"  ({doc['ingesting']})"
     else:
         current_text = f"{len(current)} {unit} in flight"
+    inputs = doc.get("inputs") or {}
+    labels = {"source": "Source", "vocabulary": "Vocabulary", "always_include": "Always keep"}
+    inputs_text = "  ·  ".join(f"{labels.get(k, k)}: {v}" for k, v in inputs.items() if v)
+    if doc.get("stage") == "filter" and "vocabulary" in inputs and not inputs.get("vocabulary"):
+        inputs_text += "  ·  Vocabulary: none (rule filters only)"
     corpus = doc.get("corpus") or {}
     corpus_text = ""
     if corpus and (corpus.get("files") or 0) > 0:
@@ -195,6 +200,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         "stale": stale, "stopped": stopped, "phase": phase,
         "headline": headline, "detail": " · ".join(detail),
         "current": current, "current_text": current_text, "corpus_text": corpus_text,
+        "inputs_text": inputs_text,
         "message": doc.get("message") or "",
         "log_path": doc.get("log_path"), "db_path": doc.get("db_path"),
     }

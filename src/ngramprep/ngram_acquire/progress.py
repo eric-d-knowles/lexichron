@@ -10,6 +10,7 @@ Document::
 
     {
       "stage": "acquire", "state": "running" | "done" | "failed",
+      "inputs": {"source": ..., "vocabulary": ...},   # what the run reads (stage-specific)
       "phase": "ingesting" | "compacting" | "archiving",   # what a running job is doing
       "phase_started": "...",
       "started": "...", "updated": "...", "finished": "..." | null,
@@ -51,7 +52,8 @@ class ProgressReporter:
                  db_path: Optional[str | os.PathLike] = None,
                  log_path: Optional[str | os.PathLike] = None,
                  spool_dir: Optional[str | os.PathLike] = None,
-                 unit_label: str = "files") -> None:
+                 unit_label: str = "files",
+                 inputs: Optional[Dict[str, Any]] = None) -> None:
         self.path = Path(path) if path else None
         self.min_interval_s = min_interval_s
         self._last_write = 0.0
@@ -74,6 +76,7 @@ class ProgressReporter:
             "corpus": {"files": 0, "entries": 0, "bytes": 0, "unsized": 0},
             "unit_label": unit_label,          # what files_total/files_done count
             "counters": {},                    # stage-specific running totals
+            "inputs": {k: (str(v) if v is not None else None) for k, v in (inputs or {}).items()},
             "db_path": str(db_path) if db_path else None,
             "log_path": str(log_path) if log_path else None,
             "slurm_job_id": os.environ.get("SLURM_JOB_ID"),

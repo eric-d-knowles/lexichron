@@ -139,7 +139,9 @@ def download_and_ingest_to_rocksdb(
         print(f"Log file: {log_file}")
     logger.info("Database path: %s", db_path)
     progress = ProgressReporter(progress_path, stage="acquire",
-                                db_path=db_path, log_path=log_file)
+                                db_path=db_path, log_path=log_file,
+                                inputs={"source": f"Google Books {repo_release_id} {repo_corpus_id} {ngram_size}-grams"
+                                                  f" ({ngram_type})"})
 
     # Handle existing database
     if overwrite_db and os.path.exists(db_path):

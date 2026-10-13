@@ -77,8 +77,13 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
     paths, filter_config = setup.prepare_all()
 
     mode = "restart" if pc.mode in ("restart", "reprocess") else "resume"
+    vocab = getattr(filter_config, "whitelist_path", None)
     progress = ProgressReporter(progress_path, stage="filter", db_path=pc.dst_db,
-                                unit_label="work units")
+                                unit_label="work units",
+                                inputs={"source": pc.src_db, "vocabulary": vocab or None,
+                                        "always_include": ", ".join(sorted(
+                                            x.decode() if isinstance(x, bytes) else str(x)
+                                            for x in (filter_config.always_include or ()))) or None})
     num_units = pc.num_initial_work_units or max(4 * pc.num_workers, 64)
 
     cfg = RangeMapConfig(

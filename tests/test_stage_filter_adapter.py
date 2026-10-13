@@ -80,8 +80,12 @@ def test_multigrams_default_to_the_corpus_unigram_vocabulary(rocks, no_spacy, tm
     wl = derive_paths(str(stub), 1, "20200217", "eng")["whitelist"]
     wl.parent.mkdir(parents=True)
     wl.write_text("cat\t100\nrun\t50\n")
-    out = stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path))
+    out = stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path),
+                              progress_path=str(tmp_path / "p.json"))
     data = fake_rocks.dump(out)
+    # the run records which vocabulary it applied, for the Progress tab
+    import json
+    assert json.loads((tmp_path / "p.json").read_text())["inputs"]["vocabulary"] == str(wl)
     # min_context_tokens defaults to 2 for bigrams: only n-grams with two vocabulary lemmas survive
     assert set(data) == {b"cat run"}
     # and no whitelist is written for multigrams by default

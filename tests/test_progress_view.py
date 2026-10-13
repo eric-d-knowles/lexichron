@@ -189,3 +189,19 @@ def test_filter_runs_describe_work_units_not_files():
     s = summarize(doc, now=__import__("datetime").datetime.fromisoformat("2026-10-12T00:01:00+00:00"), job_gone=False)
     assert s["current_text"] == "3 work units in flight: 2 scanning · 1 scanned, waiting to ingest"
     assert "10/80 work units" in s["headline"]
+
+
+def test_inputs_line_names_the_vocabulary_in_use():
+    from lexichron.ui.progress_view import summarize
+    import datetime
+    now = datetime.datetime.fromisoformat("2026-10-12T00:01:00+00:00")
+    base = {"stage": "filter", "state": "running", "unit_label": "work units", "files_total": 8,
+            "files_done": 1, "entries_written": 10, "started": "2026-10-12T00:00:00+00:00",
+            "updated": "2026-10-12T00:01:00+00:00"}
+    s = summarize(dict(base, inputs={"source": "/c/5grams.db", "vocabulary": "/c/1grams_processed.db/whitelist.txt",
+                                     "always_include": "he, she"}), now=now, job_gone=False)
+    assert s["inputs_text"] == ("Source: /c/5grams.db  ·  Vocabulary: /c/1grams_processed.db/whitelist.txt"
+                                "  ·  Always keep: he, she")
+    s = summarize(dict(base, inputs={"source": "/c/1grams.db", "vocabulary": None}), now=now, job_gone=False)
+    assert s["inputs_text"] == "Source: /c/1grams.db  ·  Vocabulary: none (rule filters only)"
+    assert summarize(base, now=now, job_gone=False)["inputs_text"] == ""     # older progress files
