@@ -182,7 +182,9 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         inputs_text += "  ·  Vocabulary: none (rule filters only)"
     corpus = doc.get("corpus") or {}
     corpus_text = ""
-    if corpus and (corpus.get("files") or 0) > 0:
+    # The whole-corpus total is acquisition's: files downloaded over several
+    # jobs. A filter run's units are not files and carry no byte counts.
+    if doc.get("stage") != "filter" and corpus and (corpus.get("files") or 0) > 0:
         all_files = int(doc.get("files_total", 0))
         n = int(corpus.get("files", 0))
         parts_c = [f"{n}/{all_files} files" if all_files else f"{n} files",

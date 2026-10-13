@@ -129,5 +129,6 @@ def test_a_run_leaves_no_temporary_directories(rocks, tmp_path, monkeypatch):
                         num_initial_work_units=8, output_whitelist_path=None, compact_after_ingest=False)
     build_processed_db(filter_config=FilterConfig(min_len=1, alpha_only=False), pipeline_config=pc,
                        spool_dir=str(spool))
-    assert sorted(p.name for p in src.parent.iterdir()) == ["1grams.db", "1grams_processed.db"]
+    # only the databases and the log directory (as acquisition keeps beside its database)
+    assert sorted(p.name for p in src.parent.iterdir()) == ["1grams.db", "1grams_processed.db", "logs"]
     assert list(spool.iterdir()) == []

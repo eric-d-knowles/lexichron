@@ -77,8 +77,19 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
     paths, filter_config = setup.prepare_all()
 
     mode = "restart" if pc.mode in ("restart", "reprocess") else "resume"
+    # Log to a file next to the database unless the caller configured
+    # logging (a notebook); the unit-by-unit lines go there, warnings to the
+    # console, and the UI's Progress tab shows the file's tail.
+    log_file = None
+    if not logging.getLogger().hasHandlers():
+        from ngramprep.ngram_acquire.logger import setup_logger
+        log_file = setup_logger(Path(pc.dst_db).parent / "logs", filename_prefix="ngram_filter",
+                                console=True, console_level=logging.WARNING)
+        print(f"Log file:     {log_file}")
+    logger.info("Source %s -> destination %s (mode %s, %s workers)", pc.src_db, pc.dst_db, pc.mode, pc.num_workers)
+
     vocab = getattr(filter_config, "whitelist_path", None)
-    progress = ProgressReporter(progress_path, stage="filter", db_path=pc.dst_db,
+    progress = ProgressReporter(progress_path, stage="filter", db_path=pc.dst_db, log_path=log_file,
                                 unit_label="work units",
                                 inputs={"source": pc.src_db, "vocabulary": vocab or None,
                                         "always_include": ", ".join(sorted(

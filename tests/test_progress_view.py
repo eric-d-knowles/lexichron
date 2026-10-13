@@ -205,3 +205,13 @@ def test_inputs_line_names_the_vocabulary_in_use():
     s = summarize(dict(base, inputs={"source": "/c/1grams.db", "vocabulary": None}), now=now, job_gone=False)
     assert s["inputs_text"] == "Source: /c/1grams.db  ·  Vocabulary: none (rule filters only)"
     assert summarize(base, now=now, job_gone=False)["inputs_text"] == ""     # older progress files
+
+
+def test_filter_runs_have_no_whole_corpus_line():
+    from lexichron.ui.progress_view import summarize
+    import datetime
+    now = datetime.datetime.fromisoformat("2026-10-12T00:01:00+00:00")
+    doc = {"stage": "filter", "state": "running", "unit_label": "work units", "files_total": 80,
+           "files_done": 3, "entries_written": 10, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T00:01:00+00:00", "corpus": {"files": 3, "entries": 10, "bytes": 0, "unsized": 0}}
+    assert summarize(doc, now=now, job_gone=False)["corpus_text"] == ""
