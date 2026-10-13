@@ -56,6 +56,7 @@ def test_dropped_filter_keys_are_ignored(tmp_path):
         filter:
           smart_partitioning: true
           samples_per_worker: 50000
+          work_units: 300
           min_len: 4
         """))
     cfg = load_project(p)

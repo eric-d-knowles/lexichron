@@ -63,7 +63,7 @@ _MOVED_KEYS = {("acquire", "ngram_size"): "corpus", ("filter", "ngram_size"): "c
 
 # Keys that no longer exist: dropped on load (the behaviour they selected
 # is now the only one), so files written by earlier versions still run.
-_DROPPED_KEYS = {("filter", "smart_partitioning"), ("filter", "samples_per_worker")}
+_DROPPED_KEYS = {("filter", "smart_partitioning"), ("filter", "samples_per_worker"), ("filter", "work_units")}
 
 
 def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:

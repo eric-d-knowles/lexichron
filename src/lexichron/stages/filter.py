@@ -42,7 +42,6 @@ def filter_ngrams(
     output_vocabulary_spell_check: bool = False,
     workers: Optional[int] = None,
     mode: str = "resume",
-    work_units: Optional[int] = None,
     compact_after_ingest: bool = True,
     chunk_entries: int = 200_000,
     spool_dir: Optional[str] = None,
@@ -89,9 +88,6 @@ def filter_ngrams(
         workers: Worker processes (default: CPUs - 1)
         mode: "resume" continues from the destination's markers; "restart"
             deletes the destination first
-        work_units: Number of key ranges to split the work into (default:
-            4 x workers, at least 64). The ranges are balanced by data
-            volume from the source's file metadata.
         compact_after_ingest: Compact the destination at the end
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)
@@ -142,7 +138,7 @@ def filter_ngrams(
     pipeline_config = PipelineConfig(
         src_db=paths["src_db"], dst_db=paths["dst_db"], tmp_dir=paths["tmp_dir"],
         num_workers=workers or max(1, (__import__("os").cpu_count() or 2) - 1),
-        num_initial_work_units=work_units, mode=mode,
+        num_initial_work_units=None, mode=mode,
         use_smart_partitioning=True,
         compact_after_ingest=compact_after_ingest,
         output_whitelist_path=paths["whitelist"] if output_vocabulary else None,

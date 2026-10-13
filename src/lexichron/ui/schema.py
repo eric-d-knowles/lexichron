@@ -26,7 +26,7 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type"}   # open_type: write
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             "compact_after_ingest",
             # filter
-            "work_units", "text_language",
+            "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
@@ -86,7 +86,6 @@ LABELS: Dict[str, str] = {
     "output_vocabulary_year_range": "Vocabulary years",
     "output_vocabulary_spell_check": "Spell-check vocabulary",
     "mode": "Mode",
-    "work_units": "Work units",
 }
 
 # User-facing help, where the docstring is too terse or too technical.
@@ -132,7 +131,6 @@ HELP: Dict[str, str] = {
     "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
     "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",
     "mode": "resume = continue from what the destination already has; restart = delete it first.",
-    "work_units": "Key ranges the work is split into, balanced by data volume (default: 4 x workers).",
     "filter.workers": "Parallel filtering workers. Blank = one per CPU, minus one. Slurm jobs use the job's CPU count automatically.",
 }
 
