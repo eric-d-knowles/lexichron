@@ -92,6 +92,7 @@ def test_filter_stage_end_to_end(rocks, tmp_path):
     assert (c["tokens_stopword"], c["tokens_not_alpha"], c["tokens_too_short"], c["tokens_not_in_vocab"]) == (1, 1, 1, 0)
     assert c["ngrams"] == 8 and c["ngrams_dropped_context"] == 3
     assert 3 <= c["inserted"] <= 5                    # chunk entries: duplicates may merge in a chunk
+    assert doc["database"] == {"records": 3, "bytes": doc["database"]["bytes"], "compacted": True}
 
     # a second run in resume mode does nothing and leaves the result alone
     build_processed_db(

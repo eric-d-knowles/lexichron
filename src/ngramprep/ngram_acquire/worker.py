@@ -236,7 +236,7 @@ def process_and_ingest_file(
                     f"{uncompressed_bytes:,} uncompressed bytes"
                 )
                 worker_logger.info("Worker %s (PID %s): %s", worker_id, pid, msg)
-                return msg, chunk_paths, uncompressed_bytes, entries
+                return msg, chunk_paths, uncompressed_bytes, entries, lines_processed
 
             except requests.Timeout as exc:
                 writer.discard()
@@ -259,12 +259,12 @@ def process_and_ingest_file(
                     "Worker %s (PID %s): %s - giving up after %d attempts (%s)",
                     worker_id, pid, last_error, max_attempts, detail
                 )
-        return last_error, [], 0, 0
+        return last_error, [], 0, 0, 0
 
     except Exception as exc:
         msg = f"ERROR: {filename} - {exc}"
         worker_logger.error("Worker %s (PID %s): Error - %s: %s", worker_id, pid, filename, exc)
-        return msg, [], 0, 0
+        return msg, [], 0, 0, 0
 
     finally:
         if own_session:

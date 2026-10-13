@@ -76,6 +76,7 @@ class ProgressReporter:
             "corpus": {"files": 0, "entries": 0, "bytes": 0, "unsized": 0},
             "unit_label": unit_label,          # what files_total/files_done count
             "counters": {},                    # stage-specific running totals
+            "database": {},                    # after compaction: records, bytes (exact once compacted)
             "inputs": {k: (str(v) if v is not None else None) for k, v in (inputs or {}).items()},
             "db_path": str(db_path) if db_path else None,
             "log_path": str(log_path) if log_path else None,
@@ -161,6 +162,22 @@ class ProgressReporter:
             stop.set()
             t.join(timeout=5)
             self.set_phase("ingesting" if self.doc["state"] == "running" else self.doc["phase"])
+
+    def set_database(self, db, *, compacted: bool, bookkeeping: int = 0) -> None:
+        """Record the destination's data-record count and size. After a full
+        compaction every key is in one SST entry, so RocksDB's key count is
+        exact; before that it is an estimate and is marked as such.
+        ``bookkeeping`` is the number of marker keys the stage itself keeps
+        in the database (resume markers, the partition), left out of the
+        count."""
+        try:
+            records = db.get_property("rocksdb.estimate-num-keys")
+            size = db.get_property("rocksdb.total-sst-files-size")
+        except Exception:                       # pragma: no cover - store without properties
+            return
+        self.doc["database"] = {"records": max(int(records) - int(bookkeeping), 0) if records else None,
+                                "bytes": int(size) if size else None, "compacted": bool(compacted)}
+        self._write(force=True)
 
     def finish(self, state: str = "done", message: str = "") -> None:
         self.doc["state"] = state

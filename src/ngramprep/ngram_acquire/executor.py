@@ -141,20 +141,25 @@ def process_files(
                         filename = PurePosixPath(url).name
                         chunk_paths: List[str] = []
                         try:
-                            result_msg, chunk_paths, uncompressed_bytes, _entries = fut.result()
+                            result_msg, chunk_paths, uncompressed_bytes, _entries, _lines = fut.result()
 
                             if result_msg.startswith("SUCCESS"):
                                 if progress:
                                     progress.file_ingesting(filename)
-                                ingestor.ingest_file(filename, chunk_paths,
-                                                     uncompressed_bytes=uncompressed_bytes)
+                                written = ingestor.ingest_file(filename, chunk_paths,
+                                                               uncompressed_bytes=uncompressed_bytes,
+                                                               extra={"lines": _lines})
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
                                 logger.info("Processed: %s", filename)
                                 if progress:
+                                    # lines: raw data lines parsed; inserted: records
+                                    # handed to the database (lines that produced an
+                                    # entry, after in-chunk merging)
                                     progress.file_done(filename, entries=_entries,
                                                        chunks=len(chunk_paths),
-                                                       uncompressed_bytes=uncompressed_bytes)
+                                                       uncompressed_bytes=uncompressed_bytes,
+                                                       counters={"lines": _lines, "inserted": written})
                             else:
                                 ChunkIngestor.discard(chunk_paths)
                                 failure_msgs.append(result_msg)

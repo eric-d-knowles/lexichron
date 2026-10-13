@@ -121,7 +121,7 @@ def test_worker_uses_fast_path_and_matches_python(tmp_path, monkeypatch):
         monkeypatch.setattr(worker_mod, "_parse_packed", parse_cy.parse_packed if fast else None)
         d = tmp_path / f"{'fast' if fast else 'slow'}-{mode}"
         d.mkdir()
-        msg, chunks, nbytes, entries = worker_mod.process_and_ingest_file(
+        msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
             "http://example/f.gz", 1, make_ngram_type_predicate(mode), spool_dir=str(d), chunk_entries=1000)
         assert msg.startswith("SUCCESS"), msg
         out = {}

@@ -33,3 +33,21 @@ def test_rate_limiting_keeps_forced_writes(tmp_path):
     r.file_started("a.gz")                      # not forced: may be skipped
     r.file_done("a.gz", entries=5, chunks=1, uncompressed_bytes=1)   # forced
     assert read_progress(p)["files_done"] == 1
+
+
+def test_database_figure_leaves_out_bookkeeping_keys(tmp_path):
+    import fake_rocks
+    from ngramprep.ngram_acquire.progress import ProgressReporter, read_progress
+    db = fake_rocks.open(str(tmp_path / "db"), mode="rw", create_if_missing=True)
+    with db.write_batch() as wb:
+        for i in range(10):
+            wb.put(f"k{i}".encode(), b"v")
+        wb.put(b"__processed__/a.gz", b"1")
+        wb.put(b"__processed__/b.gz", b"1")
+    p = tmp_path / "progress.json"
+    r = ProgressReporter(p, stage="acquire", min_interval_s=0)
+    r.set_database(db, compacted=True, bookkeeping=2)
+    assert read_progress(p)["database"] == {"records": 10, "bytes": read_progress(p)["database"]["bytes"],
+                                            "compacted": True}
+    r.set_database(db, compacted=False, bookkeeping=2)
+    assert read_progress(p)["database"]["compacted"] is False

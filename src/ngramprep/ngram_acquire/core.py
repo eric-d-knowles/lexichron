@@ -236,6 +236,9 @@ def download_and_ingest_to_rocksdb(
         if compact_after_ingest and not failure:
             with progress.long_phase("compacting"):
                 _perform_compaction(db, db_path)
+        # bookkeeping keys: one resume marker per file done, in any job
+        done_files = len(success) + (prior["files"] if prior else 0)
+        progress.set_database(db, compacted=bool(compact_after_ingest and not failure), bookkeeping=done_files)
 
     # Report final statistics
     end_time = datetime.now()

@@ -49,7 +49,7 @@ def test_worker_sums_colliding_tagged_variants(monkeypatch, tmp_path):
         lambda url, session=None: _FakeResponse(payload),
     )
 
-    msg, chunks, nbytes, entries = worker_mod.process_and_ingest_file(
+    msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
         "http://example/3-00000-of-00001.gz", 1,
         filter_pred=None, log_file_path=None,
         combined_bigrams={"working class"}, spool_dir=str(tmp_path),
@@ -66,7 +66,7 @@ def test_worker_splits_into_chunks_and_bounds_memory(monkeypatch, tmp_path):
     payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(1000)])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _FakeResponse(payload))
-    msg, chunks, _, entries = worker_mod.process_and_ingest_file(
+    msg, chunks, _, entries, _lines = worker_mod.process_and_ingest_file(
         "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=300)
     assert msg.startswith("SUCCESS")
     assert len(chunks) == 4 and entries == 1000          # 300+300+300+100
@@ -83,7 +83,7 @@ def test_worker_without_combining_keeps_variants_separate(monkeypatch, tmp_path)
         worker_mod, "stream_download_with_retries",
         lambda url, session=None: _FakeResponse(payload),
     )
-    _, chunks, _, entries = worker_mod.process_and_ingest_file(
+    _, chunks, _, entries, _lines = worker_mod.process_and_ingest_file(
         "http://example/f.gz", 1, spool_dir=str(tmp_path))
     assert entries == 2 and len(_collect(chunks)) == 2
 
@@ -122,7 +122,7 @@ def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch, tmp_path):
         return _FakeResponse(payload)
 
     monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
-    msg, chunks, _, entries = worker_mod.process_and_ingest_file(
+    msg, chunks, _, entries, _lines = worker_mod.process_and_ingest_file(
         "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=500)
     assert msg.startswith("SUCCESS")
     assert calls["n"] == 2
@@ -137,7 +137,7 @@ def test_worker_gives_up_after_max_attempts(monkeypatch, tmp_path):
     payload = _gz(["a_NOUN\t1990,1,1"])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _DroppingResponse(payload, drop_after=0))
-    msg, chunks, nbytes, entries = worker_mod.process_and_ingest_file(
+    msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
         "http://example/f.gz", 1, max_attempts=2, spool_dir=str(tmp_path))
     assert msg == "NETWORK_ERROR: f.gz"
     assert chunks == [] and nbytes == 0 and entries == 0

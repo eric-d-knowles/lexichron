@@ -198,6 +198,10 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                 with progress.long_phase("compacting"):
                     log("Compacting the destination database...")
                     dst.compact_all()
+            if not failed:
+                # bookkeeping keys: one marker per unit plus the stored partition
+                progress.set_database(dst, compacted=bool(cfg.compact_after and todo),
+                                      bookkeeping=len(units) + 1)
     finally:
         spool_ctx.cleanup()
 
