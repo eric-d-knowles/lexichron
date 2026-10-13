@@ -43,14 +43,16 @@ def filter_ngrams(
     output_vocabulary_spell_check: bool = False,
     workers: Optional[int] = None,
     mode: str = "resume",
+    output: Optional[str] = None,
     compact_after_ingest: bool = True,
     chunk_entries: int = 200_000,
     spool_dir: Optional[str] = None,
     progress_path: Optional[str] = None,
 ) -> str:
     """
-    Filter a raw n-gram database into a processed one, and (for unigrams)
-    write the vocabulary the later stages use.
+    Filter a raw n-gram database. Unigrams become a processed database (and
+    the vocabulary the later stages use); longer n-grams become, in the same
+    pass, the pivoted (year-keyed) database that training reads.
 
     Args:
         ngram_size: N-gram size (1-5)
@@ -92,6 +94,12 @@ def filter_ngrams(
         workers: Worker processes (default: CPUs - 1)
         mode: "resume" continues from the destination's markers; "restart"
             deletes the destination first
+        output: "processed" writes <n>grams_processed.db (keyed by n-gram, a
+            packed year list each; the vocabulary is built from it) or
+            "pivoted" writes <n>grams_pivoted.db (keyed year-first, one
+            record per year and n-gram, what training reads) in one pass
+            from the raw database. Default: processed for unigrams, pivoted
+            for longer n-grams
         compact_after_ingest: Compact the destination at the end
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)
@@ -109,8 +117,15 @@ def filter_ngrams(
     ngram_size = int(ngram_size)
     if min_context_tokens is None:
         min_context_tokens = 1 if ngram_size == 1 else 2
+    if output is None:
+        output = "processed" if ngram_size == 1 else "pivoted"
+    if output not in ("processed", "pivoted"):
+        raise ValueError(f"output must be 'processed' or 'pivoted', not {output!r}")
     if output_vocabulary is None:
-        output_vocabulary = ngram_size == 1
+        output_vocabulary = output == "processed" and ngram_size == 1
+    if output_vocabulary and output == "pivoted":
+        raise ValueError("a vocabulary is built from a processed database; set output to processed "
+                         "or turn off output_vocabulary")
     if no_vocabulary and vocabulary:
         raise ValueError("no_vocabulary is set but a vocabulary file is given as well; choose one")
     if vocabulary is None and ngram_size > 1 and not no_vocabulary:
@@ -143,12 +158,13 @@ def filter_ngrams(
     )
     paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     pipeline_config = PipelineConfig(
-        src_db=paths["src_db"], dst_db=paths["dst_db"], tmp_dir=paths["tmp_dir"],
+        src_db=paths["src_db"], tmp_dir=paths["tmp_dir"],
         num_workers=workers or max(1, (__import__("os").cpu_count() or 2) - 1),
-        num_initial_work_units=None, mode=mode,
+        num_initial_work_units=None, mode=mode, output=output,
         use_smart_partitioning=True,
         compact_after_ingest=compact_after_ingest,
         output_whitelist_path=paths["whitelist"] if output_vocabulary else None,
+        dst_db=paths["pivoted_db"] if output == "pivoted" else paths["dst_db"],
         output_whitelist_top_n=output_vocabulary_top_n,
         output_whitelist_year_range=tuple(output_vocabulary_year_range) if output_vocabulary_year_range else None,
         output_whitelist_spell_check=output_vocabulary_spell_check,

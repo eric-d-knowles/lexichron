@@ -24,7 +24,7 @@ from ..config import FilterConfig, PipelineConfig
 from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.rangemap import RangeMapConfig, run_rangemap
 from ngramprep.utilities.display import format_banner, truncate_path_to_fit
-from .mapper import FilterMapper
+from .mapper import FilterMapper, PivotFilterMapper
 from .setup import PipelineSetup
 from .whitelist import write_whitelist
 
@@ -54,7 +54,8 @@ def derive_paths(db_path_stub: str, ngram_size: int, repo_release_id: str, repo_
     base = src.parent
     dst = base / f"{ngram_size}grams_processed.db"
     return {"src_db": src, "dst_db": dst, "tmp_dir": base / "processing_tmp",
-            "whitelist": dst / "whitelist.txt"}
+            "whitelist": dst / "whitelist.txt",
+            "pivoted_db": base / f"{ngram_size}grams_pivoted.db"}
 
 
 def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineConfig,
@@ -66,9 +67,12 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
         raise ValueError("pipeline_config needs src_db and dst_db (see derive_paths)")
     t0 = time.perf_counter()
 
-    print(format_banner("N-gram filtering"))
+    pivot = pc.output == "pivoted"
+    if pivot and pc.output_whitelist_path:
+        raise ValueError("a vocabulary (output whitelist) is built from a processed database, not a pivoted one")
+    print(format_banner("N-gram filtering" + (" and pivoting" if pivot else "")))
     print(f"Source:       {pc.src_db}")
-    print(f"Destination:  {pc.dst_db}")
+    print(f"Destination:  {pc.dst_db}" + ("  (keyed year-first)" if pivot else ""))
     print(f"Mode:         {pc.mode}")
     print(f"Workers:      {pc.num_workers}")
 
@@ -97,8 +101,13 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
                                             for x in (filter_config.always_include or ()))) or None})
     num_units = pc.num_initial_work_units or max(4 * pc.num_workers, 64)
 
+    # The pivoted output is many times the size of its input (one record per
+    # year), so its chunks go to the database as SST files rather than
+    # through the parent's write path.
     cfg = RangeMapConfig(
-        src_db=Path(pc.src_db), dst_db=Path(pc.dst_db), mapper=FilterMapper(filter_config),
+        src_db=Path(pc.src_db), dst_db=Path(pc.dst_db),
+        mapper=PivotFilterMapper(filter_config) if pivot else FilterMapper(filter_config),
+        output="sst" if pivot else "chunks",
         num_units=num_units, workers=pc.num_workers, mode=mode,
         smart_partitioning=pc.use_smart_partitioning, samples_per_worker=pc.samples_per_worker,
         use_cached_partition=pc.use_cached_partitions and pc.cache_partitions,
@@ -108,7 +117,7 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
         compact_after=pc.compact_after_ingest, progress=progress,
     )
     result = run_rangemap(cfg)
-    print(f"Filtered {result.scanned:,} records -> {result.kept:,} kept in "
+    print(f"Filtered {result.scanned:,} records -> {result.kept:,} {'year records' if pivot else 'kept'} in "
           f"{result.units_done} work units ({result.units_skipped} already done) "
           f"in {result.seconds / 60:.1f} min")
 
@@ -236,7 +245,7 @@ def build_processed_db(
         if pc.tmp_dir is None:
             pc = replace(pc, tmp_dir=Path(pc.dst_db).parent / "processing_tmp")
         if pc.output_whitelist_path == "default":
-            pc = replace(pc, output_whitelist_path=Path(pc.dst_db) / "whitelist.txt")
+            pc = replace(pc, output_whitelist_path=None if pc.output == "pivoted" else Path(pc.dst_db) / "whitelist.txt")
         return run_filter_pipeline(filter_config, pc, progress_path=progress_path,
                                    spool_dir=spool_dir, chunk_entries=chunk_entries)
 
@@ -268,7 +277,12 @@ def build_processed_db(
         pc = PipelineConfig(output_whitelist_path=output_whitelist_path, **kwargs)
 
     wl = pc.output_whitelist_path
-    pc = replace(pc, src_db=paths["src_db"], dst_db=paths["dst_db"], tmp_dir=paths["tmp_dir"],
-                 output_whitelist_path=(paths["whitelist"] if wl == "default" else wl))
+    if pc.output == "pivoted":
+        dst = paths["pivoted_db"]
+        wl = None if wl == "default" else wl
+    else:
+        dst = paths["dst_db"]
+        wl = paths["whitelist"] if wl == "default" else wl
+    pc = replace(pc, src_db=paths["src_db"], dst_db=dst, tmp_dir=paths["tmp_dir"], output_whitelist_path=wl)
     return run_filter_pipeline(filter_config, pc, progress_path=progress_path,
                                spool_dir=spool_dir, chunk_entries=chunk_entries)

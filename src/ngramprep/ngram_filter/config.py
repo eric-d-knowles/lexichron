@@ -100,6 +100,12 @@ class PipelineConfig:
     compact_after_ingest: bool = True
     work_unit_claim_order: str = "random"  # "sequential" or "random"
 
+    # What the stage writes: "processed" (keyed by n-gram, one packed year list
+    # each: the unigram stage, and the vocabulary comes from it) or "pivoted"
+    # (keyed year-first, one record per (year, n-gram), for training; the
+    # multigram stage, in one pass from the raw database)
+    output: str = "processed"
+
     # Output whitelist generation (from filtered results)
     output_whitelist_path: Optional[Union[str, Path]] = None
     output_whitelist_top_n: Optional[int] = None
