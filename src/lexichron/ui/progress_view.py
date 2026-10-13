@@ -268,7 +268,10 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
     groups = [("Progress", progress_tiles)]
     current = list(doc.get("current") or [])
     phases = doc.get("phases") or {}
-    if current and phases:
+    # Shown for the whole of a running run, count zero included, so the group
+    # does not come and go between work units (the UI rebuilds its tiles
+    # when the set of groups changes).
+    if phases and (current or info.get("state") == "running"):
         if stage == "filter":
             labels = (("queued", "Waiting for a worker"), ("parsing", "Scanning"),
                       ("parsed", "Scanned, waiting to ingest"), ("ingesting", "Ingesting"))

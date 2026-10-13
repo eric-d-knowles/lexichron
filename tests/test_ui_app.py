@@ -130,11 +130,14 @@ def test_progress_tab_shows_selected_run(tmp_path):
     log.write_text("first\nsecond\nthird\n")
     run = tmp_path / ".lexichron" / "runs" / "20261009_120000_acquire"
     run.mkdir(parents=True)
-    run.joinpath("progress.json").write_text(json.dumps(dict(
-        stage="acquire", state="running", started=(now - timedelta(minutes=5)).isoformat(timespec="seconds"),
-        updated=now.isoformat(timespec="seconds"), finished=None, files_total=10, files_done=2,
-        files_failed=0, files_skipped=0, entries_written=1000, uncompressed_bytes=10, chunks=2,
-        current=["f.gz"], message="", db_path="/db", log_path=str(log), slurm_job_id="42", hostname="n1")))
+    def write_running(current, phases):
+        run.joinpath("progress.json").write_text(json.dumps(dict(
+            stage="acquire", state="running", started=(now - timedelta(minutes=5)).isoformat(timespec="seconds"),
+            updated=now.isoformat(timespec="seconds"), finished=None, files_total=10, files_done=2,
+            files_failed=0, files_skipped=0, entries_written=1000, uncompressed_bytes=10, chunks=2,
+            current=current, phases=phases, message="", db_path="/db", log_path=str(log), slurm_job_id="42",
+            hostname="n1")))
+    write_running(["f.gz"], {"queued": 0, "parsing": 1, "parsed": 0, "ingesting": 0})
     older = tmp_path / ".lexichron" / "runs" / "20261009_110000_acquire"
     older.mkdir()
     older.joinpath("progress.json").write_text(json.dumps(dict(
@@ -163,12 +166,19 @@ def test_progress_tab_shows_selected_run(tmp_path):
             assert "1 files in flight" not in str(app.query_one("#run-headline").content)
             assert app.query_one("#run-log-box").collapsed            # log tail is folded away by default
             assert app._log_shown[1] == ("first", "second", "third")
-            # the log pane follows the file
+            meters = app.query_one("#meters", Meters)
+            tiles_before = list(meters.query(".meter"))
+            assert str(meters._titles[1].content) == "In flight: 1 files"
+            # the log pane follows the file; a changed in-flight count updates
+            # the meters in place rather than rebuilding (and blanking) them
             log.write_text("first\nsecond\nthird\nfourth\n")
+            write_running(["f.gz", "g.gz"], {"queued": 1, "parsing": 1, "parsed": 0, "ingesting": 0})
             app.refresh_jobs()
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert app._log_shown[1][-1] == "fourth"
+            assert str(meters._titles[1].content) == "In flight: 2 files"
+            assert list(meters.query(".meter")) == tiles_before
             # selecting the older run switches the panel
             runs.move_cursor(row=1)
             await pilot.pause()

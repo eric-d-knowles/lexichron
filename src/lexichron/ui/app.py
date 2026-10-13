@@ -140,29 +140,42 @@ class FixedValue(Static):
 
 class Meters(Vertical):
     """The figures of a run as labelled tiles in a grid, grouped under
-    headings (see progress_view.meters). Tiles are rebuilt only when the
-    set of labels changes; otherwise their values are updated in place, so a
-    refresh every few seconds does not flicker."""
+    headings (see progress_view.meters). The widgets are rebuilt only when
+    the set of tile labels changes; otherwise headings and values are updated
+    in place, so a refresh every few seconds does not flicker. Rebuilding
+    mounts finished widgets in one go rather than empty ones to fill later,
+    so even then no blank frame is painted."""
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._shape: tuple = ()
+        self._titles: List[Static] = []
+        self._tiles: List[List[Static]] = []
+
+    @staticmethod
+    def _text(label: str, value: str, note: str) -> str:
+        return f"[dim]{label}[/]\n[b]{value}[/]" + (f"  [dim]{note}[/]" if note else "")
 
     def show(self, groups) -> None:
-        shape = tuple((title, tuple(label for label, _, _ in tiles)) for title, tiles in groups)
+        shape = tuple(tuple(label for label, _, _ in tiles) for _, tiles in groups)
         if shape != self._shape:
+            # Widgets are kept by reference, not id: the old ones are removed
+            # asynchronously and would clash with same-named new ones.
             self._shape = shape
+            self._titles, self._tiles, nodes = [], [], []
+            for title, tiles in groups:
+                heading = Static(title, classes="meter-group")
+                cells = [Static(self._text(*tile), classes="meter") for tile in tiles]
+                self._titles.append(heading)
+                self._tiles.append(cells)
+                nodes += [heading, Grid(*cells, classes="meter-grid")]
             self.remove_children()
-            for gi, (title, tiles) in enumerate(groups):
-                self.mount(Static(title, classes="meter-group"))
-                grid = Grid(classes="meter-grid")
-                self.mount(grid)
-                for ti, _ in enumerate(tiles):
-                    grid.mount(Static("", classes="meter", id=f"meter-{gi}-{ti}"))
-        for gi, (_, tiles) in enumerate(groups):
-            for ti, (label, value, note) in enumerate(tiles):
-                text = f"[dim]{label}[/]\n[b]{value}[/]" + (f"  [dim]{note}[/]" if note else "")
-                self.query_one(f"#meter-{gi}-{ti}", Static).update(text)
+            self.mount(*nodes)
+            return
+        for heading, cells, (title, tiles) in zip(self._titles, self._tiles, groups):
+            heading.update(title)
+            for cell, tile in zip(cells, tiles):
+                cell.update(self._text(*tile))
 
 
 class LexichronApp(App):
