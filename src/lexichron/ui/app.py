@@ -355,6 +355,7 @@ class LexichronApp(App):
                     with Horizontal(classes="actions"):
                         yield Button("Refresh", id="refresh-jobs")
                         yield Button("Cancel selected job", id="cancel-job", variant="error")
+                        yield Button("Clear finished runs", id="clear-runs")
         yield Footer()
 
     def _field_widgets(self, section: str, f: Field):
@@ -423,7 +424,7 @@ class LexichronApp(App):
         jobs.add_columns("Job", "Name", "State", "Elapsed", "Limit", "Nodes", "Reason")
         jobs.cursor_type = "row"
         runs = self.query_one("#runs", DataTable)
-        runs.add_columns("Run", "State", "Files", "Entries", "Rate", "Elapsed", "Job")
+        runs.add_columns("Run", "State", "Done", "Records", "Rate", "Elapsed", "Job")
         runs.cursor_type = "row"
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
@@ -617,6 +618,25 @@ class LexichronApp(App):
             self.notify(str(exc), severity="error")
         self.refresh_jobs()
 
+    @on(Button.Pressed, "#clear-runs")
+    def _clear_runs_pressed(self) -> None:
+        """Remove the run directories of runs that are no longer running (done,
+        failed, or stopped); a running run's progress file is in use."""
+        import shutil
+        removed = 0
+        for d in self._run_dirs():
+            p = read_progress(d / "progress.json")
+            if p and self._summarize(p)["state_label"] == "running":
+                continue
+            try:
+                shutil.rmtree(d)
+                removed += 1
+            except OSError as exc:
+                self.notify(f"Could not remove {d.name}: {exc}", severity="error")
+        self.selected_run = None
+        self._refresh_runs()
+        self.notify(f"Removed {removed} run{'s' if removed != 1 else ''}")
+
     # -- jobs & runs ----------------------------------------------------------------
     def refresh_jobs(self) -> None:
         """Periodic refresh. Nothing here may take the app down: a flaky
@@ -700,8 +720,14 @@ class LexichronApp(App):
             files = f"{info['done']}/{info['total']}" if info["total"] else str(info["done"])
             if info["failed"]:
                 files += f" ({info['failed']} failed)"
-            runs.add_row(d.name, info["state_label"], files,
-                         f"{int(p.get('entries_written', 0)):,}", f"{fmt_count(info['rate'])}/s",
+            # Records: what the compacted database holds once the run is done
+            # (marked *), the records kept so far while it runs
+            db = p.get("database") or {}
+            if info["state"] == "done" and db.get("records") is not None:
+                records = f"{int(db['records']):,}" + ("*" if db.get("compacted") else " (est.)")
+            else:
+                records = f"{int(p.get('entries_written', 0)):,}"
+            runs.add_row(d.name, info["state_label"], files, records, f"{fmt_count(info['rate'])}/s",
                          fmt_duration(info["elapsed_s"]), p.get("slurm_job_id") or "-", key=str(d))
         if dirs and self.selected_run:
             try:

@@ -136,7 +136,8 @@ def test_progress_tab_shows_selected_run(tmp_path):
         updated=(now - timedelta(hours=1)).isoformat(timespec="seconds"),
         finished=(now - timedelta(hours=1)).isoformat(timespec="seconds"), files_total=1, files_done=1,
         files_failed=0, files_skipped=0, entries_written=5, uncompressed_bytes=1, chunks=1,
-        current=[], message="", db_path=None, log_path=None, slurm_job_id=None, hostname="n1")))
+        current=[], message="", db_path=None, log_path=None, slurm_job_id=None, hostname="n1",
+        database={"records": 3, "bytes": 100, "compacted": True})))
 
     async def scenario():
         from textual.widgets import DataTable, ProgressBar
@@ -145,6 +146,8 @@ def test_progress_tab_shows_selected_run(tmp_path):
             await pilot.pause()
             runs = app.query_one("#runs", DataTable)
             assert runs.row_count == 2 and app.selected_run == run       # newest first, selected
+            # Records column: kept so far for a running run, the compacted database for a finished one
+            assert str(runs.get_row_at(0)[3]) == "1,000" and str(runs.get_row_at(1)[3]) == "3*"
             assert "running job 42 on n1 · 2/10 files (20%)" in str(app.query_one("#run-headline").content)
             bar = app.query_one("#run-bar", ProgressBar)
             assert bar.total == 10 and bar.progress == 2
@@ -160,6 +163,10 @@ def test_progress_tab_shows_selected_run(tmp_path):
             await pilot.pause()
             assert app.selected_run == older
             assert str(app.query_one("#run-headline").content).startswith("done on n1 · 1/1 files (100%)")
+            # clearing removes finished runs and keeps the running one
+            app._clear_runs_pressed()           # the button's handler (the tab is not on screen)
+            await pilot.pause()
+            assert not older.exists() and run.exists() and runs.row_count == 1
         _assert_clean(app)
 
     asyncio.run(scenario())

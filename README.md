@@ -388,7 +388,11 @@ Tabs:
   merge before insertion) and what the final database *holds* (fewer again,
   exact once compacted). A filter run also shows what each rule removed:
   tokens that were not alphabetic, too short, stopwords or not in the
-  vocabulary, and n-grams dropped for having too few real tokens. (Every run writes
+  vocabulary, and n-grams dropped for having too few real tokens. The
+  Runs table's *Records* column is the records kept so far while a run is
+  going and the compacted database's count (marked `*`) once it is done;
+  *Clear finished runs* removes the records of runs that are no longer
+  running. (Every run writes
   `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
