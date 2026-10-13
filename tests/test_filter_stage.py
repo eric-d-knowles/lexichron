@@ -129,6 +129,9 @@ def test_a_run_leaves_no_temporary_directories(rocks, tmp_path, monkeypatch):
                         num_initial_work_units=8, output_whitelist_path=None, compact_after_ingest=False)
     build_processed_db(filter_config=FilterConfig(min_len=1, alpha_only=False), pipeline_config=pc,
                        spool_dir=str(spool))
-    # only the databases and the log directory (as acquisition keeps beside its database)
-    assert sorted(p.name for p in src.parent.iterdir()) == ["1grams.db", "1grams_processed.db", "logs"]
+    # only the databases, plus the log directory when the stage set up its own
+    # log file (it does not under pytest, whose capture handler is already on
+    # the root logger; it does in a Slurm job)
+    left = {p.name for p in src.parent.iterdir()} - {"logs"}
+    assert left == {"1grams.db", "1grams_processed.db"}
     assert list(spool.iterdir()) == []
