@@ -34,6 +34,7 @@ def filter_ngrams(
     min_context_tokens: Optional[int] = None,
     bin_size: int = 1,
     vocabulary: Optional[str] = None,
+    no_vocabulary: bool = False,
     vocabulary_top_n: Optional[int] = None,
     always_include: Optional[List[str]] = None,
     output_vocabulary: Optional[bool] = None,
@@ -75,7 +76,10 @@ def filter_ngrams(
             tokens not in it become <UNK> and the other filters are skipped.
             Unigrams use none. Longer n-grams default to this corpus's own
             unigram vocabulary (<...>/1gram_files/1grams_processed.db/whitelist.txt),
-            which the unigram filter writes; the stage refuses to run without one.
+            which the unigram filter writes; the stage refuses to run without one
+            unless no_vocabulary is set.
+        no_vocabulary: Filter longer n-grams with the rule filters alone, with
+            no vocabulary. Rarely wanted: the result is far larger.
         vocabulary_top_n: Use only the first N tokens of the vocabulary file
         always_include: Tokens kept even if not in the vocabulary (e.g. focal
             terms the unigram stage dropped as stopwords: he, she, ...)
@@ -107,12 +111,15 @@ def filter_ngrams(
         min_context_tokens = 1 if ngram_size == 1 else 2
     if output_vocabulary is None:
         output_vocabulary = ngram_size == 1
-    if vocabulary is None and ngram_size > 1:
+    if no_vocabulary and vocabulary:
+        raise ValueError("no_vocabulary is set but a vocabulary file is given as well; choose one")
+    if vocabulary is None and ngram_size > 1 and not no_vocabulary:
         unigram = derive_paths(db_path_stub, 1, str(repo_release_id), str(repo_corpus_id))["whitelist"]
         if not unigram.exists():
             raise FileNotFoundError(
                 f"{ngram_size}-grams are filtered against a vocabulary, and none was given or found at "
-                f"{unigram}. Run the unigram filter for this corpus first, or set vocabulary.")
+                f"{unigram}. Run the unigram filter for this corpus first, set vocabulary, "
+                f"or set no_vocabulary to filter with the rules alone.")
         vocabulary = str(unigram)
         print(f"Vocabulary:   {vocabulary} (this corpus's unigram vocabulary)")
 

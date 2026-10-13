@@ -76,6 +76,10 @@ def test_multigrams_default_to_the_corpus_unigram_vocabulary(rocks, no_spacy, tm
     with pytest.raises(FileNotFoundError) as exc:
         stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path))
     assert "unigram filter" in str(exc.value)
+    # the explicit override: rule filters only (the_the -> dropped, cats_run -> cat run)
+    out = stage.filter_ngrams(2, "20200217", "eng", str(stub), no_vocabulary=True, workers=2, mode="restart",
+                              spool_dir=str(tmp_path))
+    assert b"cat run" in fake_rocks.dump(out)
     # the unigram stage's output is picked up automatically
     wl = derive_paths(str(stub), 1, "20200217", "eng")["whitelist"]
     wl.parent.mkdir(parents=True)

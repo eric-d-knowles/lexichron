@@ -47,7 +47,7 @@ ORDER = ["release", "language", "ngram_size", "db_path_stub",
          "ngram_type", "combined_bigrams", "overwrite_db", "file_range",
          # filter
          "lowercase", "lemmatize", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
-         "min_context_tokens", "bin_size", "vocabulary", "always_include",
+         "min_context_tokens", "bin_size", "vocabulary", "no_vocabulary", "always_include",
          "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
          "workers"]
 
@@ -79,6 +79,7 @@ LABELS: Dict[str, str] = {
     "min_context_tokens": "Min real tokens",
     "bin_size": "Year bin size",
     "vocabulary": "Vocabulary file",
+    "no_vocabulary": "No vocabulary",
     "vocabulary_top_n": "Vocabulary top N",
     "always_include": "Always keep",
     "output_vocabulary": "Write vocabulary",
@@ -124,6 +125,7 @@ HELP: Dict[str, str] = {
     "vocabulary": ("Vocabulary file (whitelist.txt): tokens not in it become <UNK> and the other filters are "
                    "skipped. Blank: none for unigrams; for longer n-grams, this corpus's own unigram vocabulary, "
                    "which the unigram filter writes."),
+    "no_vocabulary": "Filter 2-5-grams with the rule filters alone, without a vocabulary. Rarely wanted: the result is far larger.",
     "vocabulary_top_n": "Use only the first N tokens of the vocabulary file.",
     "always_include": "Comma-separated tokens kept even if not in the vocabulary (e.g. he, she, his, her).",
     "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams, off for longer n-grams.",
