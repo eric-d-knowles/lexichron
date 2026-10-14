@@ -102,6 +102,9 @@ def test_engine_maps_merges_marks_and_resumes(rocks, tmp_path):
     assert res2.units_skipped == 8 and res2.units_done == 0
     assert len(load_partition(fake_rocks._REGISTRY[str(dst)])) == 8    # not 99: the stored one wins
     assert fake_rocks.dump(dst) == out
+    # a run that died during its compaction is finished by a resume: the
+    # destination is compacted again even though no unit was processed
+    assert fake_rocks._REGISTRY[str(dst)].compactions == 2
 
 
 def test_failed_unit_is_retried_on_rerun(rocks, tmp_path):
@@ -230,9 +233,12 @@ def test_sst_output_with_one_to_many_mapper(rocks, tmp_path):
     assert _unpack(data[struct.pack(">I", 2000) + b"word7"]) == [(2000, 2, 2)]
     assert res.kept == 400 and res.scanned == 404                 # 200 raw keys x 2 spellings kept; drops skipped
     assert res.produced == 600                                    # -> 1 + 2 year records each
-    assert fake_rocks._REGISTRY[str(dst)].ingests > 0             # chunks arrived as files
-    assert not [p for p in tmp_path.rglob("*.sst*")]              # and were consumed
-    assert sum(d["entries"] for d in fake_rocks.markers(dst).values()) <= 600   # entries per unit, after in-chunk merging
+    # each unit arrived as ONE file (its parts merged by the worker), so the
+    # destination has as many ingested files as units, not as chunks
+    store = fake_rocks._REGISTRY[str(dst)]
+    assert 0 < store.ingests <= len(fake_rocks.markers(dst)) and store.ingested_files == store.ingests
+    assert not [p for p in tmp_path.rglob("*.sst*")]              # parts and merged files were consumed
+    assert sum(d["entries"] for d in fake_rocks.markers(dst).values()) <= 600   # entries per unit, after merging
 
 
 def test_underscore_tokens_are_data_not_bookkeeping():

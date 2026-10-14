@@ -49,10 +49,11 @@ class ChunkIngestor:
         count them."""
         chunk_paths = list(chunk_paths)
         written = 0
+        sst = [p for p in chunk_paths if p.endswith(".sst")]
+        if sst:
+            self._ingest_sst(sst)
         for path in chunk_paths:
-            if path.endswith(".sst"):
-                self._ingest_sst(path)
-            else:
+            if not path.endswith(".sst"):
                 written += self._ingest_chunk(path)
         if entries is not None:
             written = int(entries)
@@ -95,22 +96,23 @@ class ChunkIngestor:
             logger.warning("Could not remove ingested chunk %s: %s", path, exc)
         return n
 
-    def _ingest_sst(self, path: str) -> None:
-        # One file per call: a unit's chunks overlap one another in key space
-        # (output keys are not in source order), and files ingested together
-        # must not overlap. The file is moved, not copied.
+    def _ingest_sst(self, paths: List[str]) -> None:
+        # All of a unit's files in one call (one manifest write); RocksDB
+        # accepts files that overlap one another in key space, placing them
+        # in level 0. The files are moved, not copied.
         try:
-            self.db.ingest([path], move=True)
+            self.db.ingest(list(paths), move=True)
         except Exception:
-            logger.error("SST ingest error for %s; aborting to prevent data loss", path)
+            logger.error("SST ingest error for %s; aborting to prevent data loss", paths)
             raise
         self.write_batches += 1
-        logger.info("Ingested SST %s", os.path.basename(path))
-        if os.path.exists(path):                  # a store that copied rather than moved
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        logger.info("Ingested %d SST file(s): %s", len(paths), ", ".join(os.path.basename(p) for p in paths))
+        for path in paths:
+            if os.path.exists(path):              # a store that copied rather than moved
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
 
     @staticmethod
     def discard(chunk_paths: Iterable[str]) -> None:

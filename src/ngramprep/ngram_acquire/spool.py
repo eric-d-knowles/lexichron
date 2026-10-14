@@ -168,7 +168,25 @@ class SstChunkWriter(ChunkWriter):
         self.pending = {}
 
     def finish(self) -> List[str]:
+        """Merge the parts into one SST file (rocks-shim >= 0.9) and publish
+        it. The parent then ingests one file per unit: a compaction holds
+        every level-0 file open at once, so their number must stay in the
+        hundreds. Without merge support the parts are published as they are."""
         self._spill()
+        if not self.part_paths:
+            return []
+        from ngramprep.common_db.api import rs
+        merge = getattr(rs, "merge_sst_files", None)
+        if merge is not None and len(self.part_paths) > 1:
+            merged = self.spool_dir / f"{self.file_tag}.sst.part"
+            self.entries_total = int(merge([str(p) for p in self.part_paths], str(merged),
+                                           compression=self.compression))
+            for part in self.part_paths:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+            self.part_paths = [merged]
         published: List[str] = []
         for part in self.part_paths:
             final = part.with_name(part.name[:-len(".part")])      # x.00001.sst.part -> x.00001.sst

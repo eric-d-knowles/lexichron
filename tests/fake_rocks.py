@@ -98,12 +98,13 @@ class DB:
     def ingest(self, paths, move=True, write_global_seqno=False):
         import os
         import pickle
+        self.ingests = getattr(self, "ingests", 0) + 1                      # calls
+        self.ingested_files = getattr(self, "ingested_files", 0) + len(paths)
         for p in paths:
             with builtins.open(p, "rb") as fh:
                 _compression, entries = pickle.load(fh)
             for kind, k, v in entries:
                 self._apply(kind, k, v)
-            self.ingests = getattr(self, "ingests", 0) + 1
             if move:
                 os.remove(p)
 
@@ -162,6 +163,30 @@ class SstFileWriter:
     def file_size(self):
         import os
         return os.path.getsize(self.path) if self.path else 0
+
+
+def merge_sst_files(parts, out, *, compression="zstd", compression_level=3, merge_operator="packed24"):
+    """rocks-shim 0.9: merge sorted parts into one file, summing keys shared
+    by parts with the packed24 operator. Parts are left in place."""
+    import pickle
+    from ngramprep.ngram_acquire.worker import merge_packed_records
+    merged = {}
+    for part in parts:
+        with builtins.open(part, "rb") as fh:
+            _c, entries = pickle.load(fh)
+        for kind, k, v in entries:
+            if k in merged:
+                if merge_operator == "none":
+                    raise RuntimeError("key present in more than one part with merge_operator 'none'")
+                merged[k] = merge_packed_records(merged[k], v)
+            else:
+                merged[k] = v
+    w = SstFileWriter(compression=compression)
+    w.open(out)
+    for k in sorted(merged):
+        w.merge(k, merged[k])
+    w.finish()
+    return len(merged)
 
 
 def open(path, mode="rw", profile="", create_if_missing=False, **_):
