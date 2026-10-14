@@ -83,6 +83,27 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
 # Argument parsing
 # ---------------------------------------------------------------------------
 
+def _inspect(args: argparse.Namespace) -> int:
+    from lexichron.inspection import describe, format_summary, rows
+    info = describe(args.path)
+    print(format_summary(info))
+    if info.get("error"):
+        return 1
+    mode = "key" if args.key is not None else "prefix" if args.prefix is not None else "head"
+    try:
+        layout, found = rows(args.path, mode, args.key or args.prefix or "", args.rows, args.layout)
+    except ValueError as exc:
+        print(f"lexichron inspect: {exc}", file=sys.stderr)
+        return 2
+    if not found:
+        print("(no records)")
+        return 0
+    width = min(max(len(k) for k, _ in found), 60)
+    for k, v in found:
+        print(f"{k:<{width}}  {v}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="lexichron",
@@ -96,6 +117,21 @@ def build_parser() -> argparse.ArgumentParser:
                         description="Open the terminal user interface (requires the 'ui' extra).")
     ui.add_argument("ui_args", nargs=argparse.REMAINDER, help="arguments for the UI (project file, --stage)")
     ui.set_defaults(stage=None, command="ui")
+
+    ins = sub.add_parser(
+        "inspect", help="Show records of a database or vocabulary file",
+        description="Show a few records of a database (opened read-only) or a vocabulary file: the "
+                    "first ones, those from a key onwards, or those with a prefix. Keys are decoded "
+                    "for the file's layout: [2011] nuclear for a pivoted database, the n-gram for "
+                    "an n-gram-keyed one, [fic][2000] text for a Davies corpus.")
+    ins.add_argument("path", help="database directory or vocabulary file")
+    which = ins.add_mutually_exclusive_group()
+    which.add_argument("--key", metavar="KEY", help="records from this key onwards")
+    which.add_argument("--prefix", metavar="PREFIX", help="records whose key starts with this")
+    ins.add_argument("--rows", type=int, default=20, metavar="N", help="how many records (default 20)")
+    ins.add_argument("--layout", choices=("auto", "pivoted", "ngram", "davies", "raw"), default="auto",
+                     help="key layout (default: sniffed from the first records)")
+    ins.set_defaults(stage=None, command="inspect")
 
     for stage, (_, help_text) in STAGES.items():
         p = sub.add_parser(stage, help=help_text, description=help_text)
@@ -123,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.exit(1, f"lexichron ui: the terminal UI needs the 'ui' extra "
                            f"(pip install 'lexichron[ui]'): {exc}\n")
         return ui_main(args.ui_args)
+    if args.command == "inspect":
+        return _inspect(args)
     try:
         return _run_stage(args.stage, args)
     except ConfigError as exc:

@@ -355,3 +355,55 @@ def test_stale_file_handle_does_not_crash_refresh(tmp_path, monkeypatch):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_inspect_tab_lists_databases_and_shows_records(tmp_path, monkeypatch):
+    import struct
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).parent))
+    import fake_rocks
+    from ngramprep.common_db import api as dbapi
+    from textual.widgets import DataTable, Input, Static
+    fake_rocks.reset()
+    monkeypatch.setattr(dbapi, "rs", fake_rocks)
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    corpus.mkdir(parents=True)
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "filter: {}\n")
+    db = fake_rocks.open(str(corpus / "5grams_pivoted.db"), mode="rw", create_if_missing=True)
+    with db.write_batch() as wb:
+        for year, ng, count in ((1990, b"cat run", 5), (2011, b"nuclear <UNK>", 9), (2011, b"nuclear power", 4)):
+            wb.put(struct.pack(">I", year) + ng, struct.pack("<QQQ", year, count, count))
+    (corpus / "5grams_pivoted.db" / "CURRENT").write_text("MANIFEST-000001\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "filter")
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            sel = app.query_one("#inspect-db", Select)
+            assert [v for _, v in sel._options if v is not Select.NULL] == [str(corpus / "5grams_pivoted.db")]
+            sel.value = str(corpus / "5grams_pivoted.db")            # choosing fills the path and describes
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.query_one("#inspect-path", Input).value == str(corpus / "5grams_pivoted.db")
+            assert "3 records" in str(app.query_one("#inspect-summary", Static).content)
+            assert "keys look pivoted" in str(app.query_one("#inspect-summary", Static).content)
+            app.query_one("#inspect-key", Input).value = "[2011] nuclear"
+            app._inspect("prefix")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            table = app.query_one("#inspect-table", DataTable)
+            assert table.row_count == 2 and str(table.get_row_at(0)[0]) == "[2011] nuclear <UNK>"
+            assert "2 record(s) with prefix '[2011] nuclear'" in str(app.query_one("#inspect-note", Static).content)
+            # a key without the year is refused with the reason, not a crash
+            app.query_one("#inspect-key", Input).value = "nuclear"
+            app._inspect("key")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "start with the year" in str(app.query_one("#inspect-note", Static).content)
+        _assert_clean(app)
+
+    asyncio.run(scenario())

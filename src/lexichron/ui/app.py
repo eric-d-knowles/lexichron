@@ -40,6 +40,7 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
+from lexichron.inspection import LAYOUTS, candidates, describe, format_summary, rows as inspect_rows
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
@@ -205,6 +206,11 @@ class LexichronApp(App):
     #runlog { height: 1fr; }
     #jobs { height: auto; max-height: 8; }
     #runs { height: auto; max-height: 8; }
+    #inspect-table { height: 1fr; }
+    #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
+    #inspect-rows { width: 8; }
+    .row .inline-label { width: auto; padding: 0 1 0 2; }
+    #inspect-layout { width: 16; }
     #run-panel { height: auto; padding: 0 1; border-top: solid $secondary; }
     #run-title { text-style: bold; }
     #run-bar { width: 1fr; margin: 0 0 1 0; }
@@ -372,6 +378,32 @@ class LexichronApp(App):
                         yield Button("Refresh", id="refresh-jobs")
                         yield Button("Cancel selected job", id="cancel-job", variant="error")
                         yield Button("Clear finished runs", id="clear-runs")
+            with TabPane("Inspect", id="tab-inspect"):
+                with Vertical():
+                    with Horizontal(classes="row"):
+                        yield Label("Database")
+                        yield Select([], allow_blank=True, id="inspect-db", compact=True,
+                                     prompt="(databases of this corpus)")
+                    with Horizontal(classes="row"):
+                        yield Label("Path")
+                        yield Input("", id="inspect-path", compact=True,
+                                    placeholder="any RocksDB directory or vocabulary file")
+                    yield Static("", id="inspect-summary")
+                    with Horizontal(classes="row"):
+                        yield Label("Key")
+                        yield Input("", id="inspect-key", compact=True,
+                                    placeholder="[2011] nuclear for a pivoted database; the n-gram otherwise")
+                        yield Label("Rows", classes="inline-label")
+                        yield Input("20", id="inspect-rows", compact=True, type="integer")
+                        yield Label("Keys", classes="inline-label")
+                        yield Select([(l, l) for l in LAYOUTS], value="auto", allow_blank=False,
+                                     id="inspect-layout", compact=True)
+                    with Horizontal(classes="actions"):
+                        yield Button("First rows", id="inspect-head", variant="primary")
+                        yield Button("From key", id="inspect-from-key")
+                        yield Button("With prefix", id="inspect-prefix")
+                    yield Static("", id="inspect-note")
+                    yield DataTable(id="inspect-table")
         yield Footer()
 
     def _field_widgets(self, section: str, f: Field):
@@ -442,6 +474,9 @@ class LexichronApp(App):
         runs = self.query_one("#runs", DataTable)
         self._run_columns = runs.add_columns("Run", "State", "Done", "Records", "Rate", "Elapsed", "Job")
         runs.cursor_type = "row"
+        self.query_one("#inspect-table", DataTable).add_columns("Key", "Value")
+        self.query_one("#inspect-table", DataTable).cursor_type = "row"
+        self._inspect_dir: Optional[Path] = None
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
         self.queued_jobs: Optional[set] = None
@@ -485,6 +520,7 @@ class LexichronApp(App):
         except ConfigError as exc:
             status.update(str(exc))
             return
+        self._refresh_inspect_candidates()
         dest = self.project_path
         self.query_one("#dest", Static).update(
             f"Settings file: {dest if dest else '(fill in the corpus directory, language and n-gram size)'}"
@@ -851,6 +887,86 @@ class LexichronApp(App):
             else:
                 log.write("(no log yet)" if info["log_path"] is None else f"(cannot read {info['log_path']})")
             self._log_shown = key
+
+
+    # -- Inspect tab --------------------------------------------------------
+    def _refresh_inspect_candidates(self) -> None:
+        """List the corpus directory's databases and vocabulary files in the
+        Database selector; the path field accepts anything else."""
+        corpus_dir = self._corpus_dir(self.config)
+        if corpus_dir == self._inspect_dir:
+            return
+        self._inspect_dir = corpus_dir
+        sel = self.query_one("#inspect-db", Select)
+        sel.set_options(candidates(str(corpus_dir) if corpus_dir else None))
+
+    @on(Select.Changed, "#inspect-db")
+    def _inspect_db_chosen(self, event: Select.Changed) -> None:
+        if event.value is not Select.NULL:
+            self.query_one("#inspect-path", Input).value = str(event.value)
+            self._inspect("describe")
+
+    @on(Input.Submitted, "#inspect-path")
+    def _inspect_path_submitted(self) -> None:
+        self._inspect("describe")
+
+    @on(Input.Submitted, "#inspect-key")
+    def _inspect_key_submitted(self) -> None:
+        self._inspect("key")
+
+    @on(Button.Pressed, "#inspect-head")
+    def _inspect_head_pressed(self) -> None:
+        self._inspect("head")
+
+    @on(Button.Pressed, "#inspect-from-key")
+    def _inspect_key_pressed(self) -> None:
+        self._inspect("key")
+
+    @on(Button.Pressed, "#inspect-prefix")
+    def _inspect_prefix_pressed(self) -> None:
+        self._inspect("prefix")
+
+    def _inspect(self, mode: str) -> None:
+        path = self.query_one("#inspect-path", Input).value.strip()
+        if not path:
+            self.query_one("#inspect-summary", Static).update("Choose a database or type a path.")
+            return
+        key = self.query_one("#inspect-key", Input).value
+        try:
+            n = max(1, int(self.query_one("#inspect-rows", Input).value or 20))
+        except ValueError:
+            n = 20
+        layout = str(self.query_one("#inspect-layout", Select).value or "auto")
+        self.query_one("#inspect-note", Static).update("Reading...")
+        self._inspect_worker(path, mode, key, n, layout)
+
+    @work(thread=True, group="inspect", exclusive=True)
+    def _inspect_worker(self, path: str, mode: str, key: str, n: int, layout: str) -> None:
+        """Open and read off the UI thread: a networked filesystem can take
+        seconds to open a database for the first time."""
+        info = describe(path)
+        found: List[tuple] = []
+        note = ""
+        used = info.get("layout", layout)
+        if not info.get("error") and mode != "describe":
+            try:
+                used, found = inspect_rows(path, mode, key, n, layout)
+                note = (f"{len(found)} record(s)" + (f" from {key!r}" if mode == "key" else
+                        f" with prefix {key!r}" if mode == "prefix" else "") + f", keys read as {used}")
+                if not found:
+                    note = "No records" + (f" from {key!r}" if mode == "key" else
+                                           f" with prefix {key!r}" if mode == "prefix" else "")
+            except Exception as exc:
+                note = str(exc)
+        self.call_from_thread(self._show_inspect, info, found, note)
+
+    def _show_inspect(self, info: Dict[str, Any], found: List[tuple], note: str) -> None:
+        self.query_one("#inspect-summary", Static).update(format_summary(info))
+        self.query_one("#inspect-note", Static).update(note)
+        table = self.query_one("#inspect-table", DataTable)
+        table.clear()
+        for k, v in found:
+            table.add_row(k, v)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

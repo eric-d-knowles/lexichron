@@ -37,7 +37,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.4.1}
+  version = {0.5.0}
 }
 ```
 
@@ -134,7 +134,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.4.1 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.5.0 bash install.sh`.
 
 That is all that is needed to download and process corpora. Steps 2 and 3
 below are for people who want to work with lexichron from their own notebooks
@@ -146,7 +146,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.4.1.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.5.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -166,7 +166,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.4.1)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.5.0)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -216,7 +216,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.4.1.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.5.0.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -304,7 +304,15 @@ lexichron acquire lexichron.yaml                       # download and ingest
 lexichron filter lexichron.yaml                        # filter the ingested database
 lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
 lexichron filter lexichron.yaml --dry-run              # show the call, don't run it
+lexichron inspect 5grams_pivoted.db --prefix "[2011] nuclear"   # look at a database
 ```
+
+`lexichron inspect` opens a database read-only (any size, any node) and
+prints a few decoded records: the first ones, those from `--key` onwards, or
+those with a `--prefix`. The key layout is sniffed from the first records
+(`--layout` overrides it): a pivoted database's keys are typed with the year,
+`[2011] nuclear`; an n-gram-keyed database's as the n-gram; a Davies
+corpus's as `[fic][2000] text`. A vocabulary file is shown by rank.
 
 Misspelled or missing settings are reported before anything runs. Inside the
 container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml` (or a
@@ -404,8 +412,13 @@ Tabs:
   `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
+- **Inspect** — look inside a database: pick one of the corpus's databases
+  or vocabulary files (or type any path), and show the first rows, the rows
+  from a key, or the rows with a prefix, decoded for the database's layout
+  (`lexichron inspect` on the command line does the same). Databases are
+  opened read-only with a small footprint, so this is fine on a login node.
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.4.1.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.5.0.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 

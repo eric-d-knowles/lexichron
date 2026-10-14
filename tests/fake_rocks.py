@@ -111,6 +111,8 @@ class DB:
     def get_property(self, name):
         if name == "rocksdb.total-sst-files-size":
             return str(sum(len(k) + len(v) for k, v in self.data.items()))
+        if name == "rocksdb.num-files-at-level0":
+            return "0" if self.compactions else "1"
         return str(len(self.data))        # estimate-num-keys: exact for the fake
 
     # SST metadata as rocks-shim 0.6 reports it: the fake pretends the sorted
