@@ -232,3 +232,15 @@ def test_sst_output_with_one_to_many_mapper(rocks, tmp_path):
     assert fake_rocks._REGISTRY[str(dst)].ingests > 0             # chunks arrived as files
     assert not [p for p in tmp_path.rglob("*.sst*")]              # and were consumed
     assert sum(d["entries"] for d in fake_rocks.markers(dst).values()) <= 600   # entries per unit, after in-chunk merging
+
+
+def test_underscore_tokens_are_data_not_bookkeeping():
+    """Google's tables hold tokens made of underscores (OCR'd blanks such as
+    "____X"); only the stages' own marker keys are skipped by a scan."""
+    from ngramprep.rangemap.units import is_bookkeeping
+    assert is_bookkeeping(b"__rangemap__/partition")
+    assert is_bookkeeping(b"__rangemap__/unit/7")
+    assert is_bookkeeping(b"__processed__/1-00003-of-00014.gz")
+    assert not is_bookkeeping(b"__NOUN")
+    assert not is_bookkeeping(b"____X the_DET cat_NOUN")
+    assert not is_bookkeeping(b"_")

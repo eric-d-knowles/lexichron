@@ -24,7 +24,7 @@ from ngramprep.common_db.api import open_db  # read profile via rocks-shim
 
 FMT = "<QQQ"                 # (year, match_count, volume_count), little-endian u64s
 TUPLE_SIZE = struct.calcsize(FMT)
-METADATA_PREFIX = b"__"      # skip metadata keys like "__..."
+from ngramprep.rangemap.units import is_bookkeeping
 DECODING = "utf-8"           # decoding for keys when decode=True
 
 __all__ = [
@@ -59,7 +59,7 @@ def _iter_db_items(db: "rs.DB") -> Iterator[Tuple[bytes, bytes]]:
     it.seek(b"")
     while it.valid():
         k = it.key()
-        if not k.startswith(METADATA_PREFIX):
+        if not is_bookkeeping(k):
             yield k, it.value()
         it.next()
 

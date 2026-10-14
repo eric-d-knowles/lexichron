@@ -16,10 +16,18 @@ from ngramprep.tracking import WorkUnit, create_smart_work_units, create_uniform
 from ngramprep.tracking import PartitionCache, PartitionCacheKey
 from ngramprep.tracking.partitioning import make_unit_id
 
-__all__ = ["PARTITION_KEY", "UNIT_MARKER_PREFIX", "METADATA_PREFIX",
+__all__ = ["PARTITION_KEY", "UNIT_MARKER_PREFIX", "BOOKKEEPING_PREFIXES", "is_bookkeeping",
            "plan_units", "units_from_live_files", "load_partition", "store_partition", "unit_marker"]
 
-METADATA_PREFIX = b"__"                     # keys that are bookkeeping, not data
+# Bookkeeping keys the stages themselves write into a database. The test is
+# exact: Google's tables contain real tokens made of underscores ("__NOUN",
+# "____X" for OCR'd blanks), which must be scanned like any other record.
+BOOKKEEPING_PREFIXES = (b"__rangemap__/", b"__processed__/")
+
+
+def is_bookkeeping(key: bytes) -> bool:
+    """True for a stage's own marker/partition key, false for data."""
+    return key.startswith(BOOKKEEPING_PREFIXES)
 PARTITION_KEY = b"__rangemap__/partition"   # JSON list of [start_hex|null, end_hex|null]
 UNIT_MARKER_PREFIX = b"__rangemap__/unit/"  # + unit_id -> figures for a finished unit
 
@@ -119,7 +127,7 @@ def units_from_live_files(files, num_units: int, *, min_files: int = 16) -> Opti
     points = []                                         # (key, weight, is_file_start)
     for lo, hi, size, _level in files:
         lo, hi = bytes(lo), bytes(hi)
-        if lo.startswith(METADATA_PREFIX) and hi.startswith(METADATA_PREFIX):
+        if is_bookkeeping(lo) and is_bookkeeping(hi):
             continue                                    # a file of bookkeeping keys only
         half = max(int(size), 1) / 2.0
         points.append((lo, half, True))

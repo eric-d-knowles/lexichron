@@ -9,7 +9,7 @@ from ngramprep.common_db.api import open_db, range_scan
 from ngramprep.ngram_acquire.spool import ChunkWriter, SstChunkWriter
 from ngramprep.ngram_acquire.worker import merge_packed_records
 
-from .units import METADATA_PREFIX
+from .units import is_bookkeeping
 
 __all__ = ["map_unit", "UnitResult", "set_inherited_mapper"]
 
@@ -50,7 +50,7 @@ def map_unit(
     """Scan ``[start_key, end_key)`` of ``src_db``, apply ``mapper`` to every
     data record, and spool the results to chunk files under ``spool_dir``.
 
-    Returns a :data:`UnitResult`. Keys starting with ``METADATA_PREFIX`` are
+    Returns a :data:`UnitResult`. A stage's own bookkeeping keys are
     bookkeeping and are skipped. The mapper returns one ``(key, value)``, a
     list of them, or None. Records that map to the same output key within a
     chunk are merged with ``merge_fn``; across chunks and units the
@@ -81,7 +81,7 @@ def map_unit(
             # and read ahead, since this is a strictly sequential scan.
             for key, value in range_scan(db, start_key or b"", end_key,
                                          fill_cache=False, readahead_size=2 << 20):
-                if key.startswith(METADATA_PREFIX):
+                if is_bookkeeping(key):
                     continue
                 scanned += 1
                 out = fn(key, value)
