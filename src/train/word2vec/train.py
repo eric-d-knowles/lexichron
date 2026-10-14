@@ -693,7 +693,7 @@ def build_word2vec_models(
     """
     Convenience wrapper for training Word2Vec models using path stub parameters.
 
-    This function mirrors the interface of build_processed_db and build_pivoted_db,
+    This function mirrors the interface of the filter stage,
     taking simple path parameters instead of requiring manual path construction.
 
     Args:

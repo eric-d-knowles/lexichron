@@ -37,7 +37,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.4.0}
+  version = {0.4.1}
 }
 ```
 
@@ -80,8 +80,7 @@ There are two parallel pipelines, one per data source:
 ### Google Ngrams Pipeline
 
 1. **`ngram_acquire`**: Fetch raw n-gram files (1-5 grams) from the Google Books repository and store in a RocksDB database for fast querying.
-2. **`ngram_filter`**: Apply linguistic transformations (case normalization, lemmatization, stopword removal, spell-checking, bigram hyphenation) to prepare data. Optionally generate vocabulary whitelists.
-3. **`ngram_pivot`**: Reorganize data from "wide" (per-ngram) to "long" (per-year) format for time-series analysis.
+2. **`ngram_filter`**: Apply linguistic transformations (case normalization, lemmatization, stopword removal, a vocabulary) to prepare data. Unigrams yield a vocabulary whitelist; 2-5-grams are written, in the same pass, in the year-first ("pivoted") layout that time-series analysis and model training read.
 
 ### Davies Corpora Pipeline
 
@@ -135,7 +134,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.4.0 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.4.1 bash install.sh`.
 
 That is all that is needed to download and process corpora. Steps 2 and 3
 below are for people who want to work with lexichron from their own notebooks
@@ -147,7 +146,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.4.0.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.4.1.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -167,7 +166,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.4.0)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.4.1)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -217,7 +216,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.4.0.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.4.1.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -406,7 +405,7 @@ Tabs:
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.4.0.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.4.1.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 
@@ -434,8 +433,8 @@ need into your project directory and edit the paths and settings at the top.
 | `movies_training_workflow.ipynb` | The same for the Movies corpus |
 | `coha_change_analysis_workflow.ipynb` | Track semantic change in the COHA models |
 
-For the full set of options, see the docstrings in `ngramprep.ngram_filter.config`,
-`ngramprep.ngram_pivot.config` and `daviesprep.davies_filter.config`.
+For the full set of options, see the docstrings in `lexichron.stages.filter`,
+`ngramprep.ngram_filter.config` and `daviesprep.davies_filter.config`.
 
 ## Output files
 

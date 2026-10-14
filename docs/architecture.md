@@ -1,6 +1,6 @@
 # Pipeline architecture
 
-The `ngram_filter` and `ngram_pivot` pipelines use a two-phase design for memory efficiency and fault tolerance:
+The `ngram_filter` pipeline (which also writes the pivoted 2-5-gram databases) uses a two-phase design for memory efficiency and fault tolerance:
 
 1. **Processing stage**: Workers divide the input data into chunks, process them in parallel, and write results to temporary files (`tmp_dir/worker_outputs/`)
 2. **Ingestion stage**: Temporary files are merged into the final database using parallel streaming

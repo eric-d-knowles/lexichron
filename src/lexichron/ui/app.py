@@ -790,7 +790,7 @@ class LexichronApp(App):
         if [k.value for k in runs.rows] == keys:
             for key, values in rows:
                 for col, value in zip(self._run_columns, values):
-                    runs.update_cell(key, col, value)
+                    runs.update_cell(key, col, value, update_width=True)
             return
         runs.clear()
         for key, values in rows:
