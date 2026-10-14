@@ -189,6 +189,9 @@ class LexichronApp(App):
     .show-help .field-help { display: block; }
     .row { height: auto; }
     .row Label { width: 22; }
+    .stage-row { height: 3; align-vertical: middle; }
+    .stage-row .stage-button { min-width: 14; margin-right: 1; }
+    .stage-row .stage-desc { width: 1fr; height: 3; content-align: left middle; color: $text-muted; padding-left: 1; }
     .stage-box { height: auto; }
     .row Input, .row Select { width: 1fr; }
     .row .range-sep { width: auto; padding: 0 1; color: $text-muted; }
@@ -314,15 +317,13 @@ class LexichronApp(App):
                 yield Static("", id="dest")
                 yield Static("", id="status")
                 with VerticalScroll(id="form"):
-                    with Horizontal(classes="row"):
+                    with Horizontal(classes="row stage-row"):
                         yield Label("Stage")
-                        sel = Select([(name, name) for name in STAGES], value=self.stage,
-                                     allow_blank=False, id="stage", compact=True)
-                        sel.tooltip = "\n".join(f"{n}: {d}" for n, (_, d) in STAGES.items())
-                        yield sel
-                        mark = Static("?", classes="help-mark")
-                        mark.tooltip = sel.tooltip
-                        yield mark
+                        for name, (_, desc) in STAGES.items():
+                            b = Button(name.capitalize(), id=f"stage-btn-{name}", classes="stage-button")
+                            b.tooltip = desc
+                            yield b
+                        yield Static("", id="stage-desc", classes="stage-desc")
                     yield Static("Corpus", classes="section")
                     for f in self.corpus_section.fields:
                         if not f.advanced:
@@ -461,16 +462,25 @@ class LexichronApp(App):
         self.screen.toggle_class("show-help")
 
     def _show_stage(self, stage: str) -> None:
+        """Make ``stage`` the one the form, Run and Submit act on: its button
+        lit, its settings shown."""
         self.stage = stage
         for name in self.stage_sections:
             self.query_one(f"#stage-{name}").display = name == stage
             self.query_one(f"#adv-{name}").display = name == stage
+        for name in STAGES:
+            self.query_one(f"#stage-btn-{name}", Button).variant = "primary" if name == stage else "default"
+        self.query_one("#stage-desc", Static).update(STAGES[stage][1])
 
-    @on(Select.Changed, "#stage")
-    def _stage_changed(self, event: Select.Changed) -> None:
-        if event.value is not Select.NULL and event.value != self.stage:
-            self._show_stage(str(event.value))
-            self._refresh_preview()
+    @on(Button.Pressed, ".stage-button")
+    def _stage_button_pressed(self, event: Button.Pressed) -> None:
+        stage = str(event.button.id)[len("stage-btn-"):]
+        if stage != self.stage:
+            self.select_stage(stage)
+
+    def select_stage(self, stage: str) -> None:
+        self._show_stage(stage)
+        self._refresh_preview()
 
     def on_mount(self) -> None:
         self._show_stage(self.stage)

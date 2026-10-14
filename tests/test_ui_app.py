@@ -299,9 +299,13 @@ def test_stage_selector_switches_form_and_keeps_other_sections(tmp_path):
             assert app.stage == "acquire"
             assert app.query_one("#stage-acquire").display and not app.query_one("#stage-filter").display
             assert "download_and_ingest_to_rocksdb(" in str(app.query_one("#call").content)
-            app.query_one("#stage", Select).value = "filter"
+            from textual.widgets import Button
+            assert app.query_one("#stage-btn-acquire", Button).variant == "primary"
+            await pilot.click("#stage-btn-filter")
             await pilot.pause()
             assert app.stage == "filter"
+            assert app.query_one("#stage-btn-filter", Button).variant == "primary"
+            assert app.query_one("#stage-btn-acquire", Button).variant == "default"
             assert app.query_one("#stage-filter").display and not app.query_one("#stage-acquire").display
             call = str(app.query_one("#call").content)
             assert "filter_ngrams(" in call and "min_len=4" in call and "ngram_size=1" in call
