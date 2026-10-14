@@ -283,12 +283,14 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
     if stage == "filter":
         scanned = int(counters.get("scanned", 0))
         kept = int(counters.get("kept", 0))
-        groups.append(("Records", [
-            ("Scanned", f"{scanned:,}", "source records"),
-            ("Kept", f"{kept:,}", _pct(kept, scanned) + " of scanned" if scanned else ""),
-            ("Inserted", f"{int(counters.get('inserted', 0)):,}", "to the database"),
-            db_tile(),
-        ]))
+        produced = int(counters.get("produced", kept))
+        tiles = [("Scanned", f"{scanned:,}", "source records"),
+                 ("Kept", f"{kept:,}", _pct(kept, scanned) + " of scanned" if scanned else "")]
+        if produced > kept:
+            # the pivot makes one record per n-gram and year from each kept n-gram
+            tiles.append(("Year records", f"{produced:,}", f"{produced / kept:.1f} per n-gram" if kept else ""))
+        tiles += [("Inserted", f"{int(counters.get('inserted', 0)):,}", "to the database"), db_tile()]
+        groups.append(("Records", tiles))
         tokens = int(counters.get("tokens", 0))
         ngrams = int(counters.get("ngrams", 0))
         if tokens:

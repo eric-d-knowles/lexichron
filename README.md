@@ -439,42 +439,48 @@ For the full set of options, see the docstrings in `ngramprep.ngram_filter.confi
 
 ## Output files
 
-The n-gram pipelines lay their outputs out under the `db_path_stub` you give
+The n-gram stages lay their outputs out under the `db_path_stub` you give
 them:
 
 ```
 {db_path_stub}/{release}/{language}/{N}gram_files/
-    {N}grams.db             raw n-grams as downloaded (ngram_acquire)
-    {N}grams_processed.db   filtered n-grams (ngram_filter)
-    {N}grams_pivoted.db     per-year layout for time-series work (ngram_pivot)
-    whitelist files         vocabulary whitelists, if requested
-    temporary files         worker shards and the progress-tracking database;
-                            safe to delete after a run completes, but useful
-                            for resuming an interrupted one
+    {N}grams.db                 raw n-grams as downloaded (acquire)
+    1grams_processed.db         filtered unigrams, keyed by lemma (filter)
+    1grams_processed.db/whitelist.txt   the vocabulary built from them
+    {N}grams_pivoted.db         filtered 2-5-grams keyed year-first, one record
+                                per n-gram and year: what training reads (filter)
+    {N}grams_processed.db       2-5-grams keyed by n-gram, only when
+                                "Pivot by year" is turned off
+    logs/                       one log per filter run
+    lexichron.yaml              the settings the UI saved
+    .lexichron/runs/            progress records of every run
 ```
+
+Nothing temporary is left behind: workers spool their chunks under the
+job's scratch directory and the chunks are deleted as they are ingested.
 
 Model training writes one model per year (or per year bin) into the model
 directory you specify. Use `common_db.compress_db()` to archive a database for
 long-term storage or transfer.
 
-## Reading the progress display
+## Reading a filter run's figures
 
-The `ngram_filter` and `ngram_pivot` pipelines print a line like this every few seconds (`progress_every_s`):
+The Progress tab (and the run's log) keep four record counts apart:
 
-```
-      items         kept%         workers         units          rate          elapsed
-──────────────────────────────────────────────────────────────────────────────────────────
-    128.56M         85.4%          8/40          10·24·1237     214.2k/s        10m00s
-```
+- **Scanned**: records read from the source database.
+- **Kept**: source records that passed the filter. For 2-5-grams this is
+  the number of n-grams kept, each with its whole year series.
+- **Year records** (pivoted runs only): records made from them, one per
+  n-gram and year.
+- **Inserted**: records handed to the database, fewer than the above because
+  records that normalize to the same key merge inside a worker's chunk
+  before insertion.
+- **In database**: what the compacted database holds: fewer again, since the
+  same key arrives from several chunks and work units and those merge only
+  at compaction.
 
-Column meanings:
-
-- **items**: Total records processed so far
-- **kept%**: Percentage of n-grams retained after filtering (100% for pivot)
-- **workers**: Active workers / total workers (shows load distribution)
-- **units**: Work distribution status as `pending·processing·completed` (shows load balancing)
-- **rate**: Processing throughput (records per second)
-- **elapsed**: Total time since pipeline started
+Kept and In database are properties of the corpus and the rules; Inserted
+and Year records depend on partitioning and chunk size.
 
 ## Support and Maintenance
 

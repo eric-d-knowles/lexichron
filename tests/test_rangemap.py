@@ -145,7 +145,7 @@ def test_worker_scans_without_filling_the_cache(rocks, tmp_path):
     from ngramprep.rangemap.worker import map_unit
     src = tmp_path / "src.db"
     _make_source(str(src), n=10)
-    chunks, scanned, kept, _, _stats, _written = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
+    chunks, scanned, kept, _, _stats, _written, _produced = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
     assert scanned == 21 and kept == 20 and len(chunks) == 1
     assert fake_rocks._REGISTRY[str(src)].last_iterator_opts == (False, 2 << 20)
 
@@ -228,7 +228,8 @@ def test_sst_output_with_one_to_many_mapper(rocks, tmp_path):
     assert len(data) == 400
     assert _unpack(data[struct.pack(">I", 1990) + b"word7"]) == [(1990, 8, 2)]    # Word7 + word7 summed
     assert _unpack(data[struct.pack(">I", 2000) + b"word7"]) == [(2000, 2, 2)]
-    assert res.kept == 600 and res.scanned == 404                 # 200 raw keys -> 1 + 2 records; drops skipped
+    assert res.kept == 400 and res.scanned == 404                 # 200 raw keys x 2 spellings kept; drops skipped
+    assert res.produced == 600                                    # -> 1 + 2 year records each
     assert fake_rocks._REGISTRY[str(dst)].ingests > 0             # chunks arrived as files
     assert not [p for p in tmp_path.rglob("*.sst*")]              # and were consumed
     assert sum(d["entries"] for d in fake_rocks.markers(dst).values()) <= 600   # entries per unit, after in-chunk merging

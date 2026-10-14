@@ -117,7 +117,8 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
         compact_after=pc.compact_after_ingest, progress=progress,
     )
     result = run_rangemap(cfg)
-    print(f"Filtered {result.scanned:,} records -> {result.kept:,} {'year records' if pivot else 'kept'} in "
+    year_records = f" ({result.produced:,} year records)" if pivot else ""
+    print(f"Filtered {result.scanned:,} records -> {result.kept:,} kept{year_records} in "
           f"{result.units_done} work units ({result.units_skipped} already done) "
           f"in {result.seconds / 60:.1f} min")
 

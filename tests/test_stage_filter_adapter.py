@@ -124,7 +124,8 @@ def test_multigrams_are_filtered_and_pivoted_in_one_pass(rocks, no_spacy, tmp_pa
     assert decode_year_stats(decoded[(2000, b"cat run")]) == (1, 1)
     import json
     doc = json.loads((tmp_path / "p.json").read_text())
-    assert doc["db_path"].endswith("2grams_pivoted.db") and doc["counters"]["kept"] == 3   # year records
+    assert doc["db_path"].endswith("2grams_pivoted.db")
+    assert doc["counters"]["kept"] == 2 and doc["counters"]["produced"] == 3   # 2 n-grams kept -> 3 year records
     # asking for a vocabulary from a pivoted output is refused
     with pytest.raises(ValueError):
         stage.filter_ngrams(2, "20200217", "eng", str(stub), output_vocabulary=True, spool_dir=str(tmp_path))

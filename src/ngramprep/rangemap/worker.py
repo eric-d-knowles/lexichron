@@ -22,10 +22,13 @@ def set_inherited_mapper(mapper) -> None:
     global _INHERITED_MAPPER
     _INHERITED_MAPPER = mapper
 
-# (chunk_paths, scanned, kept, seconds, stats, written): stats are the
-# mapper's own counters for the unit (a dict, empty if the mapper keeps
-# none); written is the number of entries in the chunk files
-UnitResult = Tuple[list, int, int, float, dict, int]
+# (chunk_paths, scanned, kept, seconds, stats, written, produced): kept is
+# the number of source records the mapper kept, produced the number of
+# records it made from them (more than kept for a one-to-many mapper: the
+# pivot makes one per year), written the number of entries in the chunk
+# files (fewer than produced: duplicates merge within a chunk); stats are
+# the mapper's own counters for the unit (a dict, empty if it keeps none)
+UnitResult = Tuple[list, int, int, float, dict, int, int]
 
 try:
     import setproctitle as _setproctitle
@@ -74,7 +77,7 @@ def map_unit(
         writer = SstChunkWriter(spool_dir, tag, chunk_entries, merge_fn, compression=sst_compression)
     else:
         writer = ChunkWriter(spool_dir, tag, chunk_entries, merge_fn)
-    scanned = kept = 0
+    scanned = kept = produced = 0
     try:
         with open_db(src_db, mode="r", profile=read_profile) as db:
             # One pass over the range: don't fill the block cache (rocks-shim >= 0.4),
@@ -87,13 +90,14 @@ def map_unit(
                 out = fn(key, value)
                 if out is None:
                     continue
+                kept += 1
                 if type(out) is tuple:
                     writer.add(out[0], out[1])
-                    kept += 1
+                    produced += 1
                 else:                                 # one-to-many mapper
                     for k, v in out:
                         writer.add(k, v)
-                    kept += len(out)
+                    produced += len(out)
         chunk_paths = writer.finish()
     except BaseException:
         writer.discard()
@@ -104,4 +108,4 @@ def map_unit(
         pass
     stats_fn = getattr(fn, "stats_dict", None)
     stats = {k: int(v) for k, v in stats_fn().items()} if stats_fn else {}
-    return chunk_paths, scanned, kept, time.perf_counter() - t0, stats, writer.entries_total
+    return chunk_paths, scanned, kept, time.perf_counter() - t0, stats, writer.entries_total, produced

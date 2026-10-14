@@ -70,7 +70,8 @@ class RangeMapResult:
     units_done: int                          # in this run
     units_skipped: int                       # already in the destination
     scanned: int                             # records read in this run
-    kept: int                                # records written (before merging)
+    kept: int                                # source records the mapper kept
+    produced: int                            # records made from them (one per year for the pivot)
     seconds: float
     failed: List[str] = field(default_factory=list)
 
@@ -109,7 +110,7 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
     spool_path = spool_ctx.name
     progress.set_spool_dir(spool_path)
     failed: List[str] = []
-    scanned_total = kept_total = 0
+    scanned_total = kept_total = produced_total = 0
 
     try:
         with open_db(cfg.dst_db, mode="rw", profile=cfg.write_profile, create_if_missing=True) as dst:
@@ -166,23 +167,26 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                         tag = f"{index_of[u.unit_id]:05d}_{u.unit_id}"
                         chunk_paths: List[str] = []
                         try:
-                            chunk_paths, scanned, kept, secs, stats, entries = fut.result()
+                            chunk_paths, scanned, kept, secs, stats, entries, produced = fut.result()
                             progress.file_ingesting(u.unit_id)
                             written = ingestor.ingest_file(u.unit_id, chunk_paths, entries=entries,
                                                            extra={"scanned": scanned, "kept": kept, **stats})
                             scanned_total += scanned
                             kept_total += kept
-                            # Three distinct figures: records scanned from the source,
-                            # records the mapper kept (the same whatever the partition),
-                            # and records handed to the database (`written`: fewer than
-                            # kept by the duplicates merged inside a chunk). The mapper's
-                            # own counters (per-rule token fates) ride along.
+                            produced_total += produced
+                            # Four distinct figures: records scanned from the source,
+                            # source records the mapper kept (the same whatever the
+                            # partition), records it produced from them (more for a
+                            # one-to-many mapper such as the pivot), and records handed
+                            # to the database (`written`: fewer than produced by the
+                            # duplicates merged inside a chunk). The mapper's own
+                            # counters (per-rule token fates) ride along.
                             progress.file_done(u.unit_id, entries=kept, chunks=len(chunk_paths),
                                                uncompressed_bytes=0,
-                                               counters={"scanned": scanned, "kept": kept,
+                                               counters={"scanned": scanned, "kept": kept, "produced": produced,
                                                          "inserted": written, **stats})
-                            logger.info("Unit %s: scanned %s, kept %s (%s entries after in-chunk merging), %.1fs",
-                                        u.unit_id, f"{scanned:,}", f"{kept:,}", f"{written:,}", secs)
+                            logger.info("Unit %s: scanned %s, kept %s, produced %s (%s entries after in-chunk merging), %.1fs",
+                                        u.unit_id, f"{scanned:,}", f"{kept:,}", f"{produced:,}", f"{written:,}", secs)
                         except Exception as exc:
                             ChunkIngestor.discard(chunk_paths)
                             msg = f"{u.unit_id}: {exc}"
@@ -209,7 +213,7 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
         spool_ctx.cleanup()
 
     result = RangeMapResult(units_total=len(units), units_done=len(todo) - len(failed),
-                            units_skipped=len(done), scanned=scanned_total, kept=kept_total,
+                            units_skipped=len(done), scanned=scanned_total, kept=kept_total, produced=produced_total,
                             seconds=time.perf_counter() - t_start, failed=failed)
     if failed:
         progress.finish("failed", f"{len(failed)} work unit(s) failed")

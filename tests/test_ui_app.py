@@ -181,7 +181,10 @@ def test_progress_tab_shows_selected_run(tmp_path):
             assert list(meters.query(".meter")) == tiles_before
             # selecting the older run switches the panel
             runs.move_cursor(row=1)
-            await pilot.pause()
+            for _ in range(20):                 # the highlight message and a periodic refresh may interleave
+                await pilot.pause()
+                if app.selected_run == older:
+                    break
             assert app.selected_run == older
             assert str(app.query_one("#run-headline").content).startswith("done on n1 · 1/1 files (100%)")
             # clearing removes finished runs and keeps the running one

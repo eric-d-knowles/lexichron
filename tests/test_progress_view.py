@@ -260,6 +260,23 @@ def test_meters_keep_the_three_record_counts_apart():
     assert dict(meters(old, summarize(old, now=now, job_gone=False)))["Progress"][0][0] == "Work units"
 
 
+def test_pivot_runs_show_year_records_between_kept_and_inserted():
+    from lexichron.ui.progress_view import meters, summarize
+    import datetime
+    now = datetime.datetime.fromisoformat("2026-10-12T00:10:00+00:00")
+    doc = {"stage": "filter", "state": "running", "unit_label": "work units", "files_total": 160,
+           "files_done": 23, "entries_written": 85_000_000, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T00:10:00+00:00",
+           "counters": {"scanned": 186_205_646, "kept": 85_079_727, "produced": 2_978_013_677,
+                        "inserted": 2_103_834_198}}
+    records = [(label, value) for label, value, _ in dict(meters(doc, summarize(doc, now=now, job_gone=False)))["Records"]]
+    assert records == [("Scanned", "186,205,646"), ("Kept", "85,079,727"), ("Year records", "2,978,013,677"),
+                       ("Inserted", "2,103,834,198"), ("In database", "\u2014")]
+    # a one-to-one mapper (unigrams) has no such tile
+    doc["counters"]["produced"] = doc["counters"]["kept"]
+    assert "Year records" not in [l for l, _, _ in dict(meters(doc, summarize(doc, now=now, job_gone=False)))["Records"]]
+
+
 def test_in_flight_meters_follow_the_stage():
     from lexichron.ui.progress_view import meters, summarize
     import datetime

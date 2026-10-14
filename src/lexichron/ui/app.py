@@ -440,7 +440,7 @@ class LexichronApp(App):
         jobs.add_columns("Job", "Name", "State", "Elapsed", "Limit", "Nodes", "Reason")
         jobs.cursor_type = "row"
         runs = self.query_one("#runs", DataTable)
-        runs.add_columns("Run", "State", "Done", "Records", "Rate", "Elapsed", "Job")
+        self._run_columns = runs.add_columns("Run", "State", "Done", "Records", "Rate", "Elapsed", "Job")
         runs.cursor_type = "row"
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
@@ -721,9 +721,20 @@ class LexichronApp(App):
                               row["limit"], row["nodes"], row["reason"])
         elif snap["jobs_error"]:
             table.add_row("-", snap["jobs_error"][:40], "", "", "", "", "")
-        self.selected_run = snap["selected"]
+        # The snapshot was gathered for the run selected when the gathering
+        # began. A run the user selected since wins: keep it, paint what the
+        # snapshot knows about it, and fetch its log tail with the next refresh.
+        dirs = [d for d, _ in snap["docs"]]
+        if self.selected_run not in dirs:
+            self.selected_run = snap["selected"]
+        stale = snap["selected"] != self.selected_run
+        if stale:
+            snap = dict(snap, selected=self.selected_run, log_lines=None)
+            self._status = snap
         self._refresh_runs(snap["docs"])
         self._refresh_run_panel(snap)
+        if stale:
+            self.refresh_jobs()
 
     def _summarize(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         """summarize() plus what Slurm knows: a 'running' run whose job has
@@ -754,9 +765,11 @@ class LexichronApp(App):
             return []
 
     def _refresh_runs(self, docs: List[tuple]) -> None:
+        """Paint the Runs table. While the set of runs is unchanged the cells
+        are updated in place: rebuilding the rows would move the cursor, and
+        a cursor move is indistinguishable from the user selecting a run."""
         runs = self.query_one("#runs", DataTable)
-        runs.clear()
-        dirs = [d for d, _ in docs]
+        rows = []
         for d, p in docs:
             if not p:
                 continue
@@ -771,13 +784,19 @@ class LexichronApp(App):
                 records = f"{int(db['records']):,}" + ("*" if db.get("compacted") else " (est.)")
             else:
                 records = f"{int(p.get('entries_written', 0)):,}"
-            runs.add_row(d.name, info["state_label"], files, records, f"{fmt_count(info['rate'])}/s",
-                         fmt_duration(info["elapsed_s"]), p.get("slurm_job_id") or "-", key=str(d))
-        if dirs and self.selected_run:
-            try:
-                runs.move_cursor(row=dirs.index(self.selected_run), animate=False)
-            except ValueError:
-                pass
+            rows.append((str(d), (d.name, info["state_label"], files, records, f"{fmt_count(info['rate'])}/s",
+                                  fmt_duration(info["elapsed_s"]), p.get("slurm_job_id") or "-")))
+        keys = [k for k, _ in rows]
+        if [k.value for k in runs.rows] == keys:
+            for key, values in rows:
+                for col, value in zip(self._run_columns, values):
+                    runs.update_cell(key, col, value)
+            return
+        runs.clear()
+        for key, values in rows:
+            runs.add_row(*values, key=key)
+        if self.selected_run and str(self.selected_run) in keys:
+            runs.move_cursor(row=keys.index(str(self.selected_run)), animate=False)
 
     @on(DataTable.RowHighlighted, "#runs")
     def _run_highlighted(self, event: DataTable.RowHighlighted) -> None:
