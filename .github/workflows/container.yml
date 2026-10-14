@@ -24,6 +24,9 @@ on:
         default: "dev"
         required: false
 
+env:
+  BASE_IMAGE: python:3.11-slim-bookworm
+
 permissions:
   contents: read
   packages: write
@@ -73,6 +76,34 @@ jobs:
         with:
           apptainer-version: 1.3.6
 
+      # Registries rate-limit anonymous pulls from the shared runner addresses
+      # (public ECR: "Data limit exceeded"; Docker Hub: 100 pulls per 6 h), so
+      # the base image is pulled once, with fallbacks, and kept in the
+      # Actions cache; the build then bootstraps from the local copy.
+      - name: Restore the base image
+        id: base-cache
+        uses: actions/cache@v4
+        with:
+          path: base
+          key: base-image-python-3.11-slim-bookworm-v1
+
+      - name: Fetch the base image
+        if: steps.base-cache.outputs.cache-hit != 'true'
+        run: |
+          set -u
+          mkdir -p base
+          for src in "docker://public.ecr.aws/docker/library/${BASE_IMAGE}" \
+                     "docker://docker.io/library/${BASE_IMAGE}"; do
+            for attempt in 1 2 3; do
+              if apptainer pull --force base/python.sif "$src"; then
+                echo "pulled $src"; exit 0
+              fi
+              echo "attempt $attempt at $src failed; waiting"; sleep $((attempt * 30))
+            done
+          done
+          echo "::error::could not pull the base image ${BASE_IMAGE} from any registry"
+          exit 1
+
       - name: Build image
         run: |
           set -eu
@@ -83,7 +114,8 @@ jobs:
           if [[ "${{ steps.meta.outputs.publish_latest }}" != "true" ]]; then
             echo "BUILD = \"${{ steps.meta.outputs.version }}.${GITHUB_SHA::7}\"" > src/lexichron/_build.py
           fi
-          apptainer build --fakeroot --notest lexichron.sif container/lexichron.def 2>&1 | tee build.log
+          apptainer build --fakeroot --notest --build-arg BOOTSTRAP=localimage --build-arg BASE=base/python.sif \
+            lexichron.sif container/lexichron.def 2>&1 | tee build.log
           test "${PIPESTATUS[0]}" -eq 0 || { grep -iE "error|failed" build.log | tail -20 | sed 's/^/::error::/'; exit 1; }
           ls -lh lexichron.sif
 

@@ -1,5 +1,12 @@
-Bootstrap: docker
-From: public.ecr.aws/docker/library/python:3.11-slim-bookworm
+Bootstrap: {{ BOOTSTRAP }}
+From: {{ BASE }}
+
+# The base image is a build argument so that CI can hand in a locally
+# cached copy (--build-arg BOOTSTRAP=localimage --build-arg BASE=python.sif)
+# instead of pulling from a registry that rate-limits anonymous pulls.
+%arguments
+    BOOTSTRAP=docker
+    BASE=public.ecr.aws/docker/library/python:3.11-slim-bookworm
 
 # =============================================================================
 # lexichron Apptainer image
