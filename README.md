@@ -373,7 +373,10 @@ that uses that environment.)
 
 Tabs:
 
-- **Settings** — *Acquire* and *Filter* buttons choosing the stage and a form for
+*Acquire* and *Filter* buttons above the tabs choose the stage that Settings,
+Run and Submit act on.
+
+- **Settings** — a form for
   that stage's settings: the corpus section shared by every stage (directory,
   release, language, n-gram size) and the stage's own, with rarely-used
   settings under *Advanced*. Hover a `?` (or press F1) for help on a setting. Missing or

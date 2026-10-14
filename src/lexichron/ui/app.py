@@ -189,9 +189,10 @@ class LexichronApp(App):
     .show-help .field-help { display: block; }
     .row { height: auto; }
     .row Label { width: 22; }
-    .stage-row { height: 3; align-vertical: middle; }
-    .stage-row .stage-button { min-width: 14; margin-right: 1; }
-    .stage-row .stage-desc { width: 1fr; height: 3; content-align: left middle; color: $text-muted; padding-left: 1; }
+    #stage-bar { height: 3; padding: 0 1; background: $panel; }
+    #stage-bar Label { width: auto; height: 3; content-align: left middle; padding-right: 2; }
+    #stage-bar .stage-button { min-width: 14; margin-right: 1; }
+    #stage-bar .stage-desc { width: 1fr; height: 3; content-align: left middle; color: $text-muted; padding-left: 1; }
     .stage-box { height: auto; }
     .row Input, .row Select { width: 1fr; }
     .row .range-sep { width: auto; padding: 0 1; color: $text-muted; }
@@ -312,18 +313,20 @@ class LexichronApp(App):
     # -- layout -----------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
+        # The stage is chosen once, above the tabs: Settings, Run and Submit
+        # act on it, and it stays in view whichever tab is open.
+        with Horizontal(id="stage-bar"):
+            yield Label("Stage")
+            for name, (_, desc) in STAGES.items():
+                b = Button(name.capitalize(), id=f"stage-btn-{name}", classes="stage-button")
+                b.tooltip = desc
+                yield b
+            yield Static("", id="stage-desc", classes="stage-desc")
         with TabbedContent(initial="tab-project"):
             with TabPane("Settings", id="tab-project"):
                 yield Static("", id="dest")
                 yield Static("", id="status")
                 with VerticalScroll(id="form"):
-                    with Horizontal(classes="row stage-row"):
-                        yield Label("Stage")
-                        for name, (_, desc) in STAGES.items():
-                            b = Button(name.capitalize(), id=f"stage-btn-{name}", classes="stage-button")
-                            b.tooltip = desc
-                            yield b
-                        yield Static("", id="stage-desc", classes="stage-desc")
                     yield Static("Corpus", classes="section")
                     for f in self.corpus_section.fields:
                         if not f.advanced:
@@ -484,6 +487,7 @@ class LexichronApp(App):
 
     def on_mount(self) -> None:
         self._show_stage(self.stage)
+        self.query_one(f"#stage-btn-{self.stage}", Button).focus()   # initial focus on the lit button
         jobs = self.query_one("#jobs", DataTable)
         jobs.add_columns("Job", "Name", "State", "Elapsed", "Limit", "Nodes", "Reason")
         jobs.cursor_type = "row"
