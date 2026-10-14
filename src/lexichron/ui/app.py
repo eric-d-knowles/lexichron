@@ -40,7 +40,8 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import LAYOUTS, candidates, describe, format_summary, rows as inspect_rows
+from lexichron.inspection import LAYOUTS, candidates, describe, format_summary, rows as inspect_rows, year_series
+from lexichron.provenance import format_provenance
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
@@ -206,8 +207,10 @@ class LexichronApp(App):
     #runlog { height: 1fr; }
     #jobs { height: auto; max-height: 8; }
     #runs { height: auto; max-height: 8; }
-    #inspect-table { height: 1fr; }
+    #inspect-table { height: auto; max-height: 60%; }
     #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
+    #inspect-provenance { height: auto; padding: 0 1; }
+    #inspect-detail { height: auto; max-height: 12; padding: 0 1; overflow-y: auto; }
     #inspect-rows { width: 8; }
     .row .inline-label { width: auto; padding: 0 1 0 2; }
     #inspect-layout { width: 16; }
@@ -389,6 +392,8 @@ class LexichronApp(App):
                         yield Input("", id="inspect-path", compact=True,
                                     placeholder="any RocksDB directory or vocabulary file")
                     yield Static("", id="inspect-summary")
+                    with Collapsible(title="How it was made", collapsed=True, id="inspect-provenance-box"):
+                        yield Static("", id="inspect-provenance")
                     with Horizontal(classes="row"):
                         yield Label("Key")
                         yield Input("", id="inspect-key", compact=True,
@@ -404,6 +409,7 @@ class LexichronApp(App):
                         yield Button("With prefix", id="inspect-prefix")
                     yield Static("", id="inspect-note")
                     yield DataTable(id="inspect-table")
+                    yield Static("", id="inspect-detail")
         yield Footer()
 
     def _field_widgets(self, section: str, f: Field):
@@ -950,7 +956,7 @@ class LexichronApp(App):
         used = info.get("layout", layout)
         if not info.get("error") and mode != "describe":
             try:
-                used, found = inspect_rows(path, mode, key, n, layout)
+                used, found = inspect_rows(path, mode, key, n, layout, raw=True)
                 note = (f"{len(found)} record(s)" + (f" from {key!r}" if mode == "key" else
                         f" with prefix {key!r}" if mode == "prefix" else "") + f", keys read as {used}")
                 if not found:
@@ -958,15 +964,35 @@ class LexichronApp(App):
                                            f" with prefix {key!r}" if mode == "prefix" else "")
             except Exception as exc:
                 note = str(exc)
-        self.call_from_thread(self._show_inspect, info, found, note)
+        self.call_from_thread(self._show_inspect, info, used, found, note)
 
-    def _show_inspect(self, info: Dict[str, Any], found: List[tuple], note: str) -> None:
+    def _show_inspect(self, info: Dict[str, Any], layout: str, found: List[tuple], note: str) -> None:
         self.query_one("#inspect-summary", Static).update(format_summary(info))
+        prov = info.get("provenance")
+        box = self.query_one("#inspect-provenance-box", Collapsible)
+        box.display = bool(prov)
+        if prov:
+            self.query_one("#inspect-provenance", Static).update("\n".join(format_provenance(prov)))
         self.query_one("#inspect-note", Static).update(note)
+        self._inspect_found = [(layout, rk, rv) for _, _, rk, rv in found]
         table = self.query_one("#inspect-table", DataTable)
         table.clear()
-        for k, v in found:
+        for k, v, _rk, _rv in found:
             table.add_row(k, v)
+        self.query_one("#inspect-detail", Static).update("")
+
+    @on(DataTable.RowSelected, "#inspect-table")
+    def _inspect_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Enter or click on an n-gram-keyed row: its full year series."""
+        rows = getattr(self, "_inspect_found", [])
+        if event.cursor_row is None or event.cursor_row >= len(rows):
+            return
+        layout, _rk, rv = rows[event.cursor_row]
+        if layout != "ngram":
+            return
+        series = year_series(rv)
+        text = "  ".join(f"{y}: {c:,}/{v:,}" for y, c, v in series)
+        self.query_one("#inspect-detail", Static).update(f"Year series (count/volumes), {len(series)} years:\n{text}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

@@ -52,8 +52,10 @@ def describe(path: str) -> Dict[str, Any]:
             layout = sniff_layout(db)
     except Exception as exc:
         return {"kind": "rocksdb", "error": f"cannot open as a RocksDB database: {exc}"}
+    from lexichron.provenance import read_provenance
     return {"kind": "rocksdb", "records": max(records - bookkeeping, 0), "bytes": size,
-            "compacted": level0 == 0, "layout": layout, "bookkeeping": bookkeeping}
+            "compacted": level0 == 0, "layout": layout, "bookkeeping": bookkeeping,
+            "provenance": read_provenance(p)}
 
 
 def sniff_layout(db) -> str:
@@ -79,17 +81,19 @@ def sniff_layout(db) -> str:
 
 # ---------------------------------------------------------------- reading
 def rows(path: str, mode: str = "head", key: str = "", n: int = 20,
-         layout: str = "auto") -> Tuple[str, List[Row]]:
+         layout: str = "auto", raw: bool = False) -> Tuple[str, List[tuple]]:
     """Up to ``n`` decoded records: the first ones (``head``), from ``key``
     onwards (``key``) or those starting with ``key`` (``prefix``). Returns
-    the layout used and the rows."""
+    the layout used and the rows as ``(key, value)`` strings, or with the
+    raw key and value bytes appended when ``raw`` (for a year series)."""
     if mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}")
     if layout not in LAYOUTS:
         raise ValueError(f"layout must be one of {LAYOUTS}")
     p = Path(path).expanduser()
     if p.is_file():
-        return "text", _text_rows(p, mode, key, n)
+        text_rows = _text_rows(p, mode, key, n)
+        return "text", ([(k, v, k.encode(), v.encode()) for k, v in text_rows] if raw else text_rows)
     with _open(p) as db:
         if layout == "auto":
             layout = sniff_layout(db)
@@ -101,7 +105,9 @@ def rows(path: str, mode: str = "head", key: str = "", n: int = 20,
                 break
             if layout != "raw" and _is_bookkeeping(k):
                 continue
-            out.append((format_key(k, layout), format_value(bytes(v), layout)))
+            v = bytes(v)
+            shown = (format_key(k, layout), format_value(v, layout))
+            out.append(shown + (k, v) if raw else shown)
             if len(out) >= n:
                 break
     return layout, out

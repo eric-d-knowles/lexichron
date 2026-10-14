@@ -76,6 +76,17 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
     # its output and keeps the console to its banner, progress and warnings.
     print(f"lexichron {__version__}: running stage '{stage}'", flush=True)
     func(**kwargs)
+    if kwargs.get("progress_path"):
+        # The database carries its own record of how it was made (see
+        # lexichron.provenance); `lexichron inspect` shows it.
+        from lexichron.provenance import record_run
+        try:
+            written = record_run(stage, kwargs, kwargs["progress_path"])
+        except Exception as exc:                        # never fail a finished run over this
+            print(f"lexichron {stage}: could not write the provenance record: {exc}", file=sys.stderr)
+        else:
+            if written:
+                print(f"Provenance: {written}", flush=True)
     return 0
 
 
@@ -84,23 +95,35 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 def _inspect(args: argparse.Namespace) -> int:
-    from lexichron.inspection import describe, format_summary, rows
+    from lexichron.inspection import describe, format_summary, rows, year_series
+    from lexichron.provenance import format_provenance
     info = describe(args.path)
     print(format_summary(info))
     if info.get("error"):
         return 1
+    if args.info:
+        prov = info.get("provenance")
+        if not prov:
+            print("(no provenance record: made before lexichron 0.6, or not by lexichron)")
+            return 0
+        for line in format_provenance(prov):
+            print(line)
+        return 0
     mode = "key" if args.key is not None else "prefix" if args.prefix is not None else "head"
     try:
-        layout, found = rows(args.path, mode, args.key or args.prefix or "", args.rows, args.layout)
+        layout, found = rows(args.path, mode, args.key or args.prefix or "", args.rows, args.layout, raw=True)
     except ValueError as exc:
         print(f"lexichron inspect: {exc}", file=sys.stderr)
         return 2
     if not found:
         print("(no records)")
         return 0
-    width = min(max(len(k) for k, _ in found), 60)
-    for k, v in found:
+    width = min(max(len(k) for k, _, _, _ in found), 60)
+    for k, v, _rk, rv in found:
         print(f"{k:<{width}}  {v}")
+        if args.series and layout == "ngram":
+            for year, count, volumes in year_series(rv):
+                print(f"{'':<{width}}    {year}: {count:,} in {volumes:,} volumes")
     return 0
 
 
@@ -131,6 +154,10 @@ def build_parser() -> argparse.ArgumentParser:
     ins.add_argument("--rows", type=int, default=20, metavar="N", help="how many records (default 20)")
     ins.add_argument("--layout", choices=("auto", "pivoted", "ngram", "davies", "raw"), default="auto",
                      help="key layout (default: sniffed from the first records)")
+    ins.add_argument("--series", action="store_true",
+                     help="for n-gram-keyed records, print the full year series under each row")
+    ins.add_argument("--info", action="store_true",
+                     help="print the database's provenance record (how it was made) and exit")
     ins.set_defaults(stage=None, command="inspect")
 
     for stage, (_, help_text) in STAGES.items():

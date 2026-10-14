@@ -407,3 +407,57 @@ def test_inspect_tab_lists_databases_and_shows_records(tmp_path, monkeypatch):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_inspect_tab_shows_provenance_and_year_series(tmp_path, monkeypatch):
+    import struct
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).parent))
+    import fake_rocks
+    from ngramprep.common_db import api as dbapi
+    from lexichron import provenance
+    from textual.widgets import DataTable, Input, Static
+    fake_rocks.reset()
+    monkeypatch.setattr(dbapi, "rs", fake_rocks)
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "1gram_files"
+    corpus.mkdir(parents=True)
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "filter: {}\n")
+    db_dir = corpus / "1grams_processed.db"
+    db = fake_rocks.open(str(db_dir), mode="rw", create_if_missing=True)
+    with db.write_batch() as wb:
+        wb.put(b"apple", struct.pack("<QQQ", 1990, 5, 2) + struct.pack("<QQQ", 2000, 7, 3))
+    db.compact_all()
+    (db_dir / "CURRENT").write_text("MANIFEST-000001\n")
+    doc = {"stage": "filter", "state": "done", "db_path": str(db_dir), "files_total": 8, "hostname": "n1",
+           "started": "2026-10-14T00:00:00+00:00", "finished": "2026-10-14T00:05:00+00:00",
+           "counters": {"scanned": 8, "kept": 5, "produced": 5, "inserted": 5, "tokens": 8},
+           "database": {"records": 1, "bytes": 100, "compacted": True},
+           "inputs": {"source": str(corpus / "1grams.db"), "vocabulary": None}}
+    provenance.write_provenance(db_dir, provenance.build_record("filter", {"ngram_size": 1, "mode": "restart"}, doc))
+
+    async def scenario():
+        app = LexichronApp(str(proj), "filter")
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            app.query_one("#inspect-path", Input).value = str(db_dir)
+            app._inspect("head")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            box = app.query_one("#inspect-provenance-box", Collapsible)
+            assert box.display
+            text = str(app.query_one("#inspect-provenance", Static).content)
+            assert "Made by lexichron" in text and "stage filter" in text and "8 scanned, 5 kept" in text
+            table = app.query_one("#inspect-table", DataTable)
+            assert table.row_count == 1
+            # selecting the row shows its year series
+            table.move_cursor(row=0)
+            app._inspect_row_selected(DataTable.RowSelected(table, 0, table.coordinate_to_cell_key((0, 0)).row_key))
+            await pilot.pause()
+            detail = str(app.query_one("#inspect-detail", Static).content)
+            assert "2 years" in detail and "1990: 5/2" in detail and "2000: 7/3" in detail
+        _assert_clean(app)
+
+    asyncio.run(scenario())
