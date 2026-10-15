@@ -62,6 +62,7 @@ class ProgressReporter:
         # directory (they run in other processes); the parent tells us the rest.
         self.spool_dir = Path(spool_dir) if spool_dir else None
         self._parsed: set = set()
+        self._active: set = set()          # told to us directly (no marker file)
         self._ingesting: Optional[str] = None
         self._prior: Dict[str, int] = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
         self.doc: Dict[str, Any] = {
@@ -107,9 +108,19 @@ class ProgressReporter:
     def set_spool_dir(self, spool_dir: Optional[str | os.PathLike]) -> None:
         self.spool_dir = Path(spool_dir) if spool_dir else None
 
+    def file_active(self, filename: str) -> None:
+        """The unit is being worked on (the 'parsing' phase), reported by the
+        parent itself rather than by a worker's marker file."""
+        cur = self.doc["current"]
+        if filename not in cur:
+            cur.append(filename)
+        self._active.add(filename)
+        self._write()
+
     def file_parsed(self, filename: str) -> None:
         """A worker has finished with the file; it waits for ingestion."""
         self._parsed.add(filename)
+        self._active.discard(filename)
         self._write()
 
     def file_ingesting(self, filename: str) -> None:
@@ -194,6 +205,7 @@ class ProgressReporter:
         except ValueError:
             pass
         self._parsed.discard(filename)
+        self._active.discard(filename)
         if self._ingesting == filename:
             self._ingesting = None
 
@@ -221,7 +233,7 @@ class ProgressReporter:
         started, worker_parsed = self._marker_files()
         ingesting = {self._ingesting} if self._ingesting else set()
         parsed = {f for f in current if f in self._parsed or f in worker_parsed} - ingesting
-        parsing = {f for f in current if f in started} - parsed - ingesting
+        parsing = {f for f in current if f in started or f in self._active} - parsed - ingesting
         queued = set(current) - parsing - parsed - ingesting
         self.doc["phases"] = {"queued": len(queued), "parsing": len(parsing),
                               "parsed": len(parsed), "ingesting": len(ingesting)}

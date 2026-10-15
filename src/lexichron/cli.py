@@ -33,6 +33,10 @@ STAGES: Dict[str, tuple[str, str]] = {
         "lexichron.stages.filter:filter_ngrams",
         "Filter a raw n-gram database (lowercase, lemmatize, stopwords, vocabulary)",
     ),
+    "tune": (
+        "lexichron.stages.tune:tune_models",
+        "Hyperparameter search: train a grid of word2vec models on sampled years and score their stability and quality",
+    ),
 }
 
 

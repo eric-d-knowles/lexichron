@@ -58,7 +58,8 @@ def load_project(path: str | Path) -> Dict[str, Any]:
 # Keys that moved between sections in earlier versions, as (old section, key)
 # -> new section. Files written by those versions keep loading; the UI saves
 # them in the new place.
-_MOVED_KEYS = {("acquire", "ngram_size"): "corpus", ("filter", "ngram_size"): "corpus"}
+_MOVED_KEYS = {("acquire", "ngram_size"): "corpus", ("filter", "ngram_size"): "corpus",
+               ("tune", "ngram_size"): "corpus"}
 
 
 # Keys that no longer exist: dropped on load (the behaviour they selected
