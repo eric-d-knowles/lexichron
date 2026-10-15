@@ -116,7 +116,11 @@ jobs:
           fi
           apptainer build --fakeroot --notest --build-arg BOOTSTRAP=localimage --build-arg BASE=base/python.sif \
             lexichron.sif container/lexichron.def 2>&1 | tee build.log
-          test "${PIPESTATUS[0]}" -eq 0 || { grep -iE "error|failed" build.log | tail -20 | sed 's/^/::error::/'; exit 1; }
+          test "${PIPESTATUS[0]}" -eq 0 || {
+            # the tail of the log as one annotation (readable through the API when the log itself is not)
+            tail -n 80 build.log | grep -vE "perl|^(Get|Selecting|Preparing|Unpacking|Setting up):?" \
+              | python3 -c 'import sys; t = sys.stdin.read(); print("::error title=apptainer build failed::" + t[-3800:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A"))'
+            exit 1; }
           ls -lh lexichron.sif
 
       - name: Run image self-test
