@@ -514,3 +514,66 @@ def test_tune_form_toggles_build_the_grid(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_tune_inspect_shows_the_search_scores(tmp_path):
+    import json
+    from textual.widgets import DataTable, Static
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    search = corpus / "tuning" / "t1"
+    search.mkdir(parents=True)
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "tune:\n  name: t1\n")
+    (search / "search.json").write_text(json.dumps({"grid": {"vector_size": [100, 300], "window": [2]},
+                                                     "sample_years": [1990, 1991, 2010, 2011], "seeds": 2,
+                                                     "split_half": True}))
+    cells = [{"cell": "vs100_w2_mc5_e5_sg1_wbfreq", "vector_size": 100, "window": 2, "min_count": 5, "epochs": 5,
+              "approach": "skip-gram", "weight_by": "freq", "years": 2, "vocab_size": 25000, "coverage": 0.91,
+              "simlex_rho": 0.31, "wordsim_rho": 0.55, "analogy_accuracy": 0.2, "seed_overlap": 0.72,
+              "split_half_overlap": 0.6, "adjacent_overlap": 0.65, "distant_overlap": None, "signal_to_noise": None},
+             {"cell": "vs300_w2_mc5_e5_sg1_wbfreq", "vector_size": 300, "window": 2, "min_count": 5, "epochs": 5,
+              "approach": "skip-gram", "weight_by": "freq", "years": 2, "vocab_size": 25000, "coverage": 0.91,
+              "simlex_rho": 0.35, "wordsim_rho": 0.58, "analogy_accuracy": 0.3, "seed_overlap": 0.81,
+              "split_half_overlap": 0.7, "adjacent_overlap": 0.75, "distant_overlap": None, "signal_to_noise": None}]
+    (search / "summary.json").write_text(json.dumps({"cells": cells, "best_cell": "vs300_w2_mc5_e5_sg1_wbfreq",
+                                                      "best_rule": "most stable among cells near the best"}))
+    (search / "results.tsv").write_text("cell\tyear\tvocab_size\tcoverage\tseed_overlap\n"
+                                        "vs100_w2_mc5_e5_sg1_wbfreq\t1990\t24000\t0.9000\t0.7000\n"
+                                        "vs100_w2_mc5_e5_sg1_wbfreq\t1991\t26000\t0.9200\t0.7400\n"
+                                        "vs300_w2_mc5_e5_sg1_wbfreq\t1990\t24000\t0.9000\t0.8000\n"
+                                        "vs300_w2_mc5_e5_sg1_wbfreq\t1991\t26000\t0.9200\t0.8200\n")
+    (search / "pairs.tsv").write_text("cell\tyear_a\tyear_b\tkind\toverlap\tcosine\n"
+                                      "vs300_w2_mc5_e5_sg1_wbfreq\t1990\t1991\tadjacent\t0.7500\t0.9000\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "tune")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.query_one("#inspect-search").display and not app.query_one("#inspect-generic").display
+            summary = str(app.query_one("#search-summary", Static).content)
+            assert "Search 't1': 2 cell(s) scored" in summary and "In progress: 2 of 4 years scored" in summary
+            assert "Suggested cell: vs300_w2_mc5_e5_sg1_wbfreq" in summary
+            table = app.query_one("#search-table", DataTable)
+            assert table.row_count == 2
+            rows = [[str(c) for c in table.get_row_at(i)] for i in range(2)]
+            assert rows[0][:3] == ["", "100", "2"] and rows[1][:2] == ["★", "300"]
+            assert "25,000" in rows[1] and "0.810" in rows[1]
+            # sorting by a score column puts the best first; selecting a row shows its years
+            table.sort("Seed", key=lambda v: float(str(v)) if str(v) != "–" else -1, reverse=True)
+            await pilot.pause()
+            assert str(table.get_row_at(0)[0]) == "★"
+            app._search_row_selected(DataTable.RowSelected(table, 0, table.coordinate_to_cell_key((0, 0)).row_key))
+            await pilot.pause()
+            detail = str(app.query_one("#search-detail", Static).content)
+            assert "vs300_w2_mc5_e5_sg1_wbfreq: per year" in detail and "1991: " in detail
+            assert "1990–1991 (adjacent) overlap 0.750" in detail
+            # the other stages keep the record inspector
+            app.select_stage("filter")
+            await pilot.pause()
+            assert app.query_one("#inspect-generic").display and not app.query_one("#inspect-search").display
+        _assert_clean(app)
+
+    asyncio.run(scenario())

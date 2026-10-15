@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 from textual import on, work
@@ -41,7 +41,9 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import LAYOUTS, candidates, describe, format_summary, rows as inspect_rows, year_series
+from lexichron.inspection import (LAYOUTS, STABILITY_NOTE, candidates, cell_detail, describe, format_search,
+                                  format_summary, read_search, rows as inspect_rows, search_table, searches,
+                                  year_series)
 from lexichron.provenance import format_provenance
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
@@ -307,6 +309,11 @@ class LexichronApp(App):
     #jobs { height: auto; max-height: 8; }
     #runs { height: auto; max-height: 8; }
     #inspect-table { height: auto; max-height: 60%; }
+    #search-table { height: auto; max-height: 50%; }
+    #search-summary { height: auto; padding: 0 1; }
+    #search-note { height: auto; padding: 0 1; color: $text-muted; }
+    #search-detail { height: auto; max-height: 14; padding: 0 1; overflow-y: auto; }
+    #search-name { width: 40; }
     #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
     #inspect-provenance { height: auto; padding: 0 1; }
     #inspect-detail { height: auto; max-height: 12; padding: 0 1; overflow-y: auto; }
@@ -483,7 +490,20 @@ class LexichronApp(App):
                         yield Button("Cancel selected job", id="cancel-job", variant="error")
                         yield Button("Clear finished runs", id="clear-runs")
             with TabPane("Inspect", id="tab-inspect"):
-                with Vertical():
+                # the tune stage: a search's scores, one row per cell
+                with Vertical(id="inspect-search"):
+                    with Horizontal(classes="row"):
+                        yield Label("Search")
+                        yield Select([], allow_blank=True, id="search-name", compact=True,
+                                     prompt="(searches of this corpus)")
+                        yield Button("Reload", id="search-reload", compact=True)
+                    yield Static("", id="search-summary")
+                    yield Static(STABILITY_NOTE + " Click a heading to sort; select a cell for its years.",
+                                 id="search-note")
+                    yield DataTable(id="search-table")
+                    yield Static("", id="search-detail")
+                # the other stages: records of a database or vocabulary file
+                with Vertical(id="inspect-generic"):
                     with Horizontal(classes="row"):
                         yield Label("Database")
                         yield Select([], allow_blank=True, id="inspect-db", compact=True,
@@ -575,6 +595,10 @@ class LexichronApp(App):
         for name in STAGES:
             self.query_one(f"#stage-btn-{name}", Button).variant = "primary" if name == stage else "default"
         self.query_one("#stage-desc", Static).update(STAGES[stage][1])
+        self.query_one("#inspect-search").display = stage == "tune"
+        self.query_one("#inspect-generic").display = stage != "tune"
+        if stage == "tune":
+            self._refresh_searches()
 
     @on(Button.Pressed, ".stage-button")
     def _stage_button_pressed(self, event: Button.Pressed) -> None:
@@ -597,7 +621,10 @@ class LexichronApp(App):
         runs.cursor_type = "row"
         self.query_one("#inspect-table", DataTable).add_columns("Key", "Value")
         self.query_one("#inspect-table", DataTable).cursor_type = "row"
+        self.query_one("#search-table", DataTable).cursor_type = "row"
         self._inspect_dir: Optional[Path] = None
+        self._search: Optional[Dict[str, Any]] = None
+        self._search_sort: Tuple[Optional[str], bool] = (None, False)
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
         self.queued_jobs: Optional[set] = None
@@ -1048,6 +1075,85 @@ class LexichronApp(App):
         self._inspect_dir = corpus_dir
         sel = self.query_one("#inspect-db", Select)
         sel.set_options(candidates(str(corpus_dir) if corpus_dir else None))
+
+    # -- Inspect tab, tune stage: a search's scores --------------------------
+    def _refresh_searches(self) -> None:
+        """List the corpus's searches, newest first; pick the one the settings
+        name, else the newest, and show it."""
+        corpus_dir = self._corpus_dir(self.config)
+        found = searches(str(corpus_dir) if corpus_dir else None)
+        sel = self.query_one("#search-name", Select)
+        current = sel.value if sel.value is not Select.NULL else None
+        sel.set_options(found)
+        wanted = (self.config.get("tune") or {}).get("name")
+        choice = next((path for name, path in found if name == wanted), None) or \
+            (current if any(path == current for _, path in found) else None) or (found[0][1] if found else None)
+        if choice is None:
+            self._show_search(None)
+            return
+        if sel.value != choice:
+            sel.value = choice                           # Select.Changed loads it
+        else:
+            self._load_search(choice)
+
+    @on(Select.Changed, "#search-name")
+    def _search_chosen(self, event: Select.Changed) -> None:
+        if event.value is not Select.NULL:
+            self._load_search(str(event.value))
+
+    @on(Button.Pressed, "#search-reload")
+    def _search_reload_pressed(self) -> None:
+        self._refresh_searches()
+
+    @work(thread=True, group="search", exclusive=True)
+    def _load_search(self, path: str) -> None:
+        search = read_search(path)
+        self.call_from_thread(self._show_search, search)
+
+    def _show_search(self, search: Optional[Dict[str, Any]]) -> None:
+        self._search = search
+        table = self.query_one("#search-table", DataTable)
+        table.clear(columns=True)
+        self.query_one("#search-detail", Static).update("")
+        if search is None:
+            self.query_one("#search-summary", Static).update(
+                "No tuning search in this corpus directory yet: run the tune stage, and its scores appear here "
+                "as they are produced.")
+            return
+        self.query_one("#search-summary", Static).update("\n".join(format_search(search)))
+        headings, grid, stems = search_table(search)
+        for h in headings:
+            table.add_column(h, key=h or "best")
+        for row, stem in zip(grid, stems):
+            table.add_row(*row, key=stem)
+        col, reverse = self._search_sort
+        if col is not None and col in headings:
+            self._sort_search_table(col, reverse)
+
+    @on(DataTable.HeaderSelected, "#search-table")
+    def _search_header_selected(self, event: DataTable.HeaderSelected) -> None:
+        """Sort by the clicked column; clicking it again reverses the order."""
+        col = str(event.column_key.value)
+        current, reverse = self._search_sort
+        reverse = not reverse if current == col else col not in ("Dims", "Window", "Min count", "Epochs",
+                                                                  "Approach", "Weighting", "best")
+        self._search_sort = (col, reverse)
+        self._sort_search_table(col, reverse)
+
+    def _sort_search_table(self, col: str, reverse: bool) -> None:
+        def key(value):
+            text = str(value).replace(",", "")
+            try:
+                return (1, float(text))
+            except ValueError:
+                return (0, text)                          # "–" and labels sort before numbers
+        self.query_one("#search-table", DataTable).sort(col, key=key, reverse=reverse)
+
+    @on(DataTable.RowSelected, "#search-table")
+    def _search_row_selected(self, event: DataTable.RowSelected) -> None:
+        if self._search and event.row_key is not None and event.row_key.value:
+            self.query_one("#search-detail", Static).update(
+                "\n".join(cell_detail(self._search, str(event.row_key.value))))
 
     @on(Select.Changed, "#inspect-db")
     def _inspect_db_chosen(self, event: Select.Changed) -> None:

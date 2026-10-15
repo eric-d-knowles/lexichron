@@ -36,6 +36,9 @@ def describe(path: str) -> Dict[str, Any]:
     p = Path(path).expanduser()
     if not p.exists():
         return {"kind": "missing", "error": f"{p}: no such file or directory"}
+    if p.is_dir() and (p / "search.json").is_file():
+        search = read_search(str(p))
+        return {"kind": "search", "layout": "search", "search": search, "provenance": search.get("provenance")}
     if p.is_file():
         try:
             with open(p, "rb") as fh:
@@ -341,6 +344,8 @@ def candidates(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
 def format_summary(info: Dict[str, Any]) -> str:
     if info.get("error"):
         return info["error"]
+    if info["kind"] == "search":
+        return "\n".join(format_search(info["search"]))
     if info["kind"] == "table":
         text = f"table: {info['lines']:,} rows, {len(info['columns'])} columns"
         if info.get("search") and info["search"].get("best_cell"):
@@ -359,3 +364,165 @@ def _fmt_bytes(n: float) -> str:
             return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
     return f"{n:.1f} TB"
+
+
+# ---------------------------------------------------------------- tuning searches
+# the summary table's columns: (key in summary.json / summary.tsv, heading, format)
+SEARCH_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
+    ("vector_size", "Dims", "int"), ("window", "Window", "int"), ("min_count", "Min count", "int"),
+    ("epochs", "Epochs", "int"), ("approach", "Approach", "str"), ("weight_by", "Weighting", "str"),
+    ("years", "Years", "int"), ("vocab_size", "Vocab", "int"), ("coverage", "Coverage", "num"),
+    ("simlex_rho", "SimLex ρ", "num"), ("wordsim_rho", "WordSim ρ", "num"), ("analogy_accuracy", "Analogy", "num"),
+    ("seed_overlap", "Seed", "num"), ("split_half_overlap", "Split-half", "num"),
+    ("adjacent_overlap", "Adjacent", "num"), ("distant_overlap", "Distant", "num"),
+    ("signal_to_noise", "Signal/noise", "num"),
+)
+STABILITY_NOTE = ("Seed, split-half and adjacent: mean overlap of the ten nearest neighbours of probe words "
+                  "between two models (1 = identical neighbourhoods); distant: the same between the first and "
+                  "last sampled years; signal/noise: change over the span relative to change over a year.")
+
+
+def searches(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
+    """Tuning searches of a corpus directory, newest first, as (name, path)."""
+    if not corpus_dir:
+        return []
+    tuning = Path(corpus_dir).expanduser() / "tuning"
+    if not tuning.is_dir():
+        return []
+    found = [s for s in tuning.iterdir() if s.is_dir() and (s / "search.json").is_file()]
+    found.sort(key=lambda s: (s / "search.json").stat().st_mtime, reverse=True)
+    return [(s.name, str(s)) for s in found]
+
+
+def read_search(search_dir: str) -> Dict[str, Any]:
+    """Everything a tuning search has written so far: its settings
+    (``search.json``), the per-cell summary (``summary.json``, with the
+    suggested cell), the per-year rows (``results.tsv``), the year pairs
+    (``pairs.tsv``), how far it has got, and its provenance when finished."""
+    import json
+    d = Path(search_dir).expanduser()
+    out: Dict[str, Any] = {"path": str(d), "name": d.name, "settings": {}, "cells": [], "best_cell": None,
+                           "best_rule": "", "results": [], "pairs": [], "years_sampled": [], "years_scored": [],
+                           "models_on_disk": 0, "provenance": None}
+    if not d.is_dir():
+        out["error"] = f"{d}: no such directory"
+        return out
+    try:
+        out["settings"] = json.loads((d / "search.json").read_text())
+    except (OSError, ValueError):
+        out["error"] = f"{d}: not a tuning search (no search.json)"
+        return out
+    out["years_sampled"] = [int(y) for y in out["settings"].get("sample_years") or []]
+    try:
+        summary = json.loads((d / "summary.json").read_text())
+        out["cells"] = list(summary.get("cells") or [])
+        out["best_cell"], out["best_rule"] = summary.get("best_cell"), summary.get("best_rule") or ""
+    except (OSError, ValueError):
+        pass
+    out["results"] = read_tsv_rows(d / "results.tsv")
+    out["pairs"] = read_tsv_rows(d / "pairs.tsv")
+    out["years_scored"] = sorted({int(r["year"]) for r in out["results"] if "year" in r})
+    models = d / "models"
+    out["models_on_disk"] = sum(1 for _ in models.glob("*.npz")) if models.is_dir() else 0
+    from lexichron.provenance import read_provenance
+    out["provenance"] = read_provenance(d)
+    return out
+
+
+def read_tsv_rows(path: Path) -> List[Dict[str, Any]]:
+    """Rows of a tab-separated table with a header, numbers restored (blank
+    cells are NaN); [] when the file is missing or unreadable."""
+    try:
+        lines = Path(path).read_text().splitlines()
+    except OSError:
+        return []
+    if not lines:
+        return []
+    cols = lines[0].split("\t")
+    return [{c: _typed(v) for c, v in zip(cols, line.split("\t"))} for line in lines[1:] if line.strip()]
+
+
+def _typed(text: str) -> Any:
+    if text == "":
+        return float("nan")
+    for cast in (int, float):
+        try:
+            return cast(text)
+        except ValueError:
+            continue
+    return text
+
+
+def format_search(search: Dict[str, Any]) -> List[str]:
+    """Header lines for a search: grid, years, progress, suggestion."""
+    if search.get("error"):
+        return [search["error"]]
+    s = search["settings"]
+    grid = s.get("grid") or {}
+    axes = ", ".join(f"{k} {'/'.join(str(v) for v in vals)}" for k, vals in grid.items()
+                     if isinstance(vals, (list, tuple)))
+    sampled, scored = search["years_sampled"], search["years_scored"]
+    seeds, halves = s.get("seeds", 1), s.get("split_half", False)
+    per_cell = int(seeds) + (2 if halves else 0)
+    lines = [f"Search '{search['name']}': {len(search['cells'])} cell(s) scored; grid {axes or '?'}",
+             f"Years {', '.join(str(y) for y in sampled) or '?'}; {seeds} seed(s)"
+             + (" + split halves" if halves else "") + f" = {per_cell} models per cell and year; "
+             f"{search['models_on_disk']} models on disk"]
+    if sampled and len(scored) < len(sampled):
+        lines.append(f"In progress: {len(scored)} of {len(sampled)} years scored"
+                     + (f" ({', '.join(str(y) for y in scored)})" if scored else "")
+                     + "; figures below are provisional")
+    elif search.get("provenance"):
+        from lexichron.provenance import format_provenance
+        lines.append("Finished: " + format_provenance(search["provenance"])[0])
+    if search.get("best_cell"):
+        lines.append(f"Suggested cell: {search['best_cell']} — {search['best_rule']}")
+    return lines
+
+
+def search_table(search: Dict[str, Any]) -> Tuple[List[str], List[List[str]], List[str]]:
+    """The per-cell summary as (headings, rows, cell stems), the suggested
+    cell marked ★ in the first column."""
+    headings = ["", *(h for _, h, _ in SEARCH_COLUMNS)]
+    rows, stems = [], []
+    for c in search.get("cells") or []:
+        rows.append(["★" if c.get("cell") == search.get("best_cell") else ""]
+                    + [_fmt_cell(c.get(key), kind) for key, _, kind in SEARCH_COLUMNS])
+        stems.append(str(c.get("cell")))
+    return headings, rows, stems
+
+
+def cell_detail(search: Dict[str, Any], stem: str) -> List[str]:
+    """One cell's per-year rows and year pairs, as lines."""
+    rows = [r for r in search.get("results") or [] if r.get("cell") == stem]
+    pairs = [p for p in search.get("pairs") or [] if p.get("cell") == stem]
+    if not rows and not pairs:
+        return [f"{stem}: no rows yet"]
+    lines = [f"{stem}: per year"]
+    keys = [k for k in ("vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy",
+                        "seed_overlap", "split_half_overlap") if any(k in r for r in rows)]
+    labels = {key: h for key, h, _ in SEARCH_COLUMNS}
+    for r in sorted(rows, key=lambda r: r.get("year", 0)):
+        lines.append(f"  {r.get('year')}: " + "  ".join(
+            f"{labels.get(k, k)} {_fmt_cell(r.get(k), 'int' if k == 'vocab_size' else 'num')}" for k in keys))
+    if pairs:
+        lines.append("  year pairs: " + "  ".join(
+            f"{p.get('year_a')}–{p.get('year_b')} ({p.get('kind')}) overlap {_fmt_cell(p.get('overlap'), 'num')}"
+            f", cosine {_fmt_cell(p.get('cosine'), 'num')}" for p in pairs))
+    return lines
+
+
+def _fmt_cell(v: Any, kind: str) -> str:
+    if v is None or (isinstance(v, float) and v != v):
+        return "–"
+    if kind == "int":
+        try:
+            return f"{int(v):,}"
+        except (TypeError, ValueError):
+            return str(v)
+    if kind == "num":
+        try:
+            return f"{float(v):.3f}"
+        except (TypeError, ValueError):
+            return str(v)
+    return str(v)

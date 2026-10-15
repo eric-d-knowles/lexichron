@@ -127,3 +127,50 @@ def test_tables_are_read_with_their_columns(tmp_path):
     assert layout == "table" and rows[0] == ("cell\tvector_size\tseed_overlap", "") and rows[1] == ("vs100_w2", "100\t0.8100")
     assert inspection.rows(str(search / "summary.tsv"), "prefix", "vs300", 10)[1][1:] == [("vs300_w2", "300\t0.7500")]
     assert inspection.candidates(str(tmp_path)) == [("tuning/s1/summary.tsv", str(search / "summary.tsv"))]
+
+
+def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
+    import json
+    search = tmp_path / "tuning" / "s2"
+    search.mkdir(parents=True)
+    (search / "search.json").write_text(json.dumps({"grid": {"vector_size": [50, 100]}, "sample_years": [1990, 1991],
+                                                     "seeds": 2, "split_half": False}))
+    cells = [{"cell": "vs50_w2_mc5_e5_sg1_wbfreq", "vector_size": 50, "window": 2, "min_count": 5, "epochs": 5,
+              "approach": "skip-gram", "weight_by": "freq", "years": 1, "vocab_size": 1200, "coverage": 0.8,
+              "simlex_rho": 0.2, "seed_overlap": 0.5, "distant_overlap": None},
+             {"cell": "vs100_w2_mc5_e5_sg1_wbfreq", "vector_size": 100, "window": 2, "min_count": 5, "epochs": 5,
+              "approach": "skip-gram", "weight_by": "freq", "years": 1, "vocab_size": 1200, "coverage": 0.8,
+              "simlex_rho": 0.25, "seed_overlap": 0.6, "distant_overlap": None}]
+    (search / "summary.json").write_text(json.dumps({"cells": cells, "best_cell": cells[1]["cell"], "best_rule": "rule"}))
+    (search / "results.tsv").write_text("cell\tyear\tvocab_size\tcoverage\tseed_overlap\n"
+                                        "vs50_w2_mc5_e5_sg1_wbfreq\t1990\t1200\t0.8000\t0.5000\n"
+                                        "vs100_w2_mc5_e5_sg1_wbfreq\t1990\t1200\t0.8000\t\n")
+    (search / "models").mkdir()
+    (search / "models" / "y1990_vs50_w2_mc5_e5_sg1_wbfreq_s0.npz").write_bytes(b"")
+    assert inspection.searches(str(tmp_path)) == [("s2", str(search))]
+    assert inspection.searches(str(tmp_path / "nowhere")) == []
+    s = inspection.read_search(str(search))
+    assert s["years_sampled"] == [1990, 1991] and s["years_scored"] == [1990] and s["models_on_disk"] == 1
+    assert s["best_cell"] == "vs100_w2_mc5_e5_sg1_wbfreq" and len(s["results"]) == 2 and s["pairs"] == []
+    assert s["results"][1]["seed_overlap"] != s["results"][1]["seed_overlap"]       # blank -> NaN
+    lines = inspection.format_search(s)
+    assert lines[0].startswith("Search 's2': 2 cell(s) scored; grid vector_size 50/100")
+    assert any("In progress: 1 of 2 years scored (1990)" in l for l in lines)
+    assert any(l.startswith("Suggested cell: vs100_w2_mc5_e5_sg1_wbfreq") for l in lines)
+    headings, rows, stems = inspection.search_table(s)
+    assert headings[:3] == ["", "Dims", "Window"] and rows[0][0] == "" and rows[1][0] == "★"
+    assert rows[0][headings.index("Vocab")] == "1,200" and rows[0][headings.index("Seed")] == "0.500"
+    assert rows[0][headings.index("Distant")] == "–" and stems == [c["cell"] for c in cells]
+    detail = inspection.cell_detail(s, "vs100_w2_mc5_e5_sg1_wbfreq")
+    assert detail[0].endswith(": per year") and "1990: Vocab 1,200" in detail[1] and "Seed –" in detail[1]
+    assert inspection.cell_detail(s, "nope") == ["nope: no rows yet"]
+    # describe() and the CLI treat the directory as a search
+    info = inspection.describe(str(search))
+    assert info["kind"] == "search" and "Suggested cell" in inspection.format_summary(info)
+    from lexichron import cli
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        assert cli.main(["inspect", str(search), "--key", "vs50_w2_mc5_e5_sg1_wbfreq"]) == 0
+    out = buf.getvalue()
+    assert "Dims" in out and "★  100" in out and "vs50_w2_mc5_e5_sg1_wbfreq: per year" in out

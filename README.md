@@ -520,8 +520,12 @@ settings before any final model is trained.
   (year pairs), `summary.tsv` and `summary.json` (per cell, with a
   signal-to-noise ratio: change over the span relative to change over a
   year) and a suggested cell: the most stable among cells within 0.05 of
-  the best coverage and similarity correlation. The Inspect tab lists the
-  tables and shows the suggestion; the choice stays yours.
+  the best coverage and similarity correlation; the choice stays yours.
+  With the Tune stage selected, the Inspect tab shows a search's scores:
+  one row per cell (sortable by any column, the suggested cell starred),
+  how far the search has got, and on selecting a cell its per-year rows
+  and year pairs. `lexichron inspect <corpus>/tuning/<name>` prints the
+  same table (`--key <cell>` adds that cell's years).
 - **While it runs.** A cell is scored as soon as its models for a year are
   on disk, while the other cells' models still train, and its year pairs as
   soon as the later year's model exists; `results.tsv` and `pairs.tsv` grow

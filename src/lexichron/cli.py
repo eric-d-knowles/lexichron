@@ -113,6 +113,19 @@ def _inspect(args: argparse.Namespace) -> int:
         for line in format_provenance(prov):
             print(line)
         return 0
+    if info["kind"] == "search":                       # a tuning search: its per-cell table
+        from lexichron.inspection import cell_detail, search_table
+        headings, grid, stems = search_table(info["search"])
+        if not grid:
+            print("(no cells scored yet)")
+            return 0
+        widths = [max(len(headings[i]), *(len(r[i]) for r in grid)) for i in range(len(headings))]
+        for row in [headings] + grid:
+            print("  ".join(f"{c:<{w}}" for c, w in zip(row, widths)).rstrip())
+        if args.key:                                   # a cell stem: its per-year rows
+            for line in cell_detail(info["search"], args.key):
+                print(line)
+        return 0
     mode = "key" if args.key is not None else "prefix" if args.prefix is not None else "head"
     try:
         layout, found = rows(args.path, mode, args.key or args.prefix or "", args.rows, args.layout, raw=True)
@@ -159,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "an n-gram-keyed one, [fic][2000] text for a Davies corpus.")
     ins.add_argument("path", help="database directory or vocabulary file")
     which = ins.add_mutually_exclusive_group()
-    which.add_argument("--key", metavar="KEY", help="records from this key onwards")
+    which.add_argument("--key", metavar="KEY", help="records from this key onwards (for a tuning search: a cell, for its per-year rows)")
     which.add_argument("--prefix", metavar="PREFIX", help="records whose key starts with this")
     ins.add_argument("--rows", type=int, default=20, metavar="N", help="how many records (default 20)")
     ins.add_argument("--layout", choices=("auto", "pivoted", "ngram", "davies", "raw"), default="auto",

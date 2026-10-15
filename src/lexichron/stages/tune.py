@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from lexichron.inspection import read_tsv_rows
 from lexichron.training import benchmarks, stability
 from lexichron.training.corpus import UNK_MODES, CorpusStats, corpus_file_name, write_corpus
 from lexichron.training.grid import AXES, Cell, Grid, corpus_variants
@@ -583,44 +584,13 @@ def _write_pairs(path: Path, pairs: Dict[Tuple[str, int, int], Dict[str, Any]]) 
 
 def _read_results(path: Path, years: Sequence[int]) -> Dict[Tuple[str, int], Dict[str, Any]]:
     """Rows of an earlier run, for the sampled years only."""
-    return {(r["cell"], int(r["year"])): r for r in _read_tsv(path)
+    return {(r["cell"], int(r["year"])): r for r in read_tsv_rows(path)
             if "cell" in r and r.get("year") in years}
 
 
 def _read_pairs(path: Path, years: Sequence[int]) -> Dict[Tuple[str, int, int], Dict[str, Any]]:
-    return {(r["cell"], int(r["year_a"]), int(r["year_b"])): r for r in _read_tsv(path)
+    return {(r["cell"], int(r["year_a"]), int(r["year_b"])): r for r in read_tsv_rows(path)
             if "cell" in r and r.get("year_a") in years and r.get("year_b") in years}
-
-
-def _read_tsv(path: Path) -> List[Dict[str, Any]]:
-    """Rows of a table written by ``_write_tsv``, numbers restored (blank
-    cells are NaN); [] when the file is missing or unreadable."""
-    try:
-        lines = path.read_text().splitlines()
-    except OSError:
-        return []
-    if not lines:
-        return []
-    cols = lines[0].split("\t")
-    out = []
-    for line in lines[1:]:
-        if not line.strip():
-            continue
-        out.append({c: _cell_value(v) for c, v in zip(cols, line.split("\t"))})
-    return out
-
-
-def _cell_value(text: str) -> Any:
-    if text == "":
-        return float("nan")
-    try:
-        return int(text)
-    except ValueError:
-        pass
-    try:
-        return float(text)
-    except ValueError:
-        return text
 
 
 def _write_summary(tsv: Path, js: Path, summary: Dict[str, Any]) -> None:
