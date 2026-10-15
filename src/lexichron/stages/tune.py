@@ -16,11 +16,12 @@ from __future__ import annotations
 
 import json
 import logging
+import multiprocessing
 import os
 import shutil
 import statistics
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -163,13 +164,15 @@ def tune_models(
 
     log_dir = out_dir / "logs"
     log_dir.mkdir(exist_ok=True)
-    _setup_log(log_dir / f"tune_{datetime.now():%Y%m%d_%H%M%S}.log")
+    log_file = log_dir / f"tune_{datetime.now():%Y%m%d_%H%M%S}.log"
+    _setup_log(log_file)
     inputs: Dict[str, Any] = {"source": str(db_path), "vocabulary": str(whitelist) if vocab_words else None}
     for label, path in sim_sets.items():
         inputs[f"{label}_dataset"] = path
     if ana_set:
         inputs["analogy_dataset"] = ana_set
-    progress = ProgressReporter(progress_path, stage="tune", db_path=out_dir, unit_label="models", inputs=inputs)
+    progress = ProgressReporter(progress_path, stage="tune", db_path=out_dir, log_path=log_file,
+                                unit_label="models", inputs=inputs)
     tasks = plan_models(cells, sampled, seeds, split_half)
     existing = {t.stem for t in tasks if (models_dir / f"{t.stem}.npz").exists()}
     progress.set_totals(len(tasks), files_skipped=len(existing))
@@ -187,41 +190,81 @@ def tune_models(
     t_start = time.perf_counter()
     corpus_stats: Dict[Tuple[int, str], CorpusStats] = {}
     rows: Dict[Tuple[str, int], Dict[str, Any]] = {}      # (cell stem, year) -> result row
+    variants = corpus_variants(cells)
+    # One process writes corpus files; the next year's are written while this
+    # year's models train, so the (single-threaded) writing overlaps training.
+    # (with a stand-in trainer, as in the tests, the files are written inline:
+    # the stand-in's database lives in this process)
+    writer = None if train_fn is not None else \
+        ProcessPoolExecutor(max_workers=1, mp_context=multiprocessing.get_context("spawn"))
+    pending: Dict[int, List[Future]] = {}
+
+    def needs_corpus(year: int) -> bool:
+        return any(t.stem not in existing for t in tasks if t.year == year)
+
+    def corpus_paths(year: int) -> Dict[Tuple[str, str], Path]:
+        files: Dict[Tuple[str, str], Path] = {}
+        for wb in variants:
+            files[(wb, "full")] = spool / corpus_file_name(year, wb, unk_mode)
+            if split_half:
+                files[(wb, "a")] = spool / corpus_file_name(year, wb, unk_mode, "a")
+                files[(wb, "b")] = spool / corpus_file_name(year, wb, unk_mode, "b")
+        return files
+
+    def submit_corpus(year: int) -> None:
+        files = corpus_paths(year)
+        futs = []
+        for wb in variants:
+            full = files[(wb, "full")]
+            halves = (files[(wb, "a")], files[(wb, "b")]) if split_half else None
+            if full.exists() and (not halves or all(h.exists() for h in halves)):
+                continue
+            args = (str(db_path), year, str(full))
+            kw = dict(weight_by=wb, unk_mode=unk_mode, halves=tuple(str(h) for h in halves) if halves else None,
+                      split_seed=year)
+            if writer is None:
+                fut: Future = Future()
+                fut.set_result(write_corpus(*args, **kw))
+                futs.append(fut)
+            else:
+                futs.append(writer.submit(write_corpus, *args, **kw))
+        pending[year] = futs
+
     try:
-        for year in sampled:
+        todo_years = [y for y in sampled if needs_corpus(y)]
+        if todo_years:
+            submit_corpus(todo_years[0])
+        for i, year in enumerate(sampled):
             year_tasks = [t for t in tasks if t.year == year]
             todo = [t for t in year_tasks if t.stem not in existing]
-            for t in year_tasks:
-                if t.stem not in existing:
-                    progress.file_started(t.stem)
-            # corpus files: one pass per weighting, full + halves
-            files: Dict[Tuple[str, str], Path] = {}
+            for t in todo:
+                progress.file_started(t.stem)
+            files = corpus_paths(year)
             if todo:
+                # wait for this year's corpus files (written ahead, or now)
+                if year not in pending:
+                    submit_corpus(year)
                 with progress.long_phase("corpus"):
-                    for wb in corpus_variants(cells):
-                        full = spool / corpus_file_name(year, wb, unk_mode)
-                        halves = (spool / corpus_file_name(year, wb, unk_mode, "a"),
-                                  spool / corpus_file_name(year, wb, unk_mode, "b")) if split_half else None
-                        if not full.exists() or (halves and not all(h.exists() for h in halves)):
-                            st = write_corpus(str(db_path), year, str(full), weight_by=wb, unk_mode=unk_mode,
-                                              halves=tuple(str(h) for h in halves) if halves else None,
-                                              split_seed=year)
-                            corpus_stats[(year, wb)] = st
-                            logger.info("corpus %s: %s", full.name, st.as_dict())
-                        files[(wb, "full")] = full
-                        if halves:
-                            files[(wb, "a")], files[(wb, "b")] = halves
-                    progress.doc["counters"]["corpus_lines"] = progress.doc["counters"].get("corpus_lines", 0) + \
-                        sum(s.lines for (y, _), s in corpus_stats.items() if y == year)
-                    progress.doc["counters"]["ngrams_used"] = progress.doc["counters"].get("ngrams_used", 0) + \
-                        sum(s.ngrams_used for (y, _), s in corpus_stats.items() if y == year)
+                    for fut in pending.pop(year):
+                        st = fut.result()
+                        corpus_stats[(year, st.weight_by)] = st
+                        logger.info("corpus y%s %s: %s", year, st.weight_by, st.as_dict())
+                progress.doc["counters"]["corpus_lines"] = progress.doc["counters"].get("corpus_lines", 0) + \
+                    sum(s.lines for (y, _), s in corpus_stats.items() if y == year)
+                progress.doc["counters"]["ngrams_used"] = progress.doc["counters"].get("ngrams_used", 0) + \
+                    sum(s.ngrams_used for (y, _), s in corpus_stats.items() if y == year)
+                # start writing the next year's files before training this year's models
+                later = [y for y in sampled[i + 1:] if needs_corpus(y) and y not in pending]
+                if later:
+                    submit_corpus(later[0])
             # train this year's models
             results: Dict[str, Vectors] = {}
             for t in year_tasks:
                 if t.stem in existing:
                     results[t.stem] = load_vectors(str(models_dir / f"{t.stem}.npz"))
             if todo:
-                _train_all(todo, files, models_dir, per_model, parallel, progress, train_fn, results)
+                with progress.long_phase("training"):
+                    _train_all(todo, files, models_dir, per_model, parallel, progress, train_fn, results)
             # score this year's cells
             for cell in cells:
                 progress.file_ingesting(_stem(cell, year, "s0"))
@@ -254,6 +297,9 @@ def tune_models(
     except BaseException as exc:
         progress.finish("failed", str(exc))
         raise
+    finally:
+        if writer is not None:
+            writer.shutdown(wait=False, cancel_futures=True)
     minutes = (time.perf_counter() - t_start) / 60
     print(f"Done in {minutes:.1f} min: {out_dir}")
     if summary.get("best_cell"):
@@ -349,11 +395,14 @@ def _train_all(todo: List[ModelTask], files: Dict[Tuple[str, str], Path], models
             progress.doc["counters"]["train_seconds"] = progress.doc["counters"].get("train_seconds", 0) + int(secs)
             progress.file_parsed(t.stem)
         return
-    with ProcessPoolExecutor(max_workers=parallel) as pool:
+    # spawn, not fork: the parent holds numpy/BLAS and RocksDB threads, which a
+    # forked child can inherit in a locked state
+    with ProcessPoolExecutor(max_workers=parallel, mp_context=multiprocessing.get_context("spawn")) as pool:
         futures = {}
         for t, job in zip(todo, jobs):
             futures[pool.submit(_train_one, job)] = t
             progress.file_active(t.stem)
+        progress._write(force=True)
         for fut in as_completed(futures):
             t = futures[fut]
             out_path, secs, n = fut.result()

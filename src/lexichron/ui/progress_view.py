@@ -60,6 +60,7 @@ LONG_PHASES = {
     "archiving": "archiving the database",
     "whitelist": "writing the vocabulary",
     "corpus": "writing the year's corpus file(s)",
+    "training": "training the year's models",
 }
 
 

@@ -172,6 +172,16 @@ def test_cli_runs_tune_from_a_settings_file(rocks, tmp_path, monkeypatch):
     _datasets(tmp_path, monkeypatch)                                           # the image's copies
     import lexichron.training.trainer as trainer_mod
     monkeypatch.setattr(trainer_mod, "gensim_train", fake_train)
+    # the corpus writer process cannot see the fake store: run it inline
+    from concurrent.futures import Future
+
+    class Inline:
+        def __init__(self, *a, **k): pass
+        def submit(self, fn, *a, **k):
+            f = Future(); f.set_result(fn(*a, **k)); return f
+        def shutdown(self, *a, **k): pass
+    import lexichron.stages.tune as tune_mod
+    monkeypatch.setattr(tune_mod, "ProcessPoolExecutor", Inline)
     proj = tmp_path / "lexichron.yaml"
     proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {stub}\n"
                     "tune:\n  years: [1990, 1991]\n  sample_years: [1990, 1991]\n  vector_size: [8]\n  window: 2\n"
