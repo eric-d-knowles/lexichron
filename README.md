@@ -326,7 +326,9 @@ project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
 `lexichron filter` turns the acquired database (`<n>grams.db`, every raw
 n-gram as Google wrote it) into `<n>grams_processed.db`, where the text is
 normalized and the noise removed. Each token is lowercased, lemmatized
-(*women* → *woman*, with spaCy's tables for the corpus's language) and then
+(*women* → *woman*, with spaCy's tables for the corpus's language; the
+lemma is lowercased too, since spaCy's English table maps *truer* to
+`TRUE`) and then
 either checked against a vocabulary or put through the rule filters:
 stopwords, tokens that are not purely alphabetic (ASCII letters only for
 English), and tokens shorter than `min_len` become `<UNK>`. N-grams with

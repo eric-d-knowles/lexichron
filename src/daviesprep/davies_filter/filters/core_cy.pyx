@@ -202,6 +202,8 @@ cpdef bytes process_sentence(
                 # Default to NOUN for Davies data (no POS tags)
                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")
                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)
+                if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")
+                    tok_b = tok_b.lower()
 
         # Write token
         if is_unk:

@@ -212,6 +212,11 @@ cpdef bytes process_tokens(
             pos_s = wn_pos if wn_pos is not None else "NOUN"
             res = lemma_gen.lemmatize(tok_s, pos=pos_s)
             normalized_token = _encode_token(<str> res, False)
+            # a lookup lemmatizer can change case (spaCy's English table maps
+            # truer/truest -> "TRUE", falser/falsest -> "FALSE"): lowercase
+            # the lemma too, so one word stays one type
+            if do_lower:
+                normalized_token = normalized_token.lower()
         else:
             normalized_token = base_b
 
