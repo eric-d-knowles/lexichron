@@ -85,6 +85,22 @@ From: {{ BASE }}
     find /opt/lexichron-src/src -name '*.o' -delete
     find /opt/lexichron-src/src -type d -name build -prune -exec rm -rf {} +
 
+    # gensim, built from source with its corpus_file reader freed of the GIL
+    # (scripts/patch_gensim.py explains): on n-gram corpora, where a line is
+    # five tokens, the stock build re-takes the GIL for every line and a model
+    # cannot use more than a few cores. Installed before lexichron so that pip
+    # keeps this build rather than fetching the wheel.
+    mkdir -p /tmp/gensim-build
+    cd /tmp/gensim-build
+    python -m pip download --no-cache-dir --no-deps --no-binary gensim "gensim==4.3.3"
+    tar xzf gensim-4.3.3.tar.gz
+    python /opt/lexichron-src/scripts/patch_gensim.py gensim-4.3.3
+    python -m pip install --no-cache-dir ./gensim-4.3.3
+    cd /
+    rm -rf /tmp/gensim-build
+    python -c "import gensim.models.word2vec_corpusfile, json, importlib.metadata as m; \
+        print('gensim', m.version('gensim'), 'built from', [f for f in m.files('gensim') if f.name == 'direct_url.json'])"
+
     python -m pip install --no-cache-dir "/opt/lexichron-src[ui]"
     chmod 755 /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh /opt/lexichron/install_ui.sh
 

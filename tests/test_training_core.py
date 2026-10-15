@@ -140,3 +140,36 @@ def test_simlex_format_with_a_pos_column_is_read(tmp_path):
     f.write_text("word1\tword2\tPOS\tSimLex999\tconc(w1)\nold\tnew\tA\t1.58\t2.72\nsmart\tintelligent\tA\t9.2\t1.75\nhard\tdifficult\tA\t8.77\t3.76\n")
     rho, cov = benchmarks.similarity_score(v, str(f))
     assert cov == 1.0 and rho > 0.9
+
+
+# ------------------------------------------------------------------ the gensim patch for the image
+def test_patch_gensim_frees_the_corpus_file_reader(tmp_path):
+    import subprocess
+    models = tmp_path / "gensim" / "models"
+    models.mkdir(parents=True)
+    pxd = ("cdef class CythonLineSentence:\n"
+           "    cpdef bool_t is_eof(self) nogil\n"
+           "    cpdef vector[string] read_sentence(self) nogil except *\n"
+           "    cpdef vector[vector[string]] _read_chunked_sentence(self) nogil except *\n"
+           "    cpdef vector[vector[string]] _chunk_sentence(self, vector[string] sent) nogil\n"
+           "    cpdef vector[vector[string]] next_batch(self) nogil except *\n")
+    pyx = ("    cpdef vector[string] read_sentence(self) nogil except *:\n"
+           "        return self._thisptr.ReadSentence()\n"
+           "    cpdef vector[vector[string]] _read_chunked_sentence(self) nogil except *:\n"
+           "        pass\n"
+           "    cpdef vector[vector[string]] next_batch(self) nogil except *:\n"
+           "        pass\n")
+    (models / "word2vec_corpusfile.pxd").write_text(pxd)
+    (models / "word2vec_corpusfile.pyx").write_text(pyx)
+    for name in ("word2vec", "doc2vec", "fasttext", "word2vec_inner"):
+        (models / f"{name}_corpusfile.cpp" if name != "word2vec_inner" else models / "word2vec_inner.cpp").write_text("//")
+    script = Path(__file__).parent.parent / "scripts" / "patch_gensim.py"
+    subprocess.run([sys.executable, str(script), str(tmp_path)], check=True, capture_output=True)
+    assert "except *" not in (models / "word2vec_corpusfile.pxd").read_text()
+    assert "except *" not in (models / "word2vec_corpusfile.pyx").read_text()
+    assert "cpdef vector[string] read_sentence(self) nogil:" in (models / "word2vec_corpusfile.pyx").read_text()
+    assert not (models / "word2vec_corpusfile.cpp").exists() and not (models / "fasttext_corpusfile.cpp").exists()
+    assert (models / "word2vec_inner.cpp").exists()                      # other generated sources are kept
+    # a second run (or another gensim) fails loudly rather than silently doing nothing
+    r = subprocess.run([sys.executable, str(script), str(tmp_path)], capture_output=True, text=True)
+    assert r.returncode != 0 and "expected one occurrence" in r.stderr

@@ -532,7 +532,10 @@ settings before any final model is trained.
   whatever the size of the grid. A year with fewer models than that
   spreads the CPUs over the models it has (`workers_per_model` is a
   minimum): a one-cell search trains its four models with 16 threads
-  each on 64 CPUs.
+  each on 64 CPUs. The image's gensim is built from source with its
+  `corpus_file` reader freed of the GIL (`scripts/patch_gensim.py`): the
+  stock build re-takes the GIL once per line, which on five-token n-gram
+  lines caps a model at three or four cores however many threads it has.
 - **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
   resume mode a rerun with more values trains only the new cells, and
   scores already in the tables are kept rather than recomputed.
