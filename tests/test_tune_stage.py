@@ -135,6 +135,43 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
     assert len(json.loads((out / "summary.json").read_text())["cells"]) == 4
 
 
+def test_cells_are_scored_as_their_models_finish_and_resume_keeps_scores(rocks, tmp_path):
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "t2"
+    seen = []                                  # (model being trained, result rows so far, pair rows so far)
+
+    def watching_train(corpus_file, cell, seed, workers):
+        def n_rows(name):
+            p = out / name
+            return max(0, len(p.read_text().splitlines()) - 1) if p.exists() else 0
+        seen.append((Path(corpus_file).name, cell.stem, n_rows("results.tsv"), n_rows("pairs.tsv")))
+        return fake_train(corpus_file, cell, seed, workers)
+
+    tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990, 1991], vector_size=[8, 16],
+                     window=[2], min_count=[2], epochs=[1], seeds=2, name="t2", mode="restart", workers=1,
+                     probes_per_decile=3, similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
+                     train_fn=watching_train)
+    # the first cell's row was written before the second cell's models were trained, within the year;
+    # the 1990-1991 pairs were written before 1991's second cell trained
+    first_of_second_cell_1990 = next(s for s in seen if s[1].startswith("vs16") and "y1990" in s[0])
+    assert first_of_second_cell_1990[2] == 1
+    first_of_second_cell_1991 = next(s for s in seen if s[1].startswith("vs16") and "y1991" in s[0])
+    assert first_of_second_cell_1991[2] == 3 and first_of_second_cell_1991[3] == 1
+    assert len((out / "pairs.tsv").read_text().splitlines()) == 3                 # header + adjacent x 2 cells
+    # resume: scores are read back, not recomputed (the file is untouched); the summary is rebuilt
+    before = (out / "results.tsv").stat().st_mtime_ns
+    (out / "summary.json").unlink()
+    tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990, 1991], vector_size=[8, 16],
+                     window=[2], min_count=[2], epochs=[1], seeds=2, name="t2", workers=1,
+                     probes_per_decile=3, similarity_dataset=str(tmp_path / "data" / "simlex999.txt"),
+                     train_fn=watching_train)
+    assert (out / "results.tsv").stat().st_mtime_ns == before and (out / "summary.json").exists()
+    rows = tune._read_results(out / "results.tsv", [1990, 1991])
+    assert len(rows) == 4 and isinstance(rows[("vs8_w2_mc2_e1_sg1_wbfreq", 1990)]["seed_overlap"], float)
+    assert tune._read_results(out / "results.tsv", [1990]) and not tune._read_results(out / "results.tsv", [2000])
+
+
 def test_tune_refuses_without_the_pivoted_database(rocks, tmp_path):
     with pytest.raises(FileNotFoundError):
         tune.tune_models(5, "20200217", "eng", str(tmp_path / "none"), train_fn=fake_train)

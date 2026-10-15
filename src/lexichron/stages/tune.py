@@ -189,7 +189,12 @@ def tune_models(
 
     t_start = time.perf_counter()
     corpus_stats: Dict[Tuple[int, str], CorpusStats] = {}
-    rows: Dict[Tuple[str, int], Dict[str, Any]] = {}      # (cell stem, year) -> result row
+    # results of an earlier run of this search, so a resume rescores only
+    # what it retrains; both tables are rewritten after every addition
+    rows = _read_results(out_dir / RESULTS_FILE, sampled)         # (cell stem, year) -> row
+    pairs = _read_pairs(out_dir / PAIRS_FILE, sampled)            # (cell stem, year a, year b) -> row
+    kinds = [f"s{s}" for s in range(seeds)] + (["ha", "hb"] if split_half else [])
+    trained: set = set()                                          # stems trained in this run
     variants = corpus_variants(cells)
     # One process writes corpus files; the next year's are written while this
     # year's models train, so the (single-threaded) writing overlaps training.
@@ -230,6 +235,47 @@ def tune_models(
                 futs.append(writer.submit(write_corpus, *args, **kw))
         pending[year] = futs
 
+    def pairs_ending(year: int) -> List[Tuple[int, int, str]]:
+        """The year pairs whose later year is ``year``: the adjacent pair, and
+        the distant pair (first sampled year, last) once the last is reached."""
+        out = []
+        if year - 1 in sampled:
+            out.append((year - 1, year, "adjacent"))
+        if year == sampled[-1] and year - sampled[0] > 1:
+            out.append((sampled[0], year, "distant"))
+        return out
+
+    def score_cell(cell: Cell, year: int) -> None:
+        """Score a cell as soon as its models for the year are all on disk:
+        the row (loading just this cell's models, then dropping them) and
+        the year pairs that end at this year. Skipped when an earlier run
+        scored it and nothing of it was retrained."""
+        key = (cell.stem, year)
+        stems = {kind: _stem(cell, year, kind) for kind in kinds}
+        if key not in rows or any(s in trained for s in stems.values()):
+            progress.file_ingesting(stems["s0"])
+            models = {kind: load_vectors(str(models_dir / f"{s}.npz")) for kind, s in stems.items()}
+            rows[key] = _score_year(cell, year, models, seeds, split_half, neighbours, probes_per_decile,
+                                    vocab_words, sim_sets, ana_set)
+            del models
+            _write_results(out_dir / RESULTS_FILE, rows)
+            logger.info("scored %s y%s: %s", cell.stem, year,
+                        {k: round(v, 4) if isinstance(v, float) else v for k, v in rows[key].items()
+                         if k in ("vocab_size", "coverage", "seed_overlap", "split_half_overlap")})
+        for s in stems.values():
+            if s in trained:
+                progress.file_done(s, entries=rows[key].get("vocab_size", 0), chunks=0, uncompressed_bytes=0,
+                                   counters={"models": 1})
+        for a, b, kind in pairs_ending(year):
+            pk = (cell.stem, a, b)
+            if pk not in pairs or stems["s0"] in trained or _stem(cell, a, "s0") in trained:
+                row = _score_pair(cell, a, b, kind, models_dir, neighbours, probes_per_decile)
+                if row is not None:
+                    pairs[pk] = row
+                    _write_pairs(out_dir / PAIRS_FILE, pairs)
+                    logger.info("scored %s %s pair y%s-y%s: overlap %.4f", cell.stem, kind, a, b, row["overlap"])
+
+    summary: Dict[str, Any] = {}
     try:
         todo_years = [y for y in sampled if needs_corpus(y)]
         if todo_years:
@@ -257,25 +303,27 @@ def tune_models(
                 later = [y for y in sampled[i + 1:] if needs_corpus(y) and y not in pending]
                 if later:
                     submit_corpus(later[0])
-            # train this year's models
-            results: Dict[str, Vectors] = {}
+            # which of each cell's models for this year are on disk already
+            ready: Dict[str, set] = {cell.stem: set() for cell in cells}
             for t in year_tasks:
                 if t.stem in existing:
-                    results[t.stem] = load_vectors(str(models_dir / f"{t.stem}.npz"))
+                    ready[t.cell.stem].add(t.kind)
+            for cell in cells:                           # complete from an earlier run: score if needed
+                if len(ready[cell.stem]) == len(kinds):
+                    score_cell(cell, year)
+
+            def on_trained(t: ModelTask, year: int = year, ready: Dict[str, set] = ready) -> None:
+                trained.add(t.stem)
+                ready[t.cell.stem].add(t.kind)
+                if len(ready[t.cell.stem]) == len(kinds):
+                    score_cell(t.cell, year)             # while the other cells' models still train
+
             if todo:
                 with progress.long_phase("training"):
-                    _train_all(todo, files, models_dir, per_model, parallel, progress, train_fn, results)
-            # score this year's cells
-            for cell in cells:
-                progress.file_ingesting(_stem(cell, year, "s0"))
-                row = _score_year(cell, year, results, seeds, split_half, neighbours, probes_per_decile,
-                                  vocab_words, sim_sets, ana_set)
-                rows[(cell.stem, year)] = row
-                for t in (x for x in year_tasks if x.cell == cell):
-                    if t.stem not in existing:
-                        progress.file_done(t.stem, entries=row.get("vocab_size", 0), chunks=0, uncompressed_bytes=0,
-                                           counters={"models": 1})
-            _write_results(out_dir / RESULTS_FILE, rows)
+                    _train_all(todo, files, models_dir, per_model, parallel, progress, train_fn, on_trained)
+            # a provisional summary over the years scored so far
+            summary = summarize_results(rows, list(pairs.values()), cells)
+            _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON, summary)
             # keep the seed-0 model of every cell for the year-pair comparisons; the rest may go
             if not keep_models:
                 for t in year_tasks:
@@ -284,11 +332,6 @@ def tune_models(
             if not temp_dir:
                 for f in files.values():
                     f.unlink(missing_ok=True)
-        # year pairs: adjacent and distant, per cell
-        pairs = _score_pairs(cells, sampled, models_dir, neighbours, probes_per_decile)
-        _write_pairs(out_dir / PAIRS_FILE, pairs)
-        summary = summarize_results(rows, pairs, cells)
-        _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON, summary)
         if not keep_models:
             shutil.rmtree(models_dir, ignore_errors=True)
         progress.doc["counters"]["cells"] = len(cells)
@@ -381,19 +424,25 @@ def _train_one(args):
 
 def _train_all(todo: List[ModelTask], files: Dict[Tuple[str, str], Path], models_dir: Path, per_model: int,
                parallel: int, progress: ProgressReporter, train_fn: Optional[TrainFn],
-               results: Dict[str, Vectors]) -> None:
+               on_trained: Callable[[ModelTask], None]) -> None:
+    """Train the models, ``parallel`` at a time, calling ``on_trained`` in this
+    process as each finishes (the model is on disk; nothing is kept here)."""
     jobs = []
     for t in todo:
         corpus_file = files[(t.cell.weight_by, t.corpus_part)]
         jobs.append((str(corpus_file), t.cell, t.seed, per_model, str(models_dir / f"{t.stem}.npz"), train_fn))
+
+    def finished(t: ModelTask, secs: float, n: int) -> None:
+        logger.info("trained %s: %d words, %.0fs", t.stem, n, secs)
+        progress.doc["counters"]["train_seconds"] = progress.doc["counters"].get("train_seconds", 0) + int(secs)
+        progress.file_parsed(t.stem)
+        on_trained(t)
+
     if parallel == 1 or train_fn is not None:
         for t, job in zip(todo, jobs):
             progress.file_active(t.stem)
-            out_path, secs, n = _train_one(job)
-            logger.info("trained %s: %d words, %.0fs", t.stem, n, secs)
-            results[t.stem] = load_vectors(out_path)
-            progress.doc["counters"]["train_seconds"] = progress.doc["counters"].get("train_seconds", 0) + int(secs)
-            progress.file_parsed(t.stem)
+            _, secs, n = _train_one(job)
+            finished(t, secs, n)
         return
     # spawn, not fork: the parent holds numpy/BLAS and RocksDB threads, which a
     # forked child can inherit in a locked state
@@ -405,30 +454,29 @@ def _train_all(todo: List[ModelTask], files: Dict[Tuple[str, str], Path], models
         progress._write(force=True)
         for fut in as_completed(futures):
             t = futures[fut]
-            out_path, secs, n = fut.result()
-            logger.info("trained %s: %d words, %.0fs", t.stem, n, secs)
-            results[t.stem] = load_vectors(out_path)
-            progress.doc["counters"]["train_seconds"] = progress.doc["counters"].get("train_seconds", 0) + int(secs)
-            progress.file_parsed(t.stem)
+            _, secs, n = fut.result()
+            finished(t, secs, n)
 
 
 # ---------------------------------------------------------------- scoring
-def _score_year(cell: Cell, year: int, results: Dict[str, Vectors], seeds: int, split_half: bool,
+def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, split_half: bool,
                 k: int, per_decile: int, vocab_words: List[str], sim_sets: Dict[str, str],
                 ana_set: Optional[str]) -> Dict[str, Any]:
-    main = results[_stem(cell, year, "s0")]
+    """The row for one cell and year from its models, keyed by kind (``s0``,
+    ``s1``, ..., ``ha``, ``hb``)."""
+    main = models["s0"]
     row: Dict[str, Any] = {"cell": cell.stem, "year": year, **cell.as_dict(),
                            "vocab_size": len(main),
                            "coverage": benchmarks.coverage(main, vocab_words) if vocab_words else float("nan")}
     if seeds > 1:
-        others = [results[_stem(cell, year, f"s{s}")] for s in range(1, seeds)]
+        others = [models[f"s{s}"] for s in range(1, seeds)]
         probes = stability.probe_words([main] + others, per_decile=per_decile, seed=year)
         row["seed_overlap"] = statistics.fmean(stability.neighbour_overlap(main, o, probes, k) for o in others)
         row["seed_cosine"] = statistics.fmean(stability.aligned_cosine(main, o, probes) for o in others)
     else:
         row["seed_overlap"] = row["seed_cosine"] = float("nan")
     if split_half:
-        a, b = results[_stem(cell, year, "ha")], results[_stem(cell, year, "hb")]
+        a, b = models["ha"], models["hb"]
         probes = stability.probe_words([a, b], per_decile=per_decile, seed=year)
         row["split_half_overlap"] = stability.neighbour_overlap(a, b, probes, k)
         row["split_half_cosine"] = stability.aligned_cosine(a, b, probes)
@@ -445,37 +493,19 @@ def _score_year(cell: Cell, year: int, results: Dict[str, Vectors], seeds: int, 
     return row
 
 
-def _score_pairs(cells: Sequence[Cell], years: List[int], models_dir: Path, k: int,
-                 per_decile: int) -> List[Dict[str, Any]]:
-    """Adjacent pairs (y, y+1 both sampled) and the distant pair (first, last)
-    per cell, on the seed-0 models."""
-    pairs: List[Tuple[int, int, str]] = []
-    for y in years:
-        if y + 1 in years:
-            pairs.append((y, y + 1, "adjacent"))
-    if len(years) >= 2 and years[-1] - years[0] > 1:
-        pairs.append((years[0], years[-1], "distant"))
-    out = []
-    cache: Dict[str, Vectors] = {}
-
-    def model(cell: Cell, year: int) -> Optional[Vectors]:
-        stem = _stem(cell, year, "s0")
-        if stem not in cache:
-            p = models_dir / f"{stem}.npz"
-            cache[stem] = load_vectors(str(p)) if p.exists() else None
-        return cache[stem]
-
-    for cell in cells:
-        for a, b, kind in pairs:
-            ma, mb = model(cell, a), model(cell, b)
-            if ma is None or mb is None:
-                continue
-            probes = stability.probe_words([ma, mb], per_decile=per_decile, seed=a * 10000 + b)
-            out.append({"cell": cell.stem, "year_a": a, "year_b": b, "kind": kind,
-                        "overlap": stability.neighbour_overlap(ma, mb, probes, k),
-                        "cosine": stability.aligned_cosine(ma, mb, probes)})
-        cache.clear()
-    return out
+def _score_pair(cell: Cell, a: int, b: int, kind: str, models_dir: Path, k: int,
+                per_decile: int) -> Optional[Dict[str, Any]]:
+    """Agreement between the seed-0 models of two years (``adjacent`` or
+    ``distant``), loaded for the comparison and dropped; None when either
+    model is not on disk."""
+    pa, pb = models_dir / f"{_stem(cell, a, 's0')}.npz", models_dir / f"{_stem(cell, b, 's0')}.npz"
+    if not (pa.exists() and pb.exists()):
+        return None
+    ma, mb = load_vectors(str(pa)), load_vectors(str(pb))
+    probes = stability.probe_words([ma, mb], per_decile=per_decile, seed=a * 10000 + b)
+    return {"cell": cell.stem, "year_a": a, "year_b": b, "kind": kind,
+            "overlap": stability.neighbour_overlap(ma, mb, probes, k),
+            "cosine": stability.aligned_cosine(ma, mb, probes)}
 
 
 def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[Dict[str, Any]],
@@ -537,8 +567,51 @@ def _write_results(path: Path, rows: Dict[Tuple[str, int], Dict[str, Any]]) -> N
     _write_tsv(path, ordered)
 
 
-def _write_pairs(path: Path, pairs: List[Dict[str, Any]]) -> None:
-    _write_tsv(path, pairs)
+def _write_pairs(path: Path, pairs: Dict[Tuple[str, int, int], Dict[str, Any]]) -> None:
+    ordered = [pairs[k] for k in sorted(pairs, key=lambda k: (k[1], k[2], k[0]))]
+    _write_tsv(path, ordered)
+
+
+def _read_results(path: Path, years: Sequence[int]) -> Dict[Tuple[str, int], Dict[str, Any]]:
+    """Rows of an earlier run, for the sampled years only."""
+    return {(r["cell"], int(r["year"])): r for r in _read_tsv(path)
+            if "cell" in r and r.get("year") in years}
+
+
+def _read_pairs(path: Path, years: Sequence[int]) -> Dict[Tuple[str, int, int], Dict[str, Any]]:
+    return {(r["cell"], int(r["year_a"]), int(r["year_b"])): r for r in _read_tsv(path)
+            if "cell" in r and r.get("year_a") in years and r.get("year_b") in years}
+
+
+def _read_tsv(path: Path) -> List[Dict[str, Any]]:
+    """Rows of a table written by ``_write_tsv``, numbers restored (blank
+    cells are NaN); [] when the file is missing or unreadable."""
+    try:
+        lines = path.read_text().splitlines()
+    except OSError:
+        return []
+    if not lines:
+        return []
+    cols = lines[0].split("\t")
+    out = []
+    for line in lines[1:]:
+        if not line.strip():
+            continue
+        out.append({c: _cell_value(v) for c, v in zip(cols, line.split("\t"))})
+    return out
+
+
+def _cell_value(text: str) -> Any:
+    if text == "":
+        return float("nan")
+    try:
+        return int(text)
+    except ValueError:
+        pass
+    try:
+        return float(text)
+    except ValueError:
+        return text
 
 
 def _write_summary(tsv: Path, js: Path, summary: Dict[str, Any]) -> None:

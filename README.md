@@ -520,8 +520,17 @@ settings before any final model is trained.
   year) and a suggested cell: the most stable among cells within 0.05 of
   the best coverage and similarity correlation. The Inspect tab lists the
   tables and shows the suggestion; the choice stays yours.
+- **While it runs.** A cell is scored as soon as its models for a year are
+  on disk, while the other cells' models still train, and its year pairs as
+  soon as the later year's model exists; `results.tsv` and `pairs.tsv` grow
+  row by row and the summary is rewritten after every year, so the Inspect
+  tab shows a provisional picture at any point. Only one cell's models are
+  in memory at a time: the stage needs a few hundred MB per training
+  process (`workers / workers_per_model` of them) plus the corpus writer,
+  whatever the size of the grid.
 - **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
-  resume mode a rerun with more values trains only the new cells.
+  resume mode a rerun with more values trains only the new cells, and
+  scores already in the tables are kept rather than recomputed.
 
 ## Provenance
 
