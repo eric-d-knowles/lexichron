@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+from rich.text import Text
 from textual import on, work
 from textual.message import Message
 from textual.app import App, ComposeResult
@@ -41,9 +42,9 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import (LAYOUTS, STABILITY_NOTE, candidates, cell_detail, describe, format_search,
-                                  format_summary, read_search, rows as inspect_rows, search_table, searches,
-                                  year_series)
+from lexichron.inspection import (LAYOUTS, STABILITY_NOTE, best_in_columns, candidates, cell_pairs, cell_years,
+                                  describe, format_summary, read_search, rows as inspect_rows, search_overview,
+                                  search_table, searches, year_series)
 from lexichron.provenance import format_provenance
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
@@ -309,10 +310,15 @@ class LexichronApp(App):
     #jobs { height: auto; max-height: 8; }
     #runs { height: auto; max-height: 8; }
     #inspect-table { height: auto; max-height: 60%; }
-    #search-table { height: auto; max-height: 50%; }
-    #search-summary { height: auto; padding: 0 1; }
-    #search-note { height: auto; padding: 0 1; color: $text-muted; }
-    #search-detail { height: auto; max-height: 14; padding: 0 1; overflow-y: auto; }
+    #search-meters { height: auto; }
+    #search-meters .meter-group { display: none; }
+    #search-grid, #search-pairs, #search-empty { height: auto; padding: 0 1; color: $text-muted; }
+    #search-grid { margin: 0 0 1 0; }
+    #search-table { height: auto; max-height: 45%; }
+    #search-cell { height: auto; padding: 1 1 0 1; text-style: bold; }
+    #search-years { height: auto; max-height: 12; }
+    #search-legend { margin: 1 0 0 0; }
+    #search-legend Static { height: auto; padding: 0 1; color: $text-muted; }
     #search-name { width: 40; }
     #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
     #inspect-provenance { height: auto; padding: 0 1; }
@@ -497,11 +503,15 @@ class LexichronApp(App):
                         yield Select([], allow_blank=True, id="search-name", compact=True,
                                      prompt="(searches of this corpus)")
                         yield Button("Reload", id="search-reload", compact=True)
-                    yield Static("", id="search-summary")
-                    yield Static(STABILITY_NOTE + " Click a heading to sort; select a cell for its years.",
-                                 id="search-note")
-                    yield DataTable(id="search-table")
-                    yield Static("", id="search-detail")
+                    yield Static("", id="search-empty")
+                    yield Meters(id="search-meters")
+                    yield Static("", id="search-grid")
+                    yield DataTable(id="search-table", zebra_stripes=True)
+                    yield Static("", id="search-cell")
+                    yield DataTable(id="search-years", zebra_stripes=True)
+                    yield Static("", id="search-pairs")
+                    with Collapsible(title="What the columns mean", collapsed=True, id="search-legend"):
+                        yield Static("", id="search-legend-text")
                 # the other stages: records of a database or vocabulary file
                 with Vertical(id="inspect-generic"):
                     with Horizontal(classes="row"):
@@ -622,6 +632,7 @@ class LexichronApp(App):
         self.query_one("#inspect-table", DataTable).add_columns("Key", "Value")
         self.query_one("#inspect-table", DataTable).cursor_type = "row"
         self.query_one("#search-table", DataTable).cursor_type = "row"
+        self.query_one("#search-years", DataTable).cursor_type = "none"
         self._inspect_dir: Optional[Path] = None
         self._search: Optional[Dict[str, Any]] = None
         self._search_sort: Tuple[Optional[str], bool] = (None, False)
@@ -1114,21 +1125,59 @@ class LexichronApp(App):
         self._search = search
         table = self.query_one("#search-table", DataTable)
         table.clear(columns=True)
-        self.query_one("#search-detail", Static).update("")
-        if search is None:
-            self.query_one("#search-summary", Static).update(
-                "No tuning search in this corpus directory yet: run the tune stage, and its scores appear here "
-                "as they are produced.")
+        self._show_search_cell(None)
+        empty = self.query_one("#search-empty", Static)
+        has = search is not None and not search.get("error")
+        for wid in ("#search-meters", "#search-grid", "#search-table", "#search-legend"):
+            self.query_one(wid).display = has
+        if not has:
+            empty.update(search["error"] if search else
+                         "No tuning search in this corpus directory yet: run the tune stage, and its scores "
+                         "appear here as they are produced.")
+            empty.display = True
             return
-        self.query_one("#search-summary", Static).update("\n".join(format_search(search)))
+        empty.display = False
+        overview = search_overview(search)
+        self.query_one("#search-meters", Meters).show([("", overview["tiles"])])
+        self.query_one("#search-grid", Static).update(overview["grid"])
+        self.query_one("#search-legend-text", Static).update(
+            STABILITY_NOTE + " Click a heading to sort by it (again to reverse); select a cell for its years."
+            + (f"\nSuggested cell: {overview['rule']}." if overview["rule"] else ""))
         headings, grid, stems = search_table(search)
+        best = best_in_columns(search, headings)
         for h in headings:
             table.add_column(h, key=h or "best")
         for row, stem in zip(grid, stems):
-            table.add_row(*row, key=stem)
+            starred = row[0] == "★"
+            cells = [Text(row[0], style="bold yellow")]
+            for h, v in zip(headings[1:], row[1:]):
+                style = "bold" if best.get(h) == v and v != "–" else ""
+                cells.append(Text(v, style=style, justify="right" if v[:1].isdigit() or v == "–" else "left"))
+            table.add_row(*cells, key=stem)
         col, reverse = self._search_sort
         if col is not None and col in headings:
             self._sort_search_table(col, reverse)
+
+    def _show_search_cell(self, stem: Optional[str]) -> None:
+        """The selected cell's per-year rows and year pairs under the table."""
+        years = self.query_one("#search-years", DataTable)
+        years.clear(columns=True)
+        title, pairs = self.query_one("#search-cell", Static), self.query_one("#search-pairs", Static)
+        if not stem or not self._search:
+            title.display = years.display = pairs.display = False
+            return
+        headings, rows = cell_years(self._search, stem)
+        title.update(f"{stem} by year")
+        title.display = True
+        years.display = bool(rows)
+        if rows:
+            for h in headings:
+                years.add_column(h)
+            for row in rows:
+                years.add_row(*(Text(v, justify="right") for v in row))
+        text = cell_pairs(self._search, stem)
+        pairs.update(text or ("No rows for this cell yet" if not rows else ""))
+        pairs.display = bool(text) or not rows
 
     @on(DataTable.HeaderSelected, "#search-table")
     def _search_header_selected(self, event: DataTable.HeaderSelected) -> None:
@@ -1152,8 +1201,7 @@ class LexichronApp(App):
     @on(DataTable.RowSelected, "#search-table")
     def _search_row_selected(self, event: DataTable.RowSelected) -> None:
         if self._search and event.row_key is not None and event.row_key.value:
-            self.query_one("#search-detail", Static).update(
-                "\n".join(cell_detail(self._search, str(event.row_key.value))))
+            self._show_search_cell(str(event.row_key.value))
 
     @on(Select.Changed, "#inspect-db")
     def _inspect_db_chosen(self, event: Select.Changed) -> None:

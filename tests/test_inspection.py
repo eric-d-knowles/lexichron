@@ -153,14 +153,23 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert s["years_sampled"] == [1990, 1991] and s["years_scored"] == [1990] and s["models_on_disk"] == 1
     assert s["best_cell"] == "vs100_w2_mc5_e5_sg1_wbfreq" and len(s["results"]) == 2 and s["pairs"] == []
     assert s["results"][1]["seed_overlap"] != s["results"][1]["seed_overlap"]       # blank -> NaN
+    o = inspection.search_overview(s)
+    assert o["tiles"][0] == ("Cells", "2", "of 2 in the grid") and o["tiles"][1] == ("Years", "1/2", "in progress")
+    assert o["tiles"][2][1] == "1" and o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "")
+    assert o["grid"].startswith("Grid: vector size 50/100  ·  2 seed(s)  ·  years 1990–1991, 2 sampled")
+    assert "provisional: 1990 scored so far" in o["grid"]
     lines = inspection.format_search(s)
-    assert lines[0].startswith("Search 's2': 2 cell(s) scored; grid vector_size 50/100")
-    assert any("In progress: 1 of 2 years scored (1990)" in l for l in lines)
+    assert lines[0].startswith("Search 's2': Cells 2 (of 2 in the grid); Years 1/2 (in progress)")
     assert any(l.startswith("Suggested cell: vs100_w2_mc5_e5_sg1_wbfreq") for l in lines)
     headings, rows, stems = inspection.search_table(s)
-    assert headings[:3] == ["", "Dims", "Window"] and rows[0][0] == "" and rows[1][0] == "★"
+    assert headings[:3] == ["", "Dims", "Years"]            # only the axis the grid varies, then the scores
+    assert rows[0][0] == "" and rows[1][0] == "★"
     assert rows[0][headings.index("Vocab")] == "1,200" and rows[0][headings.index("Seed")] == "0.500"
     assert rows[0][headings.index("Distant")] == "–" and stems == [c["cell"] for c in cells]
+    assert inspection.best_in_columns(s, headings) == {"SimLex ρ": "0.250", "Seed": "0.600"}   # coverage ties
+    yh, yrows = inspection.cell_years(s, "vs100_w2_mc5_e5_sg1_wbfreq")
+    assert yh == ["Year", "Vocab", "Coverage", "Seed"] and yrows == [["1990", "1,200", "0.800", "–"]]
+    assert inspection.cell_pairs(s, "vs100_w2_mc5_e5_sg1_wbfreq") == ""
     detail = inspection.cell_detail(s, "vs100_w2_mc5_e5_sg1_wbfreq")
     assert detail[0].endswith(": per year") and "1990: Vocab 1,200" in detail[1] and "Seed –" in detail[1]
     assert inspection.cell_detail(s, "nope") == ["nope: no rows yet"]

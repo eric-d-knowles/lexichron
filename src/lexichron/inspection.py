@@ -453,62 +453,119 @@ def _typed(text: str) -> Any:
     return text
 
 
-def format_search(search: Dict[str, Any]) -> List[str]:
-    """Header lines for a search: grid, years, progress, suggestion."""
+PARAM_KEYS = ("vector_size", "window", "min_count", "epochs", "approach", "weight_by")
+SCORE_KEYS = tuple(k for k, _, _ in SEARCH_COLUMNS if k not in PARAM_KEYS)
+YEAR_KEYS = ("vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy", "seed_overlap",
+             "split_half_overlap")
+
+
+def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
+    """The search at a glance: ``tiles`` [(label, value, note)], a ``grid``
+    line, and the suggestion's ``rule``."""
     if search.get("error"):
-        return [search["error"]]
+        return {"tiles": [], "grid": search["error"], "rule": ""}
     s = search["settings"]
     grid = s.get("grid") or {}
-    axes = ", ".join(f"{k} {'/'.join(str(v) for v in vals)}" for k, vals in grid.items()
-                     if isinstance(vals, (list, tuple)))
+    n_grid = 1
+    for vals in grid.values():
+        if isinstance(vals, (list, tuple)) and vals:
+            n_grid *= len(vals)
+    axes = ", ".join(f"{k.replace('_', ' ')} {'/'.join(str(v) for v in vals)}" for k, vals in grid.items()
+                     if isinstance(vals, (list, tuple)) and len(vals) > 1)
+    fixed = ", ".join(f"{k.replace('_', ' ')} {vals[0]}" for k, vals in grid.items()
+                      if isinstance(vals, (list, tuple)) and len(vals) == 1)
     sampled, scored = search["years_sampled"], search["years_scored"]
-    seeds, halves = s.get("seeds", 1), s.get("split_half", False)
-    per_cell = int(seeds) + (2 if halves else 0)
-    lines = [f"Search '{search['name']}': {len(search['cells'])} cell(s) scored; grid {axes or '?'}",
-             f"Years {', '.join(str(y) for y in sampled) or '?'}; {seeds} seed(s)"
-             + (" + split halves" if halves else "") + f" = {per_cell} models per cell and year; "
-             f"{search['models_on_disk']} models on disk"]
-    if sampled and len(scored) < len(sampled):
-        lines.append(f"In progress: {len(scored)} of {len(sampled)} years scored"
-                     + (f" ({', '.join(str(y) for y in scored)})" if scored else "")
-                     + "; figures below are provisional")
-    elif search.get("provenance"):
-        from lexichron.provenance import format_provenance
-        lines.append("Finished: " + format_provenance(search["provenance"])[0])
+    seeds, halves = int(s.get("seeds", 1) or 1), bool(s.get("split_half", False))
+    per_cell = seeds + (2 if halves else 0)
+    done = bool(sampled) and len(scored) >= len(sampled)
+    years_note = "finished" if done else ("in progress" if scored else "nothing scored yet")
+    tiles = [("Cells", f"{len(search['cells'])}", f"of {n_grid} in the grid"),
+             ("Years", f"{len(scored)}/{len(sampled)}" if sampled else "–", years_note),
+             ("Models", f"{search['models_on_disk']:,}", f"on disk; {per_cell} per cell and year"),
+             ("Suggested cell", search.get("best_cell") or "–", "")]
+    years_text = (f"{sampled[0]}–{sampled[-1]}, {len(sampled)} sampled" if sampled else "?")
+    grid_line = (f"Grid: {axes or 'one cell'}" + (f"  ·  fixed: {fixed}" if fixed else "")
+                 + f"  ·  {seeds} seed(s)" + (" + split halves" if halves else "") + f"  ·  years {years_text}")
+    if not done and scored:
+        grid_line += "  ·  provisional: " + ", ".join(str(y) for y in scored) + " scored so far"
+    return {"tiles": tiles, "grid": grid_line, "rule": search.get("best_rule") or ""}
+
+
+def format_search(search: Dict[str, Any]) -> List[str]:
+    """Header lines for the terminal."""
+    if search.get("error"):
+        return [search["error"]]
+    o = search_overview(search)
+    lines = [f"Search '{search['name']}': " + "; ".join(f"{label} {value} ({note})" if note else f"{label} {value}"
+                                                       for label, value, note in o["tiles"][:3]),
+             o["grid"]]
     if search.get("best_cell"):
-        lines.append(f"Suggested cell: {search['best_cell']} — {search['best_rule']}")
+        lines.append(f"Suggested cell: {search['best_cell']} — {o['rule']}")
     return lines
 
 
 def search_table(search: Dict[str, Any]) -> Tuple[List[str], List[List[str]], List[str]]:
-    """The per-cell summary as (headings, rows, cell stems), the suggested
-    cell marked ★ in the first column."""
-    headings = ["", *(h for _, h, _ in SEARCH_COLUMNS)]
+    """The per-cell summary as (headings, rows, cell stems): the parameters
+    the grid varies, then the scores; the suggested cell marked ★."""
+    grid = (search.get("settings") or {}).get("grid") or {}
+    cells = search.get("cells") or []
+    shown = [(k, h, kind) for k, h, kind in SEARCH_COLUMNS
+             if k not in PARAM_KEYS or len(grid.get(k) or []) > 1
+             or (k in PARAM_KEYS and not grid and len({c.get(k) for c in cells}) > 1)]
+    headings = ["", *(h for _, h, _ in shown)]
     rows, stems = [], []
-    for c in search.get("cells") or []:
+    for c in cells:
         rows.append(["★" if c.get("cell") == search.get("best_cell") else ""]
-                    + [_fmt_cell(c.get(key), kind) for key, _, kind in SEARCH_COLUMNS])
+                    + [_fmt_cell(c.get(key), kind) for key, _, kind in shown])
         stems.append(str(c.get("cell")))
     return headings, rows, stems
 
 
-def cell_detail(search: Dict[str, Any], stem: str) -> List[str]:
-    """One cell's per-year rows and year pairs, as lines."""
-    rows = [r for r in search.get("results") or [] if r.get("cell") == stem]
+def best_in_columns(search: Dict[str, Any], headings: List[str]) -> Dict[str, Any]:
+    """For each score heading, the best (highest) value among the cells when
+    one cell alone reaches it, so a display can mark it."""
+    cells = search.get("cells") or []
+    out: Dict[str, Any] = {}
+    for key, h, kind in SEARCH_COLUMNS:
+        if h in headings and key in SCORE_KEYS and key not in ("years", "vocab_size"):
+            vals = [c.get(key) for c in cells if isinstance(c.get(key), (int, float)) and c.get(key) == c.get(key)]
+            if vals and vals.count(max(vals)) == 1:
+                out[h] = _fmt_cell(max(vals), kind)
+    return out
+
+
+def cell_years(search: Dict[str, Any], stem: str) -> Tuple[List[str], List[List[str]]]:
+    """One cell's per-year rows as (headings, rows)."""
+    rows = sorted((r for r in search.get("results") or [] if r.get("cell") == stem), key=lambda r: r.get("year", 0))
+    keys = [k for k in YEAR_KEYS if any(k in r for r in rows)]
+    labels = {key: h for key, h, _ in SEARCH_COLUMNS}
+    headings = ["Year"] + [labels.get(k, k) for k in keys]
+    out = [[str(r.get("year"))] + [_fmt_cell(r.get(k), "int" if k == "vocab_size" else "num") for k in keys]
+           for r in rows]
+    return headings, out
+
+
+def cell_pairs(search: Dict[str, Any], stem: str) -> str:
+    """One cell's year pairs as a line."""
     pairs = [p for p in search.get("pairs") or [] if p.get("cell") == stem]
+    if not pairs:
+        return ""
+    return "Year pairs (neighbour overlap / aligned cosine):  " + "   ".join(
+        f"{p.get('kind')} {p.get('year_a')}–{p.get('year_b')} {_fmt_cell(p.get('overlap'), 'num')} / "
+        f"{_fmt_cell(p.get('cosine'), 'num')}" for p in pairs)
+
+
+def cell_detail(search: Dict[str, Any], stem: str) -> List[str]:
+    """One cell's per-year rows and year pairs, as lines for the terminal."""
+    headings, rows = cell_years(search, stem)
+    pairs = cell_pairs(search, stem)
     if not rows and not pairs:
         return [f"{stem}: no rows yet"]
     lines = [f"{stem}: per year"]
-    keys = [k for k in ("vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy",
-                        "seed_overlap", "split_half_overlap") if any(k in r for r in rows)]
-    labels = {key: h for key, h, _ in SEARCH_COLUMNS}
-    for r in sorted(rows, key=lambda r: r.get("year", 0)):
-        lines.append(f"  {r.get('year')}: " + "  ".join(
-            f"{labels.get(k, k)} {_fmt_cell(r.get(k), 'int' if k == 'vocab_size' else 'num')}" for k in keys))
+    for r in rows:
+        lines.append("  " + r[0] + ": " + "  ".join(f"{h} {v}" for h, v in zip(headings[1:], r[1:])))
     if pairs:
-        lines.append("  year pairs: " + "  ".join(
-            f"{p.get('year_a')}–{p.get('year_b')} ({p.get('kind')}) overlap {_fmt_cell(p.get('overlap'), 'num')}"
-            f", cosine {_fmt_cell(p.get('cosine'), 'num')}" for p in pairs))
+        lines.append("  " + pairs)
     return lines
 
 
