@@ -58,6 +58,7 @@ From: {{ BASE }}
     apt-get install -y --no-install-recommends \
         build-essential \
         git \
+        curl \
         ca-certificates \
         libgomp1 \
         enchant-2 \
@@ -90,6 +91,19 @@ From: {{ BASE }}
     # Notebook execution without a browser (used for batch runs via nbconvert),
     # and pytest so the image can run the package's test suite.
     python -m pip install --no-cache-dir nbconvert pytest
+
+    # -------------------------------------------------------------------------
+    # Evaluation datasets for the hyperparameter search (SimLex-999,
+    # WordSim-353, Google's analogy questions), from gensim's repository at a
+    # fixed tag; checked for shape, with their checksums recorded in
+    # SOURCES.md. The stage looks here first (LEXICHRON_DATA_DIR).
+    # -------------------------------------------------------------------------
+    mkdir -p /opt/lexichron/data
+    for f in simlex999.txt wordsim353.tsv questions-words.txt; do
+        curl -fsSL --retry 5 --retry-delay 10 -o "/opt/lexichron/data/$f" \
+            "https://raw.githubusercontent.com/piskvorky/gensim/4.3.3/gensim/test/test_data/$f"
+    done
+    python /opt/lexichron/scripts/check_datasets.py /opt/lexichron/data
 
     # -------------------------------------------------------------------------
     # spaCy models (the list in src/ngramprep/__init__.py). Baking them in
@@ -138,6 +152,7 @@ EOF
     # pyenchant: point at the system Enchant library and dictionary directory
     export PYENCHANT_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu/libenchant-2.so.2
     export DICPATH=/usr/share/hunspell
+    export LEXICHRON_DATA_DIR=/opt/lexichron/data
     export NLTK_DATA=/usr/local/share/nltk_data
     # Keep BLAS from oversubscribing when the pipelines spawn worker processes
     export OMP_NUM_THREADS=${OMP_NUM_THREADS:-1}

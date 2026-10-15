@@ -111,6 +111,13 @@ def _describe_inputs(stage: str, settings: Dict[str, Any], doc: Dict[str, Any]) 
         out["vocabulary"] = None                        # rule filters only
     if raw.get("always_include"):
         out["always_include"] = str(raw["always_include"])
+    for key, value in raw.items():
+        if key in ("source", "vocabulary", "always_include") or not value:
+            continue
+        if os.path.isfile(str(value)):                  # a dataset or other file: fingerprint it
+            out[key] = {"path": str(value), "sha256": digest(Path(str(value)))}
+        else:
+            out[key] = str(value)
     return out
 
 
@@ -168,6 +175,10 @@ def format_provenance(p: Dict[str, Any]) -> List[str]:
                                        if v and v.get("sha256") else (v["path"] if v else "none (rule filters only)")))
     if inputs.get("always_include"):
         lines.append(f"Always kept: {inputs['always_include']}")
+    for key, v in inputs.items():
+        if key.endswith("_dataset") and isinstance(v, dict):
+            lines.append(f"{key.replace('_', ' ').capitalize()}: {v['path']}"
+                         + (f" (sha256 {v['sha256'][:12]}…)" if v.get("sha256") else ""))
     fig = p.get("figures") or {}
     if p.get("stage") == "acquire":
         lines.append(f"Figures: {fig.get('files', 0):,} files, {fig.get('lines_read', 0):,} lines read, "

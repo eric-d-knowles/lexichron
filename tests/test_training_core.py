@@ -130,3 +130,13 @@ def test_benchmarks_on_a_constructed_model(tmp_path):
     acc, cov = benchmarks.analogy_accuracy(v, str(ana))
     assert acc == 1.0 and abs(cov - 2 / 3) < 1e-9
     assert benchmarks.coverage(v, ["king", "cat", "zebra", "fish"]) == 0.5
+
+
+def test_simlex_format_with_a_pos_column_is_read(tmp_path):
+    words = ["old", "new", "smart", "intelligent", "hard", "difficult"]
+    m = np.array([[1, 0], [0, 1], [0, 1], [0, 1], [1, 1], [1, 0.9]], dtype=np.float32)
+    v = trainer.Vectors(words=words, matrix=m)
+    f = tmp_path / "simlex999.txt"
+    f.write_text("word1\tword2\tPOS\tSimLex999\tconc(w1)\nold\tnew\tA\t1.58\t2.72\nsmart\tintelligent\tA\t9.2\t1.75\nhard\tdifficult\tA\t8.77\t3.76\n")
+    rho, cov = benchmarks.similarity_score(v, str(f))
+    assert cov == 1.0 and rho > 0.9

@@ -152,13 +152,24 @@ def tune_models(
     vocab_words = _read_vocabulary(whitelist) if Path(whitelist).is_file() else []
     sim_sets = _similarity_sets(similarity_dataset)
     ana_set = analogy_dataset or benchmarks.bundled_dataset("questions-words.txt")
+    if not sim_sets:
+        raise FileNotFoundError("no similarity dataset: none given and neither SimLex-999 nor WordSim-353 was "
+                                "found (the image keeps them in $LEXICHRON_DATA_DIR; set similarity_dataset otherwise)")
+    for label, path in sim_sets.items():
+        if not Path(path).is_file():
+            raise FileNotFoundError(f"similarity dataset not found: {path}")
+    if ana_set and not Path(ana_set).is_file():
+        raise FileNotFoundError(f"analogy dataset not found: {ana_set}")
 
     log_dir = out_dir / "logs"
     log_dir.mkdir(exist_ok=True)
     _setup_log(log_dir / f"tune_{datetime.now():%Y%m%d_%H%M%S}.log")
-    progress = ProgressReporter(progress_path, stage="tune", db_path=out_dir, unit_label="models",
-                                inputs={"source": str(db_path),
-                                        "vocabulary": str(whitelist) if vocab_words else None})
+    inputs: Dict[str, Any] = {"source": str(db_path), "vocabulary": str(whitelist) if vocab_words else None}
+    for label, path in sim_sets.items():
+        inputs[f"{label}_dataset"] = path
+    if ana_set:
+        inputs["analogy_dataset"] = ana_set
+    progress = ProgressReporter(progress_path, stage="tune", db_path=out_dir, unit_label="models", inputs=inputs)
     tasks = plan_models(cells, sampled, seeds, split_half)
     existing = {t.stem for t in tasks if (models_dir / f"{t.stem}.npz").exists()}
     progress.set_totals(len(tasks), files_skipped=len(existing))

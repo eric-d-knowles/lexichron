@@ -19,8 +19,13 @@ __all__ = ["similarity_score", "analogy_accuracy", "coverage", "bundled_dataset"
 
 
 def bundled_dataset(name: str) -> Optional[str]:
-    """Path of a dataset gensim bundles (``wordsim353.tsv``,
-    ``simlex999.txt``, ``questions-words.txt``), or None without gensim."""
+    """Path of a bundled dataset (``simlex999.txt``, ``wordsim353.tsv``,
+    ``questions-words.txt``): the image's copy ($LEXICHRON_DATA_DIR, then
+    /opt/lexichron/data), else the one gensim ships, else None."""
+    import os
+    for d in (os.environ.get("LEXICHRON_DATA_DIR"), "/opt/lexichron/data"):
+        if d and (Path(d) / name).is_file():
+            return str(Path(d) / name)
     try:
         from gensim.test.utils import datapath
         p = Path(datapath(name))
@@ -91,10 +96,18 @@ def _read_pairs(path: str) -> Iterable[Tuple[str, str, float]]:
             parts = line.replace(",", "\t").split("\t") if "\t" in line or "," in line else line.split()
             if len(parts) < 3:
                 continue
-            try:
-                yield parts[0].strip().lower(), parts[1].strip().lower(), float(parts[2])
-            except ValueError:
-                continue                            # a header line
+            score = _first_number(parts[2:])        # SimLex-999 has a POS column before its score
+            if score is not None:
+                yield parts[0].strip().lower(), parts[1].strip().lower(), score
+
+
+def _first_number(fields) -> Optional[float]:
+    for f in fields:
+        try:
+            return float(f)
+        except ValueError:
+            continue
+    return None
 
 
 def _read_questions(path: str) -> Iterable[Tuple[str, str, str, str]]:
