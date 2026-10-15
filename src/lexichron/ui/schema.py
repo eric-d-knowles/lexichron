@@ -17,17 +17,21 @@ from typing import Any, Callable, Dict, List, Optional
 from lexichron.config import CORPUS_KEY_MAP
 
 __all__ = ["Field", "Section", "stage_sections", "SLURM_FIELDS", "parse_args_doc",
-           "LABELS", "HELP", "ADVANCED"]
+           "LABELS", "HELP", "ADVANCED", "GRID_AXES"]
 
 # Settings that are not meaningful in a form (set by the CLI / runtime).
-HIDDEN = {"progress_path", "write_batch_size", "open_type"}   # open_type: write:packed24 is the only sensible value
+HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write:packed24 is the only sensible value
+          "train_fn"}                                            # tune: a test hook
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             "compact_after_ingest",
             # filter
             "text_language",
-            "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path"}
+            "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path",
+            # tune
+            "neighbours", "probes_per_decile", "similarity_dataset", "analogy_dataset", "temp_dir",
+            "keep_models"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
 # single entry is shown as fixed text rather than a menu.
@@ -39,7 +43,11 @@ CHOICES: Dict[str, List[str]] = {
     "language": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"],
     "mode": ["resume", "restart"],
     "text_language": ["en", "fr", "de", "it", "es", "ru", "he", "zh"],
+    "unk_mode": ["strip", "reject", "retain"],
 }
+
+# Hyperparameter axes of the tune stage: shown as rows of toggles.
+GRID_AXES = ("vector_size", "window", "min_count", "epochs", "approach", "weight_by")
 
 # Preferred order within a section (what to get, then how); anything not listed
 # follows in signature order.
@@ -50,6 +58,11 @@ ORDER = ["release", "language", "ngram_size", "db_path_stub",
          "min_context_tokens", "bin_size", "vocabulary", "no_vocabulary", "always_include",
          "pivot", "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
          "workers"]
+ORDER_BY_STAGE = {
+    "tune": ["release", "language", "ngram_size", "db_path_stub",
+             "years", "sample_years", "year_pairs", "vector_size", "window", "min_count", "epochs", "approach",
+             "weight_by", "seeds", "split_half", "unk_mode", "name", "mode", "workers", "workers_per_model"],
+}
 
 # Plain-language labels for the form (settings-file keys stay as they are).
 LABELS: Dict[str, str] = {
@@ -88,6 +101,27 @@ LABELS: Dict[str, str] = {
     "output_vocabulary_year_range": "Vocabulary years",
     "output_vocabulary_spell_check": "Spell-check vocabulary",
     "mode": "Mode",
+    # tune
+    "years": "Study period",
+    "sample_years": "Years to sample",
+    "year_pairs": "Year pairs",
+    "vector_size": "Vector size",
+    "window": "Window",
+    "min_count": "Min count",
+    "epochs": "Epochs",
+    "approach": "Approach",
+    "weight_by": "Weighting",
+    "seeds": "Seeds per cell",
+    "split_half": "Split halves",
+    "unk_mode": "<UNK> tokens",
+    "name": "Search name",
+    "workers_per_model": "Threads per model",
+    "neighbours": "Neighbours compared",
+    "probes_per_decile": "Probe words per decile",
+    "similarity_dataset": "Similarity dataset",
+    "analogy_dataset": "Analogy dataset",
+    "temp_dir": "Corpus file directory",
+    "keep_models": "Keep models",
 }
 
 # User-facing help, where the docstring is too terse or too technical.
@@ -136,13 +170,35 @@ HELP: Dict[str, str] = {
     "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",
     "mode": "resume = continue from what the destination already has; restart = delete it first.",
     "filter.workers": "Parallel filtering workers. Blank = one per CPU, minus one. Slurm jobs use the job's CPU count automatically.",
+    "tune.years": "First and last year of the study; the sampled years are spread over it.",
+    "tune.sample_years": "The years to train on, if you want to choose them (comma-separated). Blank: adjacent pairs spread over the study period. Adjacent years let year-to-year stability be measured.",
+    "tune.year_pairs": "Without chosen years: how many adjacent pairs to spread over the period (4 pairs = 8 years).",
+    "tune.vector_size": "Dimensions of each word vector. Light several values to search over them.",
+    "tune.window": "Context words on each side of the target.",
+    "tune.min_count": "Words seen fewer times than this in a year's corpus are left out of that year's model.",
+    "tune.epochs": "Passes over the corpus.",
+    "tune.approach": "skip-gram predicts context from the word (slower, better for rarer words); cbow the reverse.",
+    "tune.weight_by": "How often an n-gram is repeated in the corpus: log5 of its match count (freq), of its volume count (doc_freq), or once (none).",
+    "tune.seeds": "Models per cell and year with different random seeds; 2 or more measures seed stability.",
+    "tune.split_half": "Also train on each random half of a year's corpus and score their agreement (split-half reliability).",
+    "tune.unk_mode": "strip: drop <UNK> tokens, keep the n-gram if two real tokens remain. reject: drop any n-gram with one. retain: keep <UNK> as a token.",
+    "tune.name": "Name of this search; results go to <corpus>/tuning/<name>/. Blank: a timestamp.",
+    "tune.mode": "resume keeps models already trained (a grown grid trains only its new cells); restart deletes the search first.",
+    "tune.workers": "CPUs to use in total. Blank = all of the job's.",
+    "tune.workers_per_model": "Threads per model; CPUs / threads models train at once.",
+    "tune.neighbours": "Nearest neighbours per probe word compared between two models.",
+    "tune.probes_per_decile": "Probe words sampled from each frequency decile of the vocabulary.",
+    "tune.similarity_dataset": "A word-pair similarity file (word, word, score per line). Blank: WordSim-353 and SimLex-999.",
+    "tune.analogy_dataset": "An analogy questions file (a b c d per line). Blank: Google's questions-words.",
+    "tune.temp_dir": "Where the years' corpus files are written. Blank: inside the search directory. A job's $TMPDIR is faster.",
+    "tune.keep_models": "Keep the trained models after scoring (they are small).",
 }
 
 
 @dataclass
 class Field:
     name: str                 # key in the settings file
-    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range"
+    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range" | "grid"
     default: Any = None
     required: bool = False
     choices: Optional[List[str]] = None
@@ -188,10 +244,14 @@ def parse_args_doc(doc: Optional[str]) -> Dict[str, str]:
 
 
 def _kind_for(annotation: Any, default: Any, name: str) -> str:
+    if name in GRID_AXES:
+        return "grid"
     if name in CHOICES:
         return "choice"
-    if name.endswith("_range"):
+    if name.endswith("_range") or name == "years":
         return "range"
+    if name.endswith("_dataset"):
+        return "path"
     if name == "vocabulary":
         return "path"
     if name.endswith(("_stub", "_dir", "_path")):
@@ -237,13 +297,21 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
         default = None if p.default is inspect.Parameter.empty else p.default
         required = p.default is inspect.Parameter.empty
         key = api_to_corpus.get(pname, pname)
-        f = Field(key, _kind_for(ann, default, key), default, required,
-                  CHOICES.get(key), HELP.get(f"{stage}.{key}") or HELP.get(key) or docs.get(pname, ""),
+        kind = _kind_for(ann, default, key)
+        choices = CHOICES.get(key)
+        if kind == "grid":
+            from lexichron.training.grid import AXIS_BY_NAME
+            axis = AXIS_BY_NAME[key]
+            choices = [str(v) for v in axis.presets]
+            default = list(axis.default)
+        f = Field(key, kind, default, required,
+                  choices, HELP.get(f"{stage}.{key}") or HELP.get(key) or docs.get(pname, ""),
                   api_name=pname if key != pname else None,
                   label=LABELS.get(key), advanced=key in ADVANCED)
         (corpus if pname in api_to_corpus else stage_sec).fields.append(f)
+    order = ORDER_BY_STAGE.get(stage, ORDER)
     for sec in (corpus, stage_sec):
-        sec.fields.sort(key=lambda f: ORDER.index(f.name) if f.name in ORDER else len(ORDER))
+        sec.fields.sort(key=lambda f: order.index(f.name) if f.name in order else len(order))
     return [corpus, stage_sec]
 
 

@@ -29,6 +29,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 from textual import on, work
+from textual.message import Message
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
@@ -42,6 +43,7 @@ from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
 from lexichron.inspection import LAYOUTS, candidates, describe, format_summary, rows as inspect_rows, year_series
 from lexichron.provenance import format_provenance
+from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.ui.slurm import write_sbatch
@@ -103,6 +105,8 @@ def _from_widget(field: Field, raw: Any) -> Any:
         return int(str(raw).strip())
     if field.kind == "float":
         return float(str(raw).strip())
+    if field.kind == "grid":
+        return list(raw) if isinstance(raw, (list, tuple)) else [raw]
     if field.kind == "list":
         items = [p.strip() for p in str(raw).split(",") if p.strip()]
         conv = []
@@ -126,6 +130,93 @@ def _range_from_widgets(first: str, last: str) -> Optional[List[int]]:
     if lo < 0 or hi < lo:
         raise ConfigError("file range: first must be >= 0 and not after last")
     return [lo, hi]
+
+
+class ToggleRow(Horizontal):
+    """A setting that takes one or more values from a known set: a button per
+    value, lit when selected, plus (for numbers) a box to add another value.
+    The last lit button cannot be unlit."""
+
+    class Changed(Message):
+        def __init__(self, row: "ToggleRow") -> None:
+            super().__init__()
+            self.row = row
+
+    def __init__(self, presets: List[str], selected: List[Any], *, numeric: bool, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._values: List[str] = [str(v) for v in presets]
+        for v in selected:
+            if str(v) not in self._values:
+                self._values.append(str(v))
+        self._selected: List[str] = [str(v) for v in selected] or self._values[:1]
+        self.numeric = numeric
+
+    def compose(self) -> ComposeResult:
+        for v in self._values:
+            yield Button(v, classes="toggle", variant="primary" if v in self._selected else "default",
+                         name=v, compact=True)
+        if self.numeric:
+            yield Input("", placeholder="+ other", classes="toggle-add", compact=True, type="integer")
+
+    @property
+    def value(self) -> List[Any]:
+        """Selected values in the row's order; numbers as ints."""
+        out = [v for v in self._values if v in self._selected]
+        return [int(v) for v in out] if self.numeric else out
+
+    def set_value(self, values: List[Any]) -> None:
+        self._selected = [str(v) for v in values] or self._values[:1]
+        for v in values:
+            if str(v) not in self._values:
+                self._add_button(str(v))
+        self._paint()
+
+    def _add_button(self, v: str) -> None:
+        self._values.append(v)
+        btn = Button(v, classes="toggle", variant="default", name=v, compact=True)
+        adders = self.query(".toggle-add")
+        if adders:
+            self.mount(btn, before=adders.first())
+        else:
+            self.mount(btn)
+
+    def _paint(self) -> None:
+        for b in self.query(".toggle"):
+            b.variant = "primary" if b.name in self._selected else "default"
+
+    @on(Button.Pressed, ".toggle")
+    def _toggled(self, event: Button.Pressed) -> None:
+        event.stop()
+        v = str(event.button.name)
+        if v in self._selected:
+            if len(self._selected) == 1:
+                return                                  # keep at least one
+            self._selected.remove(v)
+        else:
+            self._selected.append(v)
+        self._paint()
+        self.post_message(self.Changed(self))
+
+    @on(Input.Submitted, ".toggle-add")
+    def _added(self, event: Input.Submitted) -> None:
+        event.stop()
+        text = event.value.strip()
+        event.input.value = ""
+        if not text:
+            return
+        try:
+            n = int(text)
+        except ValueError:
+            return
+        if n <= 0:
+            return
+        v = str(n)
+        if v not in self._values:
+            self._add_button(v)
+        if v not in self._selected:
+            self._selected.append(v)
+        self._paint()
+        self.post_message(self.Changed(self))
 
 
 class FixedValue(Static):
@@ -200,6 +291,10 @@ class LexichronApp(App):
     .row .spacer { width: 1fr; }
     .hint { height: 3; content-align: left middle; color: $text-muted; }
     .row FixedValue { width: 1fr; color: $text-muted; }
+    .row .toggle-row { width: 1fr; height: 1; }
+    .toggle-row .toggle { min-width: 6; margin-right: 1; }
+    .toggle-row .toggle-add { width: 12; }
+    .grid-summary { height: auto; padding: 0 1 0 22; color: $text-muted; }
     .row .help-mark { width: 3; color: $text-muted; text-align: center; }
     Collapsible { margin-top: 1; }
     CollapsibleTitle { padding: 0; }
@@ -337,6 +432,8 @@ class LexichronApp(App):
                             for f in sec.fields:
                                 if not f.advanced:
                                     yield from self._field_widgets(name, f)
+                            if name == "tune":
+                                yield Static("", id="grid-summary", classes="grid-summary")
                     with Collapsible(title="Advanced", collapsed=True, id="advanced"):
                         for f in self.corpus_section.fields:
                             if f.advanced:
@@ -431,6 +528,10 @@ class LexichronApp(App):
                 val = Select.NULL if current is None else ("yes" if current else "no")
                 w = Select([("yes", "yes"), ("no", "no")], value=val, allow_blank=True, id=wid, compact=True,
                            prompt="(default)")
+            elif f.kind == "grid":
+                selected = current if isinstance(current, (list, tuple)) else ([current] if current is not None else [])
+                w = ToggleRow(list(f.choices or []), list(selected), numeric=AXIS_BY_NAME[f.name].kind == "int",
+                              id=wid, classes="toggle-row")
             elif f.kind == "choice" and f.choices and len(f.choices) == 1:
                 w = FixedValue(f.choices[0], id=wid)   # only one valid value
             elif f.kind == "choice" and f.choices:
@@ -554,6 +655,33 @@ class LexichronApp(App):
             return
         call.update(_format_call(self.func, kwargs))
         status.update("")
+        if self.stage == "tune":
+            self._refresh_grid_summary(kwargs)
+
+    def _refresh_grid_summary(self, kwargs: Dict[str, Any]) -> None:
+        """Under the tune form: what the grid amounts to, and whether the
+        parallelism fits the job's CPUs."""
+        from lexichron.stages.tune import sample_years_in
+        widget = self.query_one("#grid-summary", Static)
+        try:
+            grid = HyperGrid.from_settings(kwargs)
+            years = kwargs.get("sample_years") or sample_years_in(tuple(kwargs.get("years", (1968, 2019))),
+                                                                 int(kwargs.get("year_pairs", 4)))
+            per = int(kwargs.get("seeds", 2)) + (2 if kwargs.get("split_half", True) else 0)
+            models = len(grid) * len(years) * per
+            cpus = int((self.config.get("slurm") or {}).get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)
+            threads = max(1, int(kwargs.get("workers_per_model", 4)))
+            at_once = max(1, cpus // threads)
+            text = (f"Grid: {grid.describe()}\n"
+                    f"x {len(years)} years ({', '.join(str(y) for y in years)}) x {per} models each "
+                    f"({kwargs.get('seeds', 2)} seed{'s' if int(kwargs.get('seeds', 2)) != 1 else ''}"
+                    f"{' + 2 halves' if kwargs.get('split_half', True) else ''}) = {models} models; "
+                    f"{at_once} at a time x {threads} threads on {cpus} CPUs")
+            if cpus % threads:
+                text += f"  (CPUs are not a multiple of the threads per model; {cpus - at_once * threads} idle)"
+        except (ValueError, TypeError) as exc:
+            text = f"Grid: {exc}"
+        widget.update(text)
 
     def _friendly(self, message: str) -> str:
         """Replace ``section.key`` names in a config error with the form's labels."""
@@ -565,6 +693,7 @@ class LexichronApp(App):
     @on(Input.Changed)
     @on(Select.Changed)
     @on(Switch.Changed)
+    @on(ToggleRow.Changed)
     def _on_any_change(self, _event) -> None:
         self._refresh_preview()
 
@@ -990,9 +1119,17 @@ class LexichronApp(App):
         self.query_one("#inspect-note", Static).update(note)
         self._inspect_found = [(layout, rk, rv) for _, _, rk, rv in found]
         table = self.query_one("#inspect-table", DataTable)
-        table.clear()
-        for k, v, _rk, _rv in found:
-            table.add_row(k, v)
+        table.clear(columns=True)
+        if layout == "table" and found:
+            cols = found[0][0].split("\t")                   # the header travels as the first row
+            table.add_columns(*cols)
+            for k, v, _rk, _rv in found[1:]:
+                cells = [k] + v.split("\t")
+                table.add_row(*(cells + [""] * (len(cols) - len(cells)))[:len(cols)])
+        else:
+            table.add_columns("Key", "Value")
+            for k, v, _rk, _rv in found:
+                table.add_row(k, v)
         self.query_one("#inspect-detail", Static).update("")
 
     @on(DataTable.RowSelected, "#inspect-table")

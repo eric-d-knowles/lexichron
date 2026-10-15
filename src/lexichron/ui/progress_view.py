@@ -59,6 +59,7 @@ LONG_PHASES = {
     "compacting": "compacting the database (all work ingested)",
     "archiving": "archiving the database",
     "whitelist": "writing the vocabulary",
+    "corpus": "writing the year's corpus file(s)",
 }
 
 
@@ -159,6 +160,9 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     if doc.get("stage") == "filter":
         phase_labels = (("queued", "waiting for a worker"), ("parsing", "scanning"),
                         ("parsed", "scanned, waiting to ingest"), ("ingesting", "ingesting"))
+    elif doc.get("stage") == "tune":
+        phase_labels = (("queued", "waiting"), ("parsing", "training"),
+                        ("parsed", "trained, waiting to score"), ("ingesting", "scoring"))
     else:
         phase_labels = (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
                         ("parsed", "parsed, waiting to ingest"), ("ingesting", "ingesting"))
@@ -253,7 +257,9 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
          " · ".join(x for x in [(f"{info['percent']:.0f}%" if info["percent"] is not None else ""),
                                 (f"{failed} failed" if failed else ""),
                                 (f"{doc['files_skipped']} already done" if doc.get("files_skipped") else "")] if x)),
-        ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries"),
+        (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—", "models")
+         if stage == "tune" else
+         ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries")),
         ("Elapsed", fmt_duration(info["elapsed_s"]), ""),
         ("Remaining", fmt_duration(info["eta_s"]) if info["eta_s"] is not None else "—", "estimate"),
     ]
@@ -275,12 +281,22 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         if stage == "filter":
             labels = (("queued", "Waiting for a worker"), ("parsing", "Scanning"),
                       ("parsed", "Scanned, waiting to ingest"), ("ingesting", "Ingesting"))
+        elif stage == "tune":
+            labels = (("queued", "Waiting"), ("parsing", "Training"),
+                      ("parsed", "Trained, waiting to score"), ("ingesting", "Scoring"))
         else:
             labels = (("queued", "Waiting for a worker"), ("parsing", "Downloading & parsing"),
                       ("parsed", "Parsed, waiting to ingest"), ("ingesting", "Ingesting"))
         tiles = [(label, f"{int(phases.get(key, 0)):,}", "") for key, label in labels]
         groups.append((f"In flight: {len(current):,} {unit}", tiles))
-    if stage == "filter":
+    if stage == "tune":
+        groups.append(("Search", [
+            ("Models trained", f"{int(counters.get('models', 0)):,}", "this run"),
+            ("Training time", fmt_duration(float(counters.get("train_seconds", 0))), "summed over models"),
+            ("N-grams used", f"{int(counters.get('ngrams_used', 0)):,}", "after the <UNK> policy"),
+            ("Corpus lines", f"{int(counters.get('corpus_lines', 0)):,}", "weighted repeats"),
+        ]))
+    elif stage == "filter":
         scanned = int(counters.get("scanned", 0))
         kept = int(counters.get("kept", 0))
         produced = int(counters.get("produced", kept))

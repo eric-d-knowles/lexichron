@@ -122,6 +122,12 @@ def _inspect(args: argparse.Namespace) -> int:
     if not found:
         print("(no records)")
         return 0
+    if layout == "table":
+        grid = [[k] + v.split("\t") if v else k.split("\t") for k, v, _rk, _rv in found]
+        widths = [max(len(row[i]) if i < len(row) else 0 for row in grid) for i in range(max(len(r) for r in grid))]
+        for row in grid:
+            print("  ".join(f"{c:<{w}}" for c, w in zip(row, widths)).rstrip())
+        return 0
     width = min(max(len(k) for k, _, _, _ in found), 60)
     for k, v, _rk, rv in found:
         print(f"{k:<{width}}  {v}")

@@ -42,6 +42,14 @@ def describe(path: str) -> Dict[str, Any]:
                 lines = sum(1 for _ in fh)
         except OSError as exc:
             return {"kind": "text", "error": str(exc)}
+        if p.suffix.lower() == ".tsv":
+            cols = read_table(p, 0)[0]
+            info = {"kind": "table", "lines": max(lines - 1, 0), "columns": cols, "bytes": p.stat().st_size,
+                    "layout": "table"}
+            search = read_search_summary(p.parent)
+            if search:
+                info["search"] = search
+            return info
         return {"kind": "text", "lines": lines, "bytes": p.stat().st_size, "layout": "text"}
     try:
         with _open(p) as db:
@@ -91,6 +99,10 @@ def rows(path: str, mode: str = "head", key: str = "", n: int = 20,
     if layout not in LAYOUTS:
         raise ValueError(f"layout must be one of {LAYOUTS}")
     p = Path(path).expanduser()
+    if p.is_file() and p.suffix.lower() == ".tsv":
+        cols, table = read_table(p, n, mode, key)
+        out = [("\t".join(cols), "")] + [(r[0], "\t".join(r[1:])) for r in table]
+        return "table", ([(k, v, k.encode(), v.encode()) for k, v in out] if raw else out)
     if p.is_file():
         text_rows = _text_rows(p, mode, key, n)
         return "text", ([(k, v, k.encode(), v.encode()) for k, v in text_rows] if raw else text_rows)
@@ -264,6 +276,45 @@ def _text_rows(p: Path, mode: str, key: str, n: int) -> List[Row]:
     return out
 
 
+def read_table(p: Path, n: int, mode: str = "head", key: str = "") -> Tuple[List[str], List[List[str]]]:
+    """A TSV's header and up to ``n`` rows (``key``: rows from the first
+    whose first column equals it; ``prefix``: rows whose first column starts
+    with it). ``n`` 0 reads the header only."""
+    cols: List[str] = []
+    rows: List[List[str]] = []
+    key = key.strip()
+    found = mode != "key"
+    with open(p, encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            parts = line.rstrip("\n").split("\t")
+            if i == 0:
+                cols = parts
+                continue
+            if n <= 0:
+                break
+            if mode == "key" and not found:
+                if parts[0] == key:
+                    found = True
+                else:
+                    continue
+            if mode == "prefix" and not parts[0].startswith(key):
+                continue
+            rows.append(parts)
+            if len(rows) >= n:
+                break
+    return cols, rows
+
+
+def read_search_summary(search_dir: Path) -> Optional[Dict[str, Any]]:
+    """The suggested cell of a tuning search, from its summary.json."""
+    import json
+    try:
+        d = json.loads((Path(search_dir) / "summary.json").read_text())
+    except (OSError, ValueError):
+        return None
+    return {"best_cell": d.get("best_cell"), "best_rule": d.get("best_rule"), "cells": len(d.get("cells") or [])}
+
+
 def candidates(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
     """Databases and vocabulary files in a corpus directory, as (label, path)."""
     if not corpus_dir:
@@ -278,12 +329,23 @@ def candidates(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
             wl = entry / "whitelist.txt"
             if wl.is_file():
                 out.append((f"{entry.name}/whitelist.txt", str(wl)))
+    tuning = d / "tuning"
+    if tuning.is_dir():
+        for search in sorted(tuning.iterdir()):
+            for name in ("summary.tsv", "results.tsv", "pairs.tsv"):
+                if (search / name).is_file():
+                    out.append((f"tuning/{search.name}/{name}", str(search / name)))
     return out
 
 
 def format_summary(info: Dict[str, Any]) -> str:
     if info.get("error"):
         return info["error"]
+    if info["kind"] == "table":
+        text = f"table: {info['lines']:,} rows, {len(info['columns'])} columns"
+        if info.get("search") and info["search"].get("best_cell"):
+            text += f"; suggested cell {info['search']['best_cell']} ({info['search']['best_rule']})"
+        return text
     if info["kind"] == "text":
         return f"vocabulary file: {info['lines']:,} lines, {_fmt_bytes(info['bytes'])}"
     state = "compacted" if info.get("compacted") else "not compacted (counts are estimates)"

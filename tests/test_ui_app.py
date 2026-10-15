@@ -465,3 +465,52 @@ def test_inspect_tab_shows_provenance_and_year_series(tmp_path, monkeypatch):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_tune_form_toggles_build_the_grid(tmp_path):
+    from textual.widgets import Static
+    from lexichron.ui.app import ToggleRow
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    corpus.mkdir(parents=True)
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "tune:\n  vector_size: [100, 300]\n  name: t\nslurm:\n  cpus: 40\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "tune")
+        async with app.run_test(size=(150, 50)) as pilot:
+            await pilot.pause()
+            row = app.query_one("#f-tune-vector_size", ToggleRow)
+            assert row.value == [100, 300]
+            assert app.config["tune"]["vector_size"] == [100, 300]
+            summary = str(app.query_one("#grid-summary", Static).content)
+            assert "2 vector sizes" in summary and "= 2 cells" in summary and "64 models" in summary
+            assert "10 at a time x 4 threads on 40 CPUs" in summary
+            # toggle 300 off, 50 on; add a custom value
+            await pilot.click("#f-tune-vector_size Button.toggle", offset=(0, 0))      # the first button: 50
+            await pilot.pause()
+            assert row.value == [50, 100, 300]
+            for b in row.query("Button.toggle"):
+                if b.name == "300":
+                    b.press()
+            await pilot.pause()
+            assert row.value == [50, 100] and app.config["tune"]["vector_size"] == [50, 100]
+            adder = row.query_one("Input.toggle-add")
+            adder.value = "150"
+            await pilot.pause()
+            await adder.action_submit()
+            await pilot.pause()
+            assert row.value == [50, 100, 150] and "3 vector sizes" in str(app.query_one("#grid-summary", Static).content)
+            # the last lit button stays lit
+            win = app.query_one("#f-tune-window", ToggleRow)
+            assert win.value == [2]
+            for b in win.query("Button.toggle"):
+                if b.name == "2":
+                    b.press()
+            await pilot.pause()
+            assert win.value == [2]
+            # the resolved call carries the lists
+            assert "vector_size=[50, 100, 150]" in str(app.query_one("#call").content)
+        _assert_clean(app)
+
+    asyncio.run(scenario())

@@ -113,3 +113,17 @@ def test_cli_inspect_prints_records(rocks, tmp_path):
     assert "3 records" in out and "apple pie" in out and "zebra" not in out
     with contextlib.redirect_stdout(io.StringIO()):
         assert main(["inspect", str(tmp_path / "none.db")]) == 1
+
+
+def test_tables_are_read_with_their_columns(tmp_path):
+    search = tmp_path / "tuning" / "s1"
+    search.mkdir(parents=True)
+    (search / "summary.tsv").write_text("cell\tvector_size\tseed_overlap\nvs100_w2\t100\t0.8100\nvs300_w2\t300\t0.7500\n")
+    (search / "summary.json").write_text('{"best_cell": "vs100_w2", "best_rule": "most stable", "cells": [1, 2]}')
+    info = inspection.describe(str(search / "summary.tsv"))
+    assert info["kind"] == "table" and info["lines"] == 2 and info["columns"] == ["cell", "vector_size", "seed_overlap"]
+    assert "suggested cell vs100_w2" in inspection.format_summary(info)
+    layout, rows = inspection.rows(str(search / "summary.tsv"), "head", n=10)
+    assert layout == "table" and rows[0] == ("cell\tvector_size\tseed_overlap", "") and rows[1] == ("vs100_w2", "100\t0.8100")
+    assert inspection.rows(str(search / "summary.tsv"), "prefix", "vs300", 10)[1][1:] == [("vs300_w2", "300\t0.7500")]
+    assert inspection.candidates(str(tmp_path)) == [("tuning/s1/summary.tsv", str(search / "summary.tsv"))]

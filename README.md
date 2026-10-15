@@ -81,6 +81,7 @@ There are two parallel pipelines, one per data source:
 
 1. **`ngram_acquire`**: Fetch raw n-gram files (1-5 grams) from the Google Books repository and store in a RocksDB database for fast querying.
 2. **`ngram_filter`**: Apply linguistic transformations (case normalization, lemmatization, stopword removal, a vocabulary) to prepare data. Unigrams yield a vocabulary whitelist; 2-5-grams are written, in the same pass, in the year-first ("pivoted") layout that time-series analysis and model training read.
+3. **`tune`**: Hyperparameter search for the word2vec models: a grid of settings is trained on a few sampled years and scored for stability and quality (below).
 
 ### Davies Corpora Pipeline
 
@@ -304,6 +305,7 @@ lexichron acquire lexichron.yaml                       # download and ingest
 lexichron filter lexichron.yaml                        # filter the ingested database
 lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
 lexichron filter lexichron.yaml --dry-run              # show the call, don't run it
+lexichron tune lexichron.yaml                          # hyperparameter search
 lexichron inspect 5grams_pivoted.db --prefix "[2011] nuclear"   # look at a database
 ```
 
@@ -482,6 +484,40 @@ job's scratch directory and the chunks are deleted as they are ingested.
 Model training writes one model per year (or per year bin) into the model
 directory you specify. Use `common_db.compress_db()` to archive a database for
 long-term storage or transfer.
+
+## Hyperparameter search (`tune`)
+
+Word2vec is a random fit: two trainings on the same corpus give different
+vectors, and in a diachronic design that run-to-run variation is what
+masquerades as change over time. `lexichron tune` measures it for a grid of
+settings before any final model is trained.
+
+- **The grid.** Each hyperparameter (vector size, window, min count, epochs,
+  approach, weighting) takes one or more values; the UI shows them as rows
+  of toggles. Every combination is a *cell*.
+- **The years.** Not the whole study period: adjacent pairs spread over it
+  (four pairs by default: 1968-69, 1985-86, 2001-02, 2018-19 for 1968-2019),
+  or years you choose. Adjacent years let year-to-year agreement be measured.
+- **The models.** Per cell and year: one model per seed (two by default) on
+  the year's corpus, and one on each random half of it. A year's corpus is
+  written once per weighting (``<UNK>`` tokens stripped by default; an
+  n-gram is repeated log5 of its count times) and deleted afterwards.
+- **The scores.** Agreement between two models is the mean overlap of the
+  ten nearest neighbours of probe words sampled from every frequency decile,
+  within the vocabulary the two share (and a Procrustes-aligned cosine as a
+  second view). Three contrasts: *seed* (same corpus, another seed),
+  *split-half* (the two halves of a year), *adjacent year*; and *distant*
+  (first vs last sampled year), the signal to compare them with. Quality:
+  Spearman correlation on WordSim-353 and SimLex-999, analogy accuracy, and
+  coverage of the vocabulary list.
+- **The tables.** `tuning/<name>/results.tsv` (cell x year), `pairs.tsv`
+  (year pairs), `summary.tsv` and `summary.json` (per cell, with a
+  signal-to-noise ratio: change over the span relative to change over a
+  year) and a suggested cell: the most stable among cells within 0.05 of
+  the best coverage and similarity correlation. The Inspect tab lists the
+  tables and shows the suggestion; the choice stays yours.
+- **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
+  resume mode a rerun with more values trains only the new cells.
 
 ## Provenance
 
