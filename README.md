@@ -529,7 +529,10 @@ settings before any final model is trained.
   tab shows a provisional picture at any point. Only one cell's models are
   in memory at a time: the stage needs a few hundred MB per training
   process (`workers / workers_per_model` of them) plus the corpus writer,
-  whatever the size of the grid.
+  whatever the size of the grid. A year with fewer models than that
+  spreads the CPUs over the models it has (`workers_per_model` is a
+  minimum): a one-cell search trains its four models with 16 threads
+  each on 64 CPUs.
 - **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
   resume mode a rerun with more values trains only the new cells, and
   scores already in the tables are kept rather than recomputed.

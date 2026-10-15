@@ -232,3 +232,27 @@ def test_cli_runs_tune_from_a_settings_file(rocks, tmp_path, monkeypatch):
     assert rec["stage"] == "tune" and rec["settings"]["vector_size"] == [8]
     assert rec["inputs"]["simlex_dataset"]["path"].endswith("simlex999.txt") and len(rec["inputs"]["simlex_dataset"]["sha256"]) == 64
     assert "analogy_dataset" in rec["inputs"]
+
+
+def test_threads_per_model_grow_when_a_year_has_few_models(rocks, tmp_path):
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991])
+    threads = []
+
+    def counting_train(corpus_file, cell, seed, workers):
+        threads.append(workers)
+        return fake_train(corpus_file, cell, seed, workers)
+
+    # one cell, 4 models a year, 64 "CPUs" at 4 threads minimum: 16 threads each
+    tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990, 1991], vector_size=[8], window=[2],
+                     min_count=[2], epochs=[1], seeds=2, name="t3", mode="restart", workers=64, workers_per_model=4,
+                     probes_per_decile=3, similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
+                     train_fn=counting_train)
+    assert threads == [16] * 8
+    # four cells, 16 models a year: the slots are full, so the minimum applies
+    threads.clear()
+    tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990], vector_size=[8, 16], window=[2, 3],
+                     min_count=[2], epochs=[1], seeds=2, name="t4", mode="restart", workers=64, workers_per_model=4,
+                     probes_per_decile=3, similarity_dataset=str(tmp_path / "data" / "simlex999.txt"),
+                     train_fn=counting_train)
+    assert threads == [4] * 16

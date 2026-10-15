@@ -185,7 +185,7 @@ HELP: Dict[str, str] = {
     "tune.name": "Name of this search; results go to <corpus>/tuning/<name>/. Blank: a timestamp.",
     "tune.mode": "resume keeps models already trained (a grown grid trains only its new cells); restart deletes the search first.",
     "tune.workers": "CPUs to use in total. Blank = all of the job's.",
-    "tune.workers_per_model": "Threads per model; CPUs / threads models train at once.",
+    "tune.workers_per_model": "Threads per model, at least; CPUs / threads models train at once. A year with fewer models than that gives each more threads.",
     "tune.neighbours": "Nearest neighbours per probe word compared between two models.",
     "tune.probes_per_decile": "Probe words sampled from each frequency decile of the vocabulary.",
     "tune.similarity_dataset": "A word-pair similarity file (word, word, score per line). Blank: WordSim-353 and SimLex-999.",

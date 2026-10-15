@@ -111,8 +111,9 @@ def tune_models(
         mode: "resume" keeps models already trained; "restart" deletes the
             search directory first
         workers: CPUs to use in total (default: all)
-        workers_per_model: Threads per model; workers / workers_per_model
-            models train at once
+        workers_per_model: Threads per model, at least: workers /
+            workers_per_model models train at once, and when a year has fewer
+            models than that, each gets more threads so the CPUs stay busy
         temp_dir: Where corpus files are written (default: inside the search
             directory; a job's $TMPDIR is faster)
         keep_models: Keep the trained models (.npz) after scoring
@@ -148,6 +149,11 @@ def tune_models(
     total_cpus = workers or os.cpu_count() or 1
     per_model = max(1, int(workers_per_model))
     parallel = max(1, total_cpus // per_model)
+
+    def threads_for(n_models: int) -> int:
+        # spare CPUs go to the models in flight: a one-cell search trains its
+        # four models with every thread it has rather than four each
+        return max(per_model, total_cpus // max(1, min(n_models, parallel)))
 
     whitelist = derive_paths(db_path_stub, 1, repo_release_id, repo_corpus_id)["whitelist"]
     vocab_words = _read_vocabulary(whitelist) if Path(whitelist).is_file() else []
@@ -320,7 +326,8 @@ def tune_models(
 
             if todo:
                 with progress.long_phase("training"):
-                    _train_all(todo, files, models_dir, per_model, parallel, progress, train_fn, on_trained)
+                    _train_all(todo, files, models_dir, threads_for(len(todo)), parallel, progress, train_fn,
+                               on_trained)
             # a provisional summary over the years scored so far
             summary = summarize_results(rows, list(pairs.values()), cells)
             _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON, summary)
@@ -425,8 +432,10 @@ def _train_one(args):
 def _train_all(todo: List[ModelTask], files: Dict[Tuple[str, str], Path], models_dir: Path, per_model: int,
                parallel: int, progress: ProgressReporter, train_fn: Optional[TrainFn],
                on_trained: Callable[[ModelTask], None]) -> None:
-    """Train the models, ``parallel`` at a time, calling ``on_trained`` in this
-    process as each finishes (the model is on disk; nothing is kept here)."""
+    """Train the models, ``parallel`` at a time with ``per_model`` threads
+    each, calling ``on_trained`` in this process as each finishes (the model
+    is on disk; nothing is kept here)."""
+    logger.info("training %d models, %d at a time x %d threads", len(todo), min(parallel, len(todo)), per_model)
     jobs = []
     for t in todo:
         corpus_file = files[(t.cell.weight_by, t.corpus_part)]
