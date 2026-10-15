@@ -256,3 +256,20 @@ def test_threads_per_model_grow_when_a_year_has_few_models(rocks, tmp_path):
                      probes_per_decile=3, similarity_dataset=str(tmp_path / "data" / "simlex999.txt"),
                      train_fn=counting_train)
     assert threads == [4] * 16
+
+
+def test_temp_dir_expands_environment_variables(rocks, tmp_path, monkeypatch):
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990])
+    monkeypatch.setenv("LEXICHRON_TEST_TMP", str(tmp_path / "local"))
+    seen = []
+
+    def noting_train(corpus_file, cell, seed, workers):
+        seen.append(Path(corpus_file).parent)
+        return fake_train(corpus_file, cell, seed, workers)
+
+    tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990], vector_size=[8], window=[2],
+                     min_count=[2], epochs=[1], seeds=1, split_half=False, name="t5", mode="restart", workers=1,
+                     probes_per_decile=3, similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
+                     temp_dir="$LEXICHRON_TEST_TMP/spool", train_fn=noting_train)
+    assert seen and seen[0] == tmp_path / "local" / "spool"

@@ -115,7 +115,7 @@ def tune_models(
             workers_per_model models train at once, and when a year has fewer
             models than that, each gets more threads so the CPUs stay busy
         temp_dir: Where corpus files are written (default: inside the search
-            directory; a job's $TMPDIR is faster)
+            directory; a job's $TMPDIR is faster, and may be written as "$TMPDIR")
         keep_models: Keep the trained models (.npz) after scoring
         progress_path: Progress document for the UI
     """
@@ -143,7 +143,7 @@ def tune_models(
         raise ValueError("mode must be 'resume' or 'restart'")
     models_dir = out_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
-    spool = Path(temp_dir) if temp_dir else out_dir / "corpus"
+    spool = Path(os.path.expandvars(os.path.expanduser(temp_dir))) if temp_dir else out_dir / "corpus"   # $TMPDIR works
     spool.mkdir(parents=True, exist_ok=True)
 
     total_cpus = workers or os.cpu_count() or 1

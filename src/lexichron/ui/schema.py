@@ -190,7 +190,7 @@ HELP: Dict[str, str] = {
     "tune.probes_per_decile": "Probe words sampled from each frequency decile of the vocabulary.",
     "tune.similarity_dataset": "A word-pair similarity file (word, word, score per line). Blank: WordSim-353 and SimLex-999.",
     "tune.analogy_dataset": "An analogy questions file (a b c d per line). Blank: Google's questions-words.",
-    "tune.temp_dir": "Where the years' corpus files are written. Blank: inside the search directory. A job's $TMPDIR is faster.",
+    "tune.temp_dir": "Where the years' corpus files are written. Blank: inside the search directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
     "tune.keep_models": "Keep the trained models after scoring (they are small).",
 }
 
