@@ -90,9 +90,10 @@ From: {{ BASE }}
     # gensim's corpus_file reader, rebuilt free of the GIL (scripts/patch_gensim.py
     # explains): on n-gram corpora, where a line is five tokens, the stock build
     # re-takes the GIL for every line and a model cannot use more than a few
-    # cores. The wheel ships its Cython sources; the corpus_file extensions are recompiled
-    # in place with a Cython >= 3.1 (what gensim 4.4 builds with), used for this step only.
-    python -m pip install --no-cache-dir --target /tmp/cython-for-gensim "Cython>=3.1.3"
+    # cores. The wheel ships its Cython sources; the word2vec/doc2vec/fastText
+    # extensions are recompiled in place with the Cython gensim 4.4's own sources
+    # were generated with, used for this step only.
+    python -m pip install --no-cache-dir --target /tmp/cython-for-gensim "Cython==3.1.3"
     PYTHONPATH=/tmp/cython-for-gensim python /opt/lexichron-src/scripts/patch_gensim.py
     rm -rf /tmp/cython-for-gensim
     chmod 755 /opt/lexichron/register_kernel.sh /opt/lexichron/new_project.sh /opt/lexichron/host_bridge.sh /opt/lexichron/install_ui.sh

@@ -15,11 +15,13 @@ three or four cores however many threads it is given.
 This script edits the installed gensim's ``word2vec_corpusfile.pxd``/``.pyx``
 (the wheel ships them), declaring the reader's methods ``noexcept`` (the C++
 reader only throws on allocation failure, which Cython then reports as an
-unraisable error rather than propagate). It then recompiles the three
-``*_corpusfile`` extension modules in place (the other two cimport the
-edited declarations), with the Cython on the path (>= 3.1, as gensim's own
-build requires) and the installed numpy's headers, and checks that gensim
-still imports and the reader still reads.
+unraisable error rather than propagate). It then recompiles, in place, the
+six extension modules of the word2vec/doc2vec/fastText family: they share
+C-level symbols whose signatures are checked at import, and those signature
+strings differ between Cython releases, so the family must be compiled by
+one Cython (gensim 4.4 builds with >= 3.1.3; pin one on the path). It uses
+the installed numpy's headers, and checks in a fresh interpreter that gensim
+still imports whole and the reader still reads.
 
 Usage:
     patch_gensim.py            patch and rebuild the installed gensim
@@ -48,7 +50,9 @@ EDITS = (
     ("cdef cvocab_t* get_vocab_ptr(self) except * nogil",
      "cdef cvocab_t* get_vocab_ptr(self) noexcept nogil"),
 )
-MODULES = ("word2vec_corpusfile", "doc2vec_corpusfile", "fasttext_corpusfile")
+# module -> language; every module that cimports gensim.models.word2vec_inner, plus itself
+MODULES = {"word2vec_inner": "c", "word2vec_corpusfile": "c++", "doc2vec_inner": "c++",
+           "doc2vec_corpusfile": "c++", "fasttext_inner": "c", "fasttext_corpusfile": "c++"}
 
 
 def edit_sources(root: Path) -> None:
@@ -78,16 +82,19 @@ def rebuild_installed() -> None:
     import gensim.models
     models_dir = Path(gensim.models.__file__).parent
     root = models_dir.parent.parent
-    for name in ("word2vec_corpusfile.pyx", "word2vec_corpusfile.pxd", "word2vec_inner.pxd",
-                 "fast_line_sentence.h", "voidptr.h"):
-        if not (models_dir / name).exists():
-            sys.exit(f"{models_dir / name} missing: this gensim installation does not ship its sources")
+    missing = [f"{m}.pyx" for m in MODULES if not (models_dir / f"{m}.pyx").exists()]
+    missing += [n for n in ("word2vec_corpusfile.pxd", "word2vec_inner.pxd", "doc2vec_inner.pxd",
+                            "fasttext_inner.pxd", "fast_line_sentence.h", "voidptr.h")
+                if not (models_dir / n).exists()]
+    if missing:
+        sys.exit(f"{models_dir}: {missing} missing; this gensim installation does not ship its sources")
     edit_sources(root)
-    todo = [m for m in MODULES if (models_dir / f"{m}.pyx").exists()]
-    exts = [Extension(f"gensim.models.{m}", sources=[str(models_dir / f"{m}.pyx")], language="c++",
-                      include_dirs=[numpy.get_include(), str(models_dir)],
-                      extra_compile_args=["-std=c++11", "-O3"], extra_link_args=["-std=c++11"])
-            for m in todo]
+    exts = []
+    for m, lang in MODULES.items():
+        std = ["-std=c++11"] if lang == "c++" else []
+        exts.append(Extension(f"gensim.models.{m}", sources=[str(models_dir / f"{m}.pyx")], language=lang,
+                              include_dirs=[numpy.get_include(), str(models_dir)],
+                              extra_compile_args=std + ["-O3"], extra_link_args=std))
     with tempfile.TemporaryDirectory() as tmp:
         cwd = os.getcwd()
         os.chdir(root)                     # so Cython resolves gensim.models.* cimports from the package
@@ -101,23 +108,25 @@ def rebuild_installed() -> None:
             cmd.run()
         finally:
             os.chdir(cwd)
-        for m in todo:
-            built = list((Path(tmp) / "gensim" / "models").glob(f"{m}*.so"))
+        for m in MODULES:
+            built = list((Path(tmp) / "gensim" / "models").glob(f"{m}.*.so"))
             if len(built) != 1:
                 sys.exit(f"expected one built module for {m}, found {built}")
-            for old in models_dir.glob(f"{m}*.so"):
+            for old in models_dir.glob(f"{m}.*.so"):
                 old.unlink()
             shutil.copy2(built[0], models_dir / built[0].name)
             print(f"rebuilt {models_dir / built[0].name}")
-    # gensim must still import whole, and the reader must still read
-    import importlib
-    for m in ("gensim.models.word2vec", "gensim.models.doc2vec", "gensim.models.fasttext"):
-        importlib.import_module(m)
-    mod = importlib.import_module("gensim.models.word2vec_corpusfile")
+    # gensim must still import whole, and the reader must still read: checked in
+    # a fresh interpreter, since this one loaded the old modules before the rebuild
+    import subprocess
     sample = Path(tempfile.mkdtemp()) / "s.txt"
     sample.write_text("a b c\nd e\n")
-    assert [list(s) for s in mod.CythonLineSentence(str(sample))] == [[b"a", b"b", b"c"], [b"d", b"e"]]
-    print("gensim corpus_file reader rebuilt without the GIL")
+    check = ("import gensim, gensim.models.word2vec, gensim.models.doc2vec, gensim.models.fasttext\n"
+             "from gensim.models.word2vec_corpusfile import CythonLineSentence\n"
+             f"got = [list(s) for s in CythonLineSentence({str(sample)!r})]\n"
+             "assert got == [[b'a', b'b', b'c'], [b'd', b'e']], got\n"
+             "print('gensim corpus_file reader rebuilt without the GIL')\n")
+    subprocess.run([sys.executable, "-c", check], check=True, cwd=tempfile.gettempdir())
 
 
 if __name__ == "__main__":
