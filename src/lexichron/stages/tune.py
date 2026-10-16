@@ -281,6 +281,9 @@ def tune_models(
                     pairs[pk] = row
                     _write_pairs(out_dir / PAIRS_FILE, pairs)
                     logger.info("scored %s %s pair y%s-y%s: overlap %.4f", cell.stem, kind, a, b, row["overlap"])
+        # the summary follows every addition, so the per-cell table never lags the rows
+        _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON,
+                       summarize_results(rows, list(pairs.values()), cells))
 
     summary: Dict[str, Any] = {}
     try:
@@ -329,7 +332,6 @@ def tune_models(
                 with progress.long_phase("training"):
                     _train_all(todo, files, models_dir, threads_for(len(todo)), parallel, progress, train_fn,
                                on_trained)
-            # a provisional summary over the years scored so far
             summary = summarize_results(rows, list(pairs.values()), cells)
             _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON, summary)
             # keep the seed-0 model of every cell for the year-pair comparisons; the rest may go

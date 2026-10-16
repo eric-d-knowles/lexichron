@@ -145,7 +145,8 @@ def test_cells_are_scored_as_their_models_finish_and_resume_keeps_scores(rocks, 
         def n_rows(name):
             p = out / name
             return max(0, len(p.read_text().splitlines()) - 1) if p.exists() else 0
-        seen.append((Path(corpus_file).name, cell.stem, n_rows("results.tsv"), n_rows("pairs.tsv")))
+        seen.append((Path(corpus_file).name, cell.stem, n_rows("results.tsv"), n_rows("pairs.tsv"),
+                     n_rows("summary.tsv")))
         return fake_train(corpus_file, cell, seed, workers)
 
     tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990, 1991], vector_size=[8, 16],
@@ -155,7 +156,7 @@ def test_cells_are_scored_as_their_models_finish_and_resume_keeps_scores(rocks, 
     # the first cell's row was written before the second cell's models were trained, within the year;
     # the 1990-1991 pairs were written before 1991's second cell trained
     first_of_second_cell_1990 = next(s for s in seen if s[1].startswith("vs16") and "y1990" in s[0])
-    assert first_of_second_cell_1990[2] == 1
+    assert first_of_second_cell_1990[2] == 1 and first_of_second_cell_1990[4] == 1     # summary follows at once
     first_of_second_cell_1991 = next(s for s in seen if s[1].startswith("vs16") and "y1991" in s[0])
     assert first_of_second_cell_1991[2] == 3 and first_of_second_cell_1991[3] == 1
     assert len((out / "pairs.tsv").read_text().splitlines()) == 3                 # header + adjacent x 2 cells
