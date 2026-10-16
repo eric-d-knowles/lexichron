@@ -196,7 +196,7 @@ EOF
 #   apptainer run --app register-kernel lexichron-<version>.sif [--bind DIR ...]
 # -----------------------------------------------------------------------------
 %apprun register-kernel
-    exec bash /opt/lexichron/register_kernel.sh "$@"
+    unset BASH_ENV ENV; exec bash /opt/lexichron/register_kernel.sh "$@"
 
 %apphelp register-kernel
     Register this image as a Jupyter kernel for JupyterLab, Positron or VS Code:
@@ -212,7 +212,7 @@ EOF
 #   apptainer run --app new-project lexichron-<version>.sif /path/to/project
 # -----------------------------------------------------------------------------
 %apprun new-project
-    exec bash /opt/lexichron/new_project.sh "$@"
+    unset BASH_ENV ENV; exec bash /opt/lexichron/new_project.sh "$@"
 
 # -----------------------------------------------------------------------------
 # App: terminal user interface (runs inside the container; for Slurm actions
@@ -221,7 +221,7 @@ EOF
 #   apptainer run --app ui lexichron-<version>.sif /path/to/project/lexichron.yaml
 # -----------------------------------------------------------------------------
 %apprun ui
-    exec lexichron ui "$@"
+    unset BASH_ENV ENV; exec lexichron ui "$@"
 
 %apphelp ui
     Open the terminal user interface (optionally on a settings file):
@@ -236,7 +236,7 @@ EOF
 # App: install host-side `lexichron` and `lexichron-ui` commands into ~/.local/bin
 # (install.sh at the repository root pulls the image and calls this)
 %apprun install
-    exec bash /opt/lexichron/install_ui.sh "$@"
+    unset BASH_ENV ENV; exec bash /opt/lexichron/install_ui.sh "$@"
 
 %apphelp install
     Write `lexichron` and `lexichron-ui` commands into ~/.local/bin that run
@@ -250,7 +250,7 @@ EOF
 
 # Older name, kept for compatibility
 %apprun install-ui
-    exec bash /opt/lexichron/install_ui.sh "$@"
+    unset BASH_ENV ENV; exec bash /opt/lexichron/install_ui.sh "$@"
 
 %apphelp install-ui
     Same as `install`.
