@@ -32,7 +32,17 @@ case "$1" in
   run)   # run --app install IMG args...  -> run install_ui.sh "inside" the image
          shift; [ "$1" = "--app" ] && shift && app="$1" && shift
          img="$1"; shift
-         APPTAINER_CONTAINER="$img" bash "{install_ui_copy}" "$@"; exit $? ;;
+         [ -z "${{BASH_ENV:-}}" ] || {{ echo "BASH_ENV leaked into the image" >&2; exit 3; }}
+         if [ -n "${{FAKE_OLD_IMAGE:-}}" ]; then        # a 0.7 image: launchers that call apptainer by name
+           bin="$HOME/.local/bin"; mkdir -p "$bin"
+           printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'img=x' 'binds=""' 'if ! command -v apptainer >/dev/null 2>&1; then' \
+             '  echo "lexichron: '"'"'apptainer'"'"' not found; try: module load apptainer" >&2; exit 127' 'fi' \
+             '[ -f "$img" ] || apptainer pull "$img" "oras://ref"' 'exec apptainer exec $binds "$img" lexichron "$@"' > "$bin/lexichron"
+           printf '%s\n' '#!/usr/bin/env bash' 'set -u' 'if ! command -v apptainer >/dev/null 2>&1; then exit 127; fi' \
+             'apptainer exec $binds --env X=1 "$img" lexichron ui "$@"' > "$bin/lexichron-ui"
+           chmod 755 "$bin/lexichron" "$bin/lexichron-ui"; exit 0
+         fi
+         env -u LEXICHRON_RUNTIME_SEEN APPTAINER_CONTAINER="$img" bash "{install_ui_copy}" "$@"; exit $? ;;
 esac
 exit 1
 """
@@ -123,10 +133,11 @@ def test_install_sh_works_with_singularity_instead_of_apptainer(env):
     assert r.returncode == 0, r.stderr + r.stdout
     assert "Container runtime: singularity" in r.stdout
     calls = env["log"].read_text()
-    assert "pull" in calls and "--runtime singularity" in calls
+    assert "pull" in calls and "--runtime" not in calls                 # the runtime travels as a variable
     bin_dir = env["home"] / ".local" / "bin"
     launcher = (bin_dir / "lexichron").read_text()
     assert "runtime=singularity" in launcher and "SINGULARITY_CACHEDIR=" in launcher
+    assert "unset BASH_ENV ENV" in launcher                             # modules' init must not reach the image
     env["log"].write_text("")
     r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=e, capture_output=True, text=True)
     assert r.returncode == 0 and "exec: lexichron --help" in r.stdout
@@ -139,3 +150,25 @@ def test_install_sh_works_with_singularity_instead_of_apptainer(env):
     bare = dict(e, PATH=os.environ["PATH"])
     r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=bare, capture_output=True, text=True)
     assert r.returncode == 127 and "neither 'apptainer' nor 'singularity'" in r.stderr
+
+
+def test_install_sh_copes_with_modules_bash_env_and_older_images(env):
+    """environment-modules exports BASH_ENV (its init needs the host's tclsh,
+    which the image lacks): the installer must not pass it in. And an image
+    from before 0.8 writes launchers that call apptainer by name: on a
+    singularity-only cluster the installer points them at singularity."""
+    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{os.environ['PATH']}",
+             BASH_ENV="/share/apps/Modules/init/bash", FAKE_OLD_IMAGE="1")
+    r = subprocess.run(["bash", str(INSTALL_SH)], env=e, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr + r.stdout
+    bin_dir = env["home"] / ".local" / "bin"
+    launcher = (bin_dir / "lexichron").read_text()
+    assert "apptainer pull" not in launcher and "exec singularity exec" in launcher
+    assert "command -v singularity" in launcher and "'singularity' not found; try: module load singularity" in launcher
+    assert launcher.count("unset BASH_ENV ENV") == 1 and launcher.index("set -u") < launcher.index("unset BASH_ENV")
+    ui = (bin_dir / "lexichron-ui").read_text()
+    assert "singularity exec $binds --env X=1" in ui
+    # the fixed launcher runs with singularity, and keeps BASH_ENV from the image
+    env["log"].write_text("")
+    r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=dict(e, FAKE_OLD_IMAGE=""), capture_output=True, text=True)
+    assert r.returncode == 0 and "exec: lexichron --help" in r.stdout, r.stderr

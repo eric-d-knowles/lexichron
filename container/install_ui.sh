@@ -20,8 +20,9 @@
 #   --tmpdir DIR     APPTAINER_TMPDIR to use for pulls (default: beside the image)
 #   --cachedir DIR   APPTAINER_CACHEDIR to use for pulls (default: beside the image)
 #   --runtime NAME   the command the generated launchers run the image with:
-#                    apptainer (default) or singularity; a launcher falls back
-#                    to whichever of the two is on the PATH
+#                    apptainer (default) or singularity (also read from
+#                    $LEXICHRON_RUNTIME); a launcher falls back to whichever
+#                    of the two is on the PATH
 set -euo pipefail
 
 BIN_DIR="$HOME/.local/bin"
@@ -29,7 +30,7 @@ EXTRA_BINDS=()
 REF=""
 TMPDIR_OPT=""
 CACHEDIR_OPT=""
-RUNTIME="apptainer"
+RUNTIME="${LEXICHRON_RUNTIME:-apptainer}"
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin)      BIN_DIR="$2"; shift 2 ;;
@@ -79,6 +80,7 @@ done
 PRELUDE="$(cat <<PRE
 img=$(printf '%q' "$IMAGE")
 ref=$(printf '%q' "$REF")
+unset BASH_ENV ENV     # environment-modules points these at its bash init, which the image cannot source
 runtime=$(printf '%q' "$RUNTIME")
 export APPTAINER_TMPDIR=$(printf '%q' "$TMPDIR_OPT") SINGULARITY_TMPDIR=$(printf '%q' "$TMPDIR_OPT")
 export APPTAINER_CACHEDIR=$(printf '%q' "$CACHEDIR_OPT") SINGULARITY_CACHEDIR=$(printf '%q' "$CACHEDIR_OPT")

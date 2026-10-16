@@ -83,8 +83,23 @@ say "Image: $SIF (lexichron $ACTUAL)"
 # Re-pulls use the tag that was pulled: a release image reports its version,
 # which is also its tag; a manual build reports 0.2.0+dev.<sha>, which is not.
 case "$ACTUAL" in *+*) PULL_TAG="$VERSION" ;; *) PULL_TAG="$ACTUAL" ;; esac
-"$RUNTIME" run --app install "$SIF" --bin "$BIN_DIR" --ref "ghcr.io/$REPO:$PULL_TAG" \
-    --tmpdir "$APPTAINER_TMPDIR" --cachedir "$APPTAINER_CACHEDIR" --runtime "$RUNTIME" >/dev/null
+# The runtime travels as a variable (images before 0.8 do not know a
+# --runtime option). BASH_ENV is dropped: environment-modules sets it to its
+# own bash init, which the image's bash would otherwise try to source.
+export LEXICHRON_RUNTIME="$RUNTIME"
+env -u BASH_ENV -u ENV "$RUNTIME" run --app install "$SIF" --bin "$BIN_DIR" --ref "ghcr.io/$REPO:$PULL_TAG" \
+    --tmpdir "$APPTAINER_TMPDIR" --cachedir "$APPTAINER_CACHEDIR" >/dev/null \
+    || die "writing the lexichron commands failed (run without >/dev/null to see why: $RUNTIME run --app install $SIF)"
+# Images before 0.8 write commands that call apptainer by name and source
+# BASH_ENV: point them at the runtime found here.
+for f in "$BIN_DIR/lexichron" "$BIN_DIR/lexichron-ui"; do
+    [ -f "$f" ] || continue
+    if grep -q 'command -v apptainer' "$f" 2>/dev/null; then
+        sed -i -e "s/\bapptainer \(pull\|exec\)\b/$RUNTIME \1/g" -e "s/command -v apptainer/command -v $RUNTIME/" \
+               -e "s/'apptainer' not found; try: module load apptainer/'$RUNTIME' not found; try: module load $RUNTIME/" \
+               -e "0,/^set -u\$/s//set -u\nunset BASH_ENV ENV/" "$f"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # 5. PATH
