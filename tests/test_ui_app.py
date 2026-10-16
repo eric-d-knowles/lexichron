@@ -567,6 +567,9 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
             assert "25,000" in rows[1] and "0.810" in rows[1]
             seed = headings.index("Seed")
             assert table.get_row_at(1)[seed].style == "bold" and table.get_row_at(0)[seed].style == ""   # column best
+            # the suggested cell's years are shown to begin with
+            assert str(app.query_one("#search-cell", Static).content) == "vs300_w2_mc5_e5_sg1_wbfreq by year"
+            assert app.query_one("#search-years", DataTable).row_count == 2 and table.cursor_row == 1
             # sorting by a score column puts the best first; selecting a row shows its years
             table.sort("Seed", key=lambda v: float(str(v)) if str(v) != "–" else -1, reverse=True)
             await pilot.pause()

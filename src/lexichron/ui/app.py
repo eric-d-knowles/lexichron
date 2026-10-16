@@ -1157,6 +1157,13 @@ class LexichronApp(App):
         col, reverse = self._search_sort
         if col is not None and col in headings:
             self._sort_search_table(col, reverse)
+        if stems:                                        # the suggested cell's years to begin with
+            chosen = search.get("best_cell") if search.get("best_cell") in stems else stems[0]
+            self._show_search_cell(chosen)
+            try:
+                table.move_cursor(row=table.get_row_index(chosen))
+            except Exception:
+                pass
 
     def _show_search_cell(self, stem: Optional[str]) -> None:
         """The selected cell's per-year rows and year pairs under the table."""
