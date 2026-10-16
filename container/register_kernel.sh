@@ -130,7 +130,9 @@ for d in ${CANDIDATES}; do
   case " ${SYSTEM_BOUND} " in *" \$d "*) continue ;; esac
   [ -d "\$d" ] && binds="\$binds --bind \$d"
 done
-exec apptainer exec \$binds${ENV_ARGS} "\$img" "\$py" "\$@"
+runtime=apptainer
+command -v apptainer >/dev/null 2>&1 || { command -v singularity >/dev/null 2>&1 && runtime=singularity; }
+exec "\$runtime" exec \$binds${ENV_ARGS} "\$img" "\$py" "\$@"
 EOF
 chmod 755 "$LAUNCHER"
 

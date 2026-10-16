@@ -4,7 +4,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/eric-d-knowles/lexichron/main/install.sh | bash
 #
 # What it does:
-#   1. checks that Apptainer is available (and says how to load it if not)
+#   1. checks that Apptainer (or Singularity) is available, loading its module if needed
 #   2. pulls the lexichron image into $SCRATCH/lexichron (or ~/.lexichron)
 #   3. installs the `lexichron` and `lexichron-ui` commands into ~/.local/bin
 #   4. makes sure ~/.local/bin is on your PATH
@@ -24,15 +24,27 @@ say() { printf '%s\n' "$*"; }
 die() { printf 'lexichron install: %s\n' "$*" >&2; exit 1; }
 
 # ---------------------------------------------------------------------------
-# 1. Apptainer
+# 1. Container runtime: Apptainer, or Singularity (its predecessor; the
+#    commands are the same, so either serves)
 # ---------------------------------------------------------------------------
-if ! command -v apptainer >/dev/null 2>&1; then
-    if command -v module >/dev/null 2>&1 && module avail apptainer 2>&1 | grep -qi apptainer; then
-        say "Loading the apptainer module..."
-        module load apptainer
-    fi
+RUNTIME=""
+find_runtime() {
+    for c in apptainer singularity; do
+        if command -v "$c" >/dev/null 2>&1; then RUNTIME="$c"; return 0; fi
+    done
+    return 1
+}
+if ! find_runtime && command -v module >/dev/null 2>&1; then
+    for m in apptainer singularity; do
+        if module avail "$m" 2>&1 | grep -qi "$m"; then
+            say "Loading the $m module..."
+            module load "$m" 2>/dev/null || true
+            find_runtime && break
+        fi
+    done
 fi
-command -v apptainer >/dev/null 2>&1 || die "'apptainer' is not available. On most clusters: module load apptainer, then re-run."
+[ -n "$RUNTIME" ] || die "neither 'apptainer' nor 'singularity' is available. On most clusters: module load apptainer (or module load singularity), then re-run."
+say "Container runtime: $RUNTIME"
 
 # ---------------------------------------------------------------------------
 # 2. Where to keep the image
@@ -47,8 +59,8 @@ else
     HOME_DIR="$HOME/.lexichron"
 fi
 IMAGE_DIR="$HOME_DIR/images"
-export APPTAINER_TMPDIR="$HOME_DIR/apptainer-tmp"
-export APPTAINER_CACHEDIR="$HOME_DIR/apptainer-cache"
+export APPTAINER_TMPDIR="$HOME_DIR/apptainer-tmp" SINGULARITY_TMPDIR="$HOME_DIR/apptainer-tmp"
+export APPTAINER_CACHEDIR="$HOME_DIR/apptainer-cache" SINGULARITY_CACHEDIR="$HOME_DIR/apptainer-cache"
 mkdir -p "$IMAGE_DIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 
 # ---------------------------------------------------------------------------
@@ -57,9 +69,9 @@ mkdir -p "$IMAGE_DIR" "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
 REF="ghcr.io/$REPO:$VERSION"
 TMP_SIF="$IMAGE_DIR/.lexichron-download-$$.sif"
 say "Pulling oras://$REF ..."
-apptainer pull "$TMP_SIF" "oras://$REF" || die "pull failed (is the cluster able to reach ghcr.io?)"
+"$RUNTIME" pull "$TMP_SIF" "oras://$REF" || die "pull failed (is the cluster able to reach ghcr.io?)"
 
-ACTUAL="$(apptainer exec "$TMP_SIF" lexichron --version 2>/dev/null | awk '{print $2}')"
+ACTUAL="$("$RUNTIME" exec "$TMP_SIF" lexichron --version 2>/dev/null | awk '{print $2}')"
 [ -n "$ACTUAL" ] || die "the downloaded image does not report a lexichron version"
 SIF="$IMAGE_DIR/lexichron-$ACTUAL.sif"
 mv -f "$TMP_SIF" "$SIF"
@@ -71,8 +83,8 @@ say "Image: $SIF (lexichron $ACTUAL)"
 # Re-pulls use the tag that was pulled: a release image reports its version,
 # which is also its tag; a manual build reports 0.2.0+dev.<sha>, which is not.
 case "$ACTUAL" in *+*) PULL_TAG="$VERSION" ;; *) PULL_TAG="$ACTUAL" ;; esac
-apptainer run --app install "$SIF" --bin "$BIN_DIR" --ref "ghcr.io/$REPO:$PULL_TAG" \
-    --tmpdir "$APPTAINER_TMPDIR" --cachedir "$APPTAINER_CACHEDIR" >/dev/null
+"$RUNTIME" run --app install "$SIF" --bin "$BIN_DIR" --ref "ghcr.io/$REPO:$PULL_TAG" \
+    --tmpdir "$APPTAINER_TMPDIR" --cachedir "$APPTAINER_CACHEDIR" --runtime "$RUNTIME" >/dev/null
 
 # ---------------------------------------------------------------------------
 # 5. PATH

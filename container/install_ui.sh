@@ -19,6 +19,9 @@
 #                    from the image file name)
 #   --tmpdir DIR     APPTAINER_TMPDIR to use for pulls (default: beside the image)
 #   --cachedir DIR   APPTAINER_CACHEDIR to use for pulls (default: beside the image)
+#   --runtime NAME   the command the generated launchers run the image with:
+#                    apptainer (default) or singularity; a launcher falls back
+#                    to whichever of the two is on the PATH
 set -euo pipefail
 
 BIN_DIR="$HOME/.local/bin"
@@ -26,6 +29,7 @@ EXTRA_BINDS=()
 REF=""
 TMPDIR_OPT=""
 CACHEDIR_OPT=""
+RUNTIME="apptainer"
 while [ $# -gt 0 ]; do
     case "$1" in
         --bin)      BIN_DIR="$2"; shift 2 ;;
@@ -33,12 +37,13 @@ while [ $# -gt 0 ]; do
         --ref)      REF="$2"; shift 2 ;;
         --tmpdir)   TMPDIR_OPT="$2"; shift 2 ;;
         --cachedir) CACHEDIR_OPT="$2"; shift 2 ;;
+        --runtime)  RUNTIME="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
 IMAGE="${APPTAINER_CONTAINER:-${SINGULARITY_CONTAINER:-}}"
-[ -n "$IMAGE" ] || { echo "Error: run this inside the image: apptainer run --app install lexichron.sif"; exit 1; }
+[ -n "$IMAGE" ] || { echo "Error: run this inside the image: apptainer (or singularity) run --app install lexichron.sif"; exit 1; }
 IMAGE_DIR="$(dirname "$IMAGE")"
 
 if [ -z "$REF" ]; then
@@ -74,15 +79,22 @@ done
 PRELUDE="$(cat <<PRE
 img=$(printf '%q' "$IMAGE")
 ref=$(printf '%q' "$REF")
-export APPTAINER_TMPDIR=$(printf '%q' "$TMPDIR_OPT")
-export APPTAINER_CACHEDIR=$(printf '%q' "$CACHEDIR_OPT")
-if ! command -v apptainer >/dev/null 2>&1; then
-  echo "lexichron: 'apptainer' not found; try: module load apptainer" >&2; exit 127
+runtime=$(printf '%q' "$RUNTIME")
+export APPTAINER_TMPDIR=$(printf '%q' "$TMPDIR_OPT") SINGULARITY_TMPDIR=$(printf '%q' "$TMPDIR_OPT")
+export APPTAINER_CACHEDIR=$(printf '%q' "$CACHEDIR_OPT") SINGULARITY_CACHEDIR=$(printf '%q' "$CACHEDIR_OPT")
+if ! command -v "\$runtime" >/dev/null 2>&1; then
+  for c in apptainer singularity; do
+    if command -v "\$c" >/dev/null 2>&1; then runtime="\$c"; break; fi
+  done
+fi
+if ! command -v "\$runtime" >/dev/null 2>&1; then
+  echo "lexichron: neither 'apptainer' nor 'singularity' found; try: module load apptainer (or singularity)" >&2
+  exit 127
 fi
 if [ ! -f "\$img" ]; then
   echo "lexichron: image \$img is missing (purged?); pulling oras://\$ref ..." >&2
   mkdir -p "\$(dirname "\$img")" "\$APPTAINER_TMPDIR" "\$APPTAINER_CACHEDIR"
-  apptainer pull "\$img" "oras://\$ref" || exit 1
+  "\$runtime" pull "\$img" "oras://\$ref" || exit 1
 fi
 binds=""
 for d in${CANDIDATES}; do
@@ -98,7 +110,7 @@ cat > "$BIN_DIR/lexichron" <<LAUNCHER
 #   lexichron acquire lexichron.yaml      lexichron --help
 set -u
 $PRELUDE
-exec apptainer exec \$binds "\$img" lexichron "\$@"
+exec "\$runtime" exec \$binds "\$img" lexichron "\$@"
 LAUNCHER
 chmod 755 "$BIN_DIR/lexichron"
 
@@ -124,7 +136,7 @@ bash "\$HOME/.lexichron/host_bridge.sh" "\$BRIDGE_DIR" &
 BRIDGE_PID=\$!
 trap 'touch "\$BRIDGE_DIR/stop"; kill \$BRIDGE_PID 2>/dev/null; wait \$BRIDGE_PID 2>/dev/null; rm -rf "\$BRIDGE_DIR"' EXIT
 # (no exec: the EXIT trap above must run to stop the helper)
-apptainer exec \$binds --env LEXICHRON_BRIDGE_DIR="\$BRIDGE_DIR" "\$img" lexichron ui "\$@"
+"\$runtime" exec \$binds --env LEXICHRON_BRIDGE_DIR="\$BRIDGE_DIR" "\$img" lexichron ui "\$@"
 exit \$?
 LAUNCHER
 chmod 755 "$BIN_DIR/lexichron-ui"

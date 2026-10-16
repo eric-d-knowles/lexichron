@@ -38,6 +38,10 @@ exit 1
 """
     (bin_dir / "apptainer").write_text(script)
     (bin_dir / "apptainer").chmod(0o755)
+    # the same stand-in under Singularity's name, kept aside until a test wants it
+    (bin_dir.parent / "singularity-only" / "singularity").parent.mkdir(parents=True, exist_ok=True)
+    (bin_dir.parent / "singularity-only" / "singularity").write_text(script.replace("APPTAINER_CONTAINER=", "SINGULARITY_CONTAINER="))
+    (bin_dir.parent / "singularity-only" / "singularity").chmod(0o755)
 
 
 @pytest.fixture
@@ -68,10 +72,10 @@ def test_install_ui_writes_both_commands(env):
         assert p.exists() and p.stat().st_mode & stat.S_IXUSR
         text = p.read_text()
         assert str(img) in text and "ghcr.io/eric-d-knowles/lexichron:0.1.0" in text
-        assert "apptainer pull" in text                      # re-pull when purged
+        assert '"$runtime" pull' in text                    # re-pull when purged
         assert "/opt" in text                                # extra bind carried over
     assert (env["home"] / ".lexichron" / "host_bridge.sh").exists()
-    assert "exec apptainer exec" in (bin_dir / "lexichron").read_text()
+    assert 'exec "$runtime" exec' in (bin_dir / "lexichron").read_text()
     ui = (bin_dir / "lexichron-ui").read_text()
     assert "exec apptainer" not in ui                                       # trap must run
     # one bridge directory per session, named by host and launcher pid
@@ -108,3 +112,30 @@ def test_install_sh_end_to_end(env):
     assert (bin_dir / "lexichron").exists() and (bin_dir / "lexichron-ui").exists()
     assert str(bin_dir) in (env["home"] / ".bashrc").read_text()      # PATH added
     assert "lexichron 0.1.0 is installed" in r.stdout
+
+
+def test_install_sh_works_with_singularity_instead_of_apptainer(env):
+    """A cluster that only has `singularity` (NYUAD's Jubail, say): the
+    installer uses it, and the launchers it writes run the image with it."""
+    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{os.environ['PATH']}")   # no fake apptainer
+    assert shutil.which("apptainer", path=e["PATH"]) is None
+    r = subprocess.run(["bash", str(INSTALL_SH)], env=e, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert "Container runtime: singularity" in r.stdout
+    calls = env["log"].read_text()
+    assert "pull" in calls and "--runtime singularity" in calls
+    bin_dir = env["home"] / ".local" / "bin"
+    launcher = (bin_dir / "lexichron").read_text()
+    assert "runtime=singularity" in launcher and "SINGULARITY_CACHEDIR=" in launcher
+    env["log"].write_text("")
+    r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=e, capture_output=True, text=True)
+    assert r.returncode == 0 and "exec: lexichron --help" in r.stdout
+    # a launcher written for apptainer still runs where only singularity exists
+    swapped = launcher.replace("runtime=singularity", "runtime=apptainer")
+    (bin_dir / "lexichron").write_text(swapped)
+    r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=e, capture_output=True, text=True)
+    assert r.returncode == 0 and "exec: lexichron --help" in r.stdout
+    # and neither at all is a clear message, not a stack of errors
+    bare = dict(e, PATH=os.environ["PATH"])
+    r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=bare, capture_output=True, text=True)
+    assert r.returncode == 127 and "neither 'apptainer' nor 'singularity'" in r.stderr

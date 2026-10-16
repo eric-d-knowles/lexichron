@@ -119,12 +119,15 @@ There are two ways to install lexichron:
 
 ### Container installation
 
-One command installs lexichron on a cluster that has Apptainer (most do; if
-`apptainer` is not on your PATH, `module load apptainer` first):
+One command installs lexichron on a cluster that has Apptainer or
+Singularity (most do; if neither is on your PATH, `module load apptainer`
+or `module load singularity` first):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eric-d-knowles/lexichron/main/install.sh | bash
 ```
+
+The `| bash` matters: without it, `curl` only prints the script.
 
 This pulls the current release image into `$SCRATCH/lexichron/` (or
 `~/.lexichron/`) and installs two commands in `~/.local/bin`:
