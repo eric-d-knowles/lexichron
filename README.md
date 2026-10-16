@@ -129,6 +129,15 @@ curl -fsSL https://raw.githubusercontent.com/eric-d-knowles/lexichron/main/insta
 
 The `| bash` matters: without it, `curl` only prints the script.
 
+The commands below are written for Apptainer. On a cluster that has
+Singularity instead (NYUAD's Jubail, for one), type `singularity` where
+they say `apptainer` — the rest of each command is the same — or put
+`alias apptainer=singularity` in your `~/.bashrc` and use them as written.
+The `lexichron` and `lexichron-ui` commands the installer writes, and the
+kernel launchers below, find whichever of the two is available by
+themselves, as long as it is on your PATH (load its module in the shell or
+job that starts Jupyter).
+
 This pulls the current release image into `$SCRATCH/lexichron/` (or
 `~/.lexichron/`) and installs two commands in `~/.local/bin`:
 
