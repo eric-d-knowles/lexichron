@@ -274,3 +274,12 @@ def test_temp_dir_expands_environment_variables(rocks, tmp_path, monkeypatch):
                      probes_per_decile=3, similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
                      temp_dir="$LEXICHRON_TEST_TMP/spool", train_fn=noting_train)
     assert seen and seen[0] == tmp_path / "local" / "spool"
+
+
+def test_suggestion_compares_cells_on_equal_years_only():
+    base = {"coverage": 0.9, "simlex_rho": 0.3, "seed_overlap": 0.5, "split_half_overlap": 0.4,
+            "adjacent_overlap": 0.4}
+    cells = [dict(base, cell="old_a", years=8), dict(base, cell="old_b", years=8, seed_overlap=0.55),
+             dict(base, cell="new", years=2, seed_overlap=0.7)]           # added later, early years only
+    best, rule = tune._suggest(cells)
+    assert best == "old_b" and "scored on 8 year(s)" in rule

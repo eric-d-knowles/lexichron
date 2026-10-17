@@ -553,6 +553,10 @@ def _suggest(per_cell: List[Dict[str, Any]]) -> Tuple[Optional[str], str]:
     within 0.05 of the best similarity correlation (when measured)."""
     if not per_cell:
         return None, ""
+    # only cells scored on the same years are comparable: a cell added to a
+    # grid later, with its early (more stable) years in, must not win on them
+    most_years = max(c.get("years", 0) for c in per_cell)
+    per_cell = [c for c in per_cell if c.get("years", 0) == most_years]
     def ok(v):
         return v == v                                  # not NaN
     cov_best = max((c["coverage"] for c in per_cell if ok(c["coverage"])), default=None)
@@ -569,7 +573,8 @@ def _suggest(per_cell: List[Dict[str, Any]]) -> Tuple[Optional[str], str]:
         return statistics.fmean(parts) if parts else -1.0
     best = max(eligible, key=stab)
     rule = ("most stable (mean of seed, split-half and adjacent-year neighbour overlap) among cells within "
-            "0.05 of the best coverage" + (f" and of the best {rho_key.replace('_rho', '')} correlation" if rho_best is not None else ""))
+            "0.05 of the best coverage" + (f" and of the best {rho_key.replace('_rho', '')} correlation" if rho_best is not None else "")
+            + f", of the cells scored on {most_years} year(s)")
     return best["cell"], rule
 
 

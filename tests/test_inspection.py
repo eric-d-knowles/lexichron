@@ -155,6 +155,11 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert s["results"][1]["seed_overlap"] != s["results"][1]["seed_overlap"]       # blank -> NaN
     o = inspection.search_overview(s)
     assert o["tiles"][0] == ("Cells", "2", "of 2 in the grid") and o["tiles"][1] == ("Years", "1/2", "in progress")
+    # all years scored for one cell but not the other: still in progress, and said so
+    s2 = dict(s, years_scored=[1990, 1991], cells=[dict(s["cells"][0], years=2), s["cells"][1]])
+    assert inspection.search_overview(s2)["tiles"][1] == ("Years", "2/2", "in progress; 1 cell(s) not yet on all years")
+    s3 = dict(s2, cells=[dict(c, years=2) for c in s2["cells"]])
+    assert inspection.search_overview(s3)["tiles"][1] == ("Years", "2/2", "finished")
     assert o["tiles"][2][1] == "1" and o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "")
     assert o["grid"].startswith("Grid: vector size 50/100  ·  2 seed(s)  ·  years 1990–1991, 2 sampled")
     assert "provisional: 1990 scored so far" in o["grid"]
