@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Tuple
 
+from lexichron.resources import available_cpus
+
 __all__ = ["filter_ngrams", "text_language_for"]
 
 # Google Books corpus id -> spaCy language code (stopwords and lemmatizer).
@@ -157,7 +159,7 @@ def filter_ngrams(
     paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     pipeline_config = PipelineConfig(
         src_db=paths["src_db"], tmp_dir=paths["tmp_dir"],
-        num_workers=workers or max(1, (__import__("os").cpu_count() or 2) - 1),
+        num_workers=workers or max(1, available_cpus() - 1),
         num_initial_work_units=None, mode=mode, output=output,
         use_smart_partitioning=True,
         compact_after_ingest=compact_after_ingest,

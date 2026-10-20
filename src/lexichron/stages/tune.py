@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+from lexichron.resources import available_cpus
 from lexichron.inspection import read_tsv_rows
 from lexichron.training import benchmarks, stability
 from lexichron.training.corpus import UNK_MODES, CorpusStats, corpus_file_name, write_corpus
@@ -147,7 +148,7 @@ def tune_models(
     spool = Path(os.path.expandvars(os.path.expanduser(temp_dir))) if temp_dir else out_dir / "corpus"   # $TMPDIR works
     spool.mkdir(parents=True, exist_ok=True)
 
-    total_cpus = workers or os.cpu_count() or 1
+    total_cpus = workers or available_cpus()      # the allocation's CPUs, not the node's
     per_model = max(1, int(workers_per_model))
     parallel = max(1, total_cpus // per_model)
 

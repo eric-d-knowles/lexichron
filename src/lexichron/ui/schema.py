@@ -323,7 +323,7 @@ SLURM_FIELDS = Section("slurm", [
     # parent becomes the limit); 28G covers 40 workers on 5-grams.
     Field("cpus", "int", 40, True, help="CPUs for the job (also used as the worker count unless set). "
           "Acquisition gains little beyond 40.", label="CPUs"),
-    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.7G per worker.", label="Memory"),
+    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; the Submit tab shows the estimate.", label="Memory"),
     Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS", label="Time limit"),
     Field("job_name", "text", "lexichron", False, help="Job name shown in squeue", label="Job name"),
 ])

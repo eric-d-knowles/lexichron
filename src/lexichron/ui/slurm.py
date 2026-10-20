@@ -72,7 +72,7 @@ def write_sbatch(
     cmd = stage_command(project_yaml, stage)
     # Let the job's CPU count drive the worker count unless the project sets it.
     sets = list(extra_sets or [])
-    if stage in ("acquire", "filter") and not any(s.startswith(f"{stage}.workers=") for s in sets):
+    if stage in ("acquire", "filter", "tune") and not any(s.startswith(f"{stage}.workers=") for s in sets):
         sets.append(f"{stage}.workers=$SLURM_CPUS_PER_TASK")
     for s in sets:
         cmd += ["--set", s]

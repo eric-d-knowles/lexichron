@@ -166,7 +166,10 @@ def download_and_ingest_to_rocksdb(
 
     # Determine worker count based on available CPUs and number of files
     if workers is None:
-        cpu_count = os.cpu_count() or 4
+        try:                                   # the allocation's CPUs inside a Slurm job, not the node's
+            cpu_count = len(os.sched_getaffinity(0))
+        except (AttributeError, OSError):
+            cpu_count = os.cpu_count() or 4
         # Use CPUs - 1 for overhead, capped by number of files to process
         workers = min(cpu_count - 1, len(file_urls_to_use))
         # Ensure at least 1 worker

@@ -616,17 +616,17 @@ def test_run_asks_before_deleting_earlier_output(tmp_path, monkeypatch):
             await pilot.pause()
             dialog = app.screen
             assert isinstance(dialog, ConfirmOverwrite)
-            body = str(dialog.query_one("#overwrite-body", Static).content)
+            body = str(dialog.query_one("#confirm-body", Static).content)
             assert "filter.mode = restart" in body and "5grams_pivoted.db" in body and "4.0 KB in 2 files" in body
-            assert str(dialog.query_one("#overwrite-go", Button).label) == "Delete 4.0 KB and start over"
-            await pilot.click("#overwrite-keep")
+            assert str(dialog.query_one("#confirm-go", Button).label) == "Delete 4.0 KB and start over"
+            await pilot.click("#confirm-keep")
             await pilot.pause()
             assert not isinstance(app.screen, ConfirmOverwrite) and started == []
             # confirming runs the stage, with --yes so the CLI does not ask again
             app._run_pressed()
             await app.workers.wait_for_complete()
             await pilot.pause()
-            await pilot.click("#overwrite-go")
+            await pilot.click("#confirm-go")
             await pilot.pause()
             assert started == [True]
             # in resume mode there is no dialog and no --yes
@@ -682,6 +682,53 @@ def test_clear_runs_keeps_every_run_still_going(tmp_path):
             await pilot.pause()
             assert training.exists() and quiet_job.exists()
             assert not dead_local.exists() and not finished.exists()
+        _assert_clean(app)
+
+    asyncio.run(scenario())
+
+
+def test_submit_warns_when_memory_is_too_small_for_the_workers(tmp_path, monkeypatch):
+    from textual.widgets import Button, Static
+    from lexichron.ui import app as app_module
+    from lexichron.ui.app import ConfirmMemory
+    stub = tmp_path / "data"
+    proj = tmp_path / "project.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
+                    "acquire: {}\nslurm:\n  account: acct\n  cpus: 64\n  mem: 16G\n")
+    written = []
+    monkeypatch.setattr(app_module, "write_sbatch", lambda *a, **k: written.append(k.get("assume_yes")) or (tmp_path / "x.sbatch"))
+
+    async def scenario():
+        app = LexichronApp(proj, stage="acquire")
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            line = str(app.query_one("#submit-memory", Static).content)
+            assert line.startswith("Memory: about ") and "64 workers" in line and "Slurm would kill it" in line
+            assert app.query_one("#submit-memory").has_class("over")
+            # Write batch script: no data at stake, but the memory question comes up
+            app._write_sbatch_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmMemory)
+            assert str(app.screen.query_one("#confirm-go", Button).label) == "Submit anyway"
+            await pilot.click("#confirm-keep")
+            await pilot.pause()
+            assert written == []
+            app._write_sbatch_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.click("#confirm-go")
+            await pilot.pause()
+            assert written == [False]
+            # enough memory: the line is plain and nothing is asked
+            app.query_one("#f-slurm-mem").value = "48G"
+            await pilot.pause()
+            assert not app.query_one("#submit-memory").has_class("over")
+            app._write_sbatch_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmMemory) and written == [False, False]
         _assert_clean(app)
 
     asyncio.run(scenario())

@@ -47,6 +47,7 @@ from lexichron.inspection import (LAYOUTS, STABILITY_NOTE, best_in_columns, cand
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
+from lexichron.resources import MemoryEstimate, memory_estimate
 from lexichron.safeguards import OverwriteRisk, overwrite_risk
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
@@ -276,43 +277,66 @@ class Meters(Vertical):
                 cell.update(self._text(*tile))
 
 
-class ConfirmOverwrite(ModalScreen[bool]):
-    """Asks before a stage deletes earlier output; dismisses with True to go ahead."""
+class Confirm(ModalScreen[bool]):
+    """A question with a safe answer and a risky one; dismisses with True
+    when the user takes the risky one."""
 
     DEFAULT_CSS = """
-    ConfirmOverwrite { align: center middle; }
-    ConfirmOverwrite > Vertical { width: 72; height: auto; border: thick $error; background: $surface; padding: 1 2; }
-    ConfirmOverwrite #overwrite-title { text-style: bold; color: $error; }
-    ConfirmOverwrite #overwrite-body { margin: 1 0; }
-    ConfirmOverwrite #overwrite-buttons { height: auto; align-horizontal: right; }
-    ConfirmOverwrite Button { margin-left: 1; }
+    Confirm { align: center middle; }
+    Confirm > Vertical { width: 72; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    Confirm.warning > Vertical { border: thick $warning; }
+    Confirm #confirm-title { text-style: bold; color: $error; }
+    Confirm.warning #confirm-title { color: $warning; }
+    Confirm #confirm-body { margin: 1 0; }
+    Confirm #confirm-buttons { height: auto; align-horizontal: right; }
+    Confirm Button { margin-left: 1; }
     """
-    BINDINGS = [("escape", "keep", "Keep it")]
+    BINDINGS = [("escape", "keep", "Back")]
 
-    def __init__(self, risk: OverwriteRisk, action: str) -> None:
-        super().__init__()
-        self.risk, self.action_label = risk, action
+    def __init__(self, title: str, body: str, go: str, keep: str, *, severity: str = "error") -> None:
+        super().__init__(classes=severity)
+        self.title_text, self.body_text, self.go_label, self.keep_label = title, body, go, keep
+        self.severity = severity
 
     def compose(self) -> ComposeResult:
-        r = self.risk
-        files = f"{r.nfiles:,} file{'s' if r.nfiles != 1 else ''}"
         with Vertical():
-            yield Static(f"This {self.action_label} deletes {r.what}", id="overwrite-title")
-            yield Static(f"{r.setting}\n\n{r.path}\n{r.size} in {files}\n\n"
-                         f"Everything there is lost and the stage starts from nothing. "
-                         f"To keep it, {r.keep_hint} and the stage carries on from what is there.",
-                         id="overwrite-body")
-            with Horizontal(id="overwrite-buttons"):
-                yield Button("Keep it", id="overwrite-keep", variant="primary")
-                yield Button(f"Delete {r.size} and start over", id="overwrite-go", variant="error")
+            yield Static(self.title_text, id="confirm-title")
+            yield Static(self.body_text, id="confirm-body")
+            with Horizontal(id="confirm-buttons"):
+                yield Button(self.keep_label, id="confirm-keep", variant="primary")
+                yield Button(self.go_label, id="confirm-go", variant=self.severity)
 
-    @on(Button.Pressed, "#overwrite-keep")
+    @on(Button.Pressed, "#confirm-keep")
     def action_keep(self) -> None:
         self.dismiss(False)
 
-    @on(Button.Pressed, "#overwrite-go")
+    @on(Button.Pressed, "#confirm-go")
     def _go(self) -> None:
         self.dismiss(True)
+
+
+class ConfirmOverwrite(Confirm):
+    """Asks before a stage deletes earlier output."""
+
+    def __init__(self, risk: OverwriteRisk, action: str) -> None:
+        files = f"{risk.nfiles:,} file{'s' if risk.nfiles != 1 else ''}"
+        super().__init__(f"This {action} deletes {risk.what}",
+                         f"{risk.setting}\n\n{risk.path}\n{risk.size} in {files}\n\n"
+                         f"Everything there is lost and the stage starts from nothing. "
+                         f"To keep it, {risk.keep_hint} and the stage carries on from what is there.",
+                         f"Delete {risk.size} and start over", "Keep it")
+        self.risk = risk
+
+
+class ConfirmMemory(Confirm):
+    """Asks before submitting a job whose memory looks too small for its workers."""
+
+    def __init__(self, estimate: MemoryEstimate) -> None:
+        super().__init__("This job's memory looks too small",
+                         f"{estimate.describe()}\n\nThe estimate is rough (working figures from 5-gram runs), "
+                         f"but a job that outgrows its memory is killed after waiting in the queue.",
+                         "Submit anyway", "Back to the settings", severity="warning")
+        self.estimate = estimate
 
 
 class LexichronApp(App):
@@ -345,6 +369,8 @@ class LexichronApp(App):
     #dest { padding: 0 1; height: auto; }
     #call { padding: 0 1; }
     #status { color: $warning; padding: 0 1; height: auto; }
+    #submit-memory { height: auto; margin: 0 0 1 0; }
+    #submit-memory.over { color: $warning; }
     .actions { height: auto; padding: 1 1 0 1; }
     .actions Button { margin-right: 2; }
     #runlog { height: 1fr; }
@@ -516,6 +542,7 @@ class LexichronApp(App):
                     with Horizontal(classes="actions"):
                         yield Button("Write batch script", id="write-sbatch")
                         yield Button("Submit to Slurm", id="submit", variant="primary")
+                    yield Static("", id="submit-memory", classes="muted")
                     yield Static("", id="submit-status")
             with TabPane("Progress", id="tab-jobs"):
                 with VerticalScroll():
@@ -734,6 +761,7 @@ class LexichronApp(App):
             return
         call.update(_format_call(self.func, kwargs))
         status.update("")
+        self._refresh_memory_line()
         if self.stage == "tune":
             self._refresh_grid_summary(kwargs)
 
@@ -834,8 +862,35 @@ class LexichronApp(App):
         """Run ``then(confirmed)`` once it is safe to: at once, with False, when
         the settings delete nothing; after the user has confirmed in a dialog,
         with True, when they do (the stage is then run with ``--yes``). Keeping
-        the data cancels the action."""
+        the data cancels the action. A job (``action == "job"``) is also held
+        for a second question when its memory looks too small for its workers."""
+        if action == "job":
+            inner = then
+
+            def then(confirmed: bool) -> None:
+                self._ask_memory(lambda: inner(confirmed))
         self._size_up_overwrite(action, then)
+
+    def _memory_estimate(self) -> Optional[MemoryEstimate]:
+        try:
+            kwargs = build_call(self.func, {k: v for k, v in self.config.items() if k in ("corpus", self.stage)},
+                                self.stage)
+            return memory_estimate(self.stage, kwargs, self.config.get("slurm") or {})
+        except Exception:
+            return None
+
+    def _ask_memory(self, then: Callable[[], None]) -> None:
+        est = self._memory_estimate()
+        if est is None or est.fits:
+            then()
+            return
+        self.push_screen(ConfirmMemory(est), lambda go: then() if go else None)
+
+    def _refresh_memory_line(self) -> None:
+        line = self.query_one("#submit-memory", Static)
+        est = self._memory_estimate()
+        line.update(est.describe() if est else "")
+        line.set_class(bool(est and not est.fits), "over")
 
     @work(thread=True, exclusive=True, group="guard")
     def _size_up_overwrite(self, action: str, then: Callable[[bool], None]) -> None:

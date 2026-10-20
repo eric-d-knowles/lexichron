@@ -424,7 +424,12 @@ Run and Submit act on.
   file; *Submit* also submits it and shows the job id. Run, Write batch
   script and Submit all check first whether the settings would make the
   stage delete its earlier output (a database, a tuning search); if so, a
-  dialog says what and how much, and *Keep it* cancels.
+  dialog says what and how much, and *Keep it* cancels. The tab also
+  shows a rough memory estimate for the job (workers × per-worker need plus
+  the parent process; the script sets the worker count from the CPUs unless
+  the stage's `workers` is set), and asks before submitting a job whose
+  memory looks too small — the usual way to lose a queue wait to an
+  out-of-memory kill.
 - **Progress** — the latest runs, newest first, whether started with *Run
   here* or by a Slurm job: a progress bar, what is being worked on, the
   run's inputs, a grid of meters, and the tail of the run's log (collapsed;
