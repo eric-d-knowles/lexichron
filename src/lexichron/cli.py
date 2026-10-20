@@ -1,10 +1,13 @@
 """``lexichron`` command line.
 
-    lexichron acquire lexichron.yaml [--set acquire.ngram_size=2] [--dry-run]
+    lexichron acquire lexichron.yaml [--set acquire.ngram_size=2] [--dry-run] [--yes]
 
 Each subcommand reads the project file, merges any ``--set`` overrides, builds
 the keyword arguments for the stage's Python entry point, and calls it. With
-``--dry-run`` it prints the call instead.
+``--dry-run`` it prints the call instead. When the settings make the stage
+delete earlier output (``acquire.overwrite_db``, ``filter.mode = restart``,
+``tune.mode = restart``) it says what and how much and asks first; ``--yes``
+answers for a batch job, which otherwise stops there.
 """
 from __future__ import annotations
 
@@ -54,6 +57,33 @@ def _format_call(func: Callable[..., Any], kwargs: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _confirm_overwrite(stage: str, kwargs: Dict[str, Any], *, assume_yes: bool = False) -> bool:
+    """Before a stage deletes earlier output (see lexichron.safeguards), say
+    what and how much, and ask. In a terminal the answer is typed; a batch
+    job has nobody to ask, so it needs ``--yes`` and otherwise stops here,
+    before any work is lost."""
+    from lexichron.safeguards import overwrite_risk
+    risk = overwrite_risk(stage, kwargs)
+    if risk is None:
+        return True
+    print(risk.describe(), file=sys.stderr, flush=True)
+    if assume_yes:
+        print("Going ahead (--yes).", file=sys.stderr, flush=True)
+        return True
+    if not sys.stdin.isatty():
+        print(f"lexichron {stage}: not deleting it without confirmation; run again with --yes "
+              f"to go ahead, or {risk.keep_hint} to keep it.", file=sys.stderr, flush=True)
+        return False
+    try:
+        answer = input("Delete it and start over? [y/N] ")
+    except EOFError:
+        answer = ""
+    if answer.strip().lower() in ("y", "yes"):
+        return True
+    print(f"lexichron {stage}: nothing deleted, nothing run.", file=sys.stderr, flush=True)
+    return False
+
+
 def _run_stage(stage: str, args: argparse.Namespace) -> int:
     dotted, _ = STAGES[stage]
     func = _resolve(dotted)
@@ -65,6 +95,9 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
     if args.dry_run:
         print(_format_call(func, kwargs))
         return 0
+
+    if not _confirm_overwrite(stage, kwargs, assume_yes=getattr(args, "yes", False)):
+        return 2
 
     # Progress document for this run, next to the project file, so that
     # `lexichron ui` and other tools can watch it.
@@ -193,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--dry-run", action="store_true",
             help="print the resolved call and exit without running it",
+        )
+        p.add_argument(
+            "--yes", "-y", action="store_true",
+            help="go ahead without asking when the settings delete earlier output "
+                 "(acquire.overwrite_db, filter.mode = restart, tune.mode = restart); "
+                 "a batch job cannot be asked and stops without this",
         )
         p.set_defaults(stage=stage)
 

@@ -33,12 +33,17 @@ def write_sbatch(
     *,
     out_path: Optional[str | os.PathLike] = None,
     extra_sets: Optional[List[str]] = None,
+    assume_yes: bool = False,
 ) -> Path:
     """Write ``<project>.<stage>.sbatch`` next to the project file and return its path.
 
     ``slurm`` holds account, partition, cpus, mem, time, job_name (see
     ``schema.SLURM_FIELDS``). Missing optional keys are omitted from the
     script. ``extra_sets`` are passed through as ``--set`` overrides.
+    ``assume_yes`` adds ``--yes``: the stage then deletes earlier output its
+    settings tell it to without asking, which a batch job cannot do (the UI
+    sets it after the user confirmed in its dialog); without it a job whose
+    settings would delete something stops at once instead.
     """
     project_yaml = Path(project_yaml).resolve()
     out = Path(out_path) if out_path else project_yaml.with_suffix(f".{stage}.sbatch")
@@ -71,6 +76,8 @@ def write_sbatch(
         sets.append(f"{stage}.workers=$SLURM_CPUS_PER_TASK")
     for s in sets:
         cmd += ["--set", s]
+    if assume_yes:
+        cmd.append("--yes")
     lines.append(" ".join(shlex.quote(c) if not c.endswith("workers=$SLURM_CPUS_PER_TASK") else c for c in cmd))
     lines.append("")
     out.write_text("\n".join(lines))

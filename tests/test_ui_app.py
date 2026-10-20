@@ -587,3 +587,55 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_run_asks_before_deleting_earlier_output(tmp_path, monkeypatch):
+    """Run in restart mode with a database on disk opens a dialog; Keep it
+    runs nothing, confirming runs the stage with --yes."""
+    from pathlib import Path
+    from textual.widgets import Button, Static
+    from ngramprep.ngram_acquire.db.build_path import build_db_path
+    from lexichron.ui.app import ConfirmOverwrite
+    stub = tmp_path / "data"
+    db = Path(build_db_path(str(stub), 5, "20200217", "eng-us")).parent / "5grams_pivoted.db"
+    db.mkdir(parents=True)
+    (db / "000001.sst").write_bytes(b"x" * 4000); (db / "CURRENT").write_text("MANIFEST\n")
+    proj = tmp_path / "project.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
+                    "filter:\n  mode: restart\n")
+    started = []
+
+    async def scenario():
+        app = LexichronApp(proj, stage="filter")
+        monkeypatch.setattr(app, "_run_stage", lambda log, project, assume_yes=False: started.append(assume_yes))
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            app._run_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            dialog = app.screen
+            assert isinstance(dialog, ConfirmOverwrite)
+            body = str(dialog.query_one("#overwrite-body", Static).content)
+            assert "filter.mode = restart" in body and "5grams_pivoted.db" in body and "4.0 KB in 2 files" in body
+            assert str(dialog.query_one("#overwrite-go", Button).label) == "Delete 4.0 KB and start over"
+            await pilot.click("#overwrite-keep")
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmOverwrite) and started == []
+            # confirming runs the stage, with --yes so the CLI does not ask again
+            app._run_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.click("#overwrite-go")
+            await pilot.pause()
+            assert started == [True]
+            # in resume mode there is no dialog and no --yes
+            app.query_one("#f-filter-mode", Select).value = "resume"
+            await pilot.pause()
+            app._run_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmOverwrite) and started == [True, False]
+        _assert_clean(app)
+
+    asyncio.run(scenario())

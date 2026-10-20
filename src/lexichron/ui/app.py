@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 from rich.text import Text
@@ -33,6 +33,7 @@ from textual import on, work
 from textual.message import Message
 from textual.app import App, ComposeResult
 from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
+from textual.screen import ModalScreen
 from textual.widgets import (
     Button, Collapsible, DataTable, Footer, Header, Input, Label, ProgressBar,
     RichLog, Select, Static, Switch, TabbedContent, TabPane,
@@ -46,6 +47,7 @@ from lexichron.inspection import (LAYOUTS, STABILITY_NOTE, best_in_columns, cand
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
+from lexichron.safeguards import OverwriteRisk, overwrite_risk
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
@@ -272,6 +274,45 @@ class Meters(Vertical):
             heading.update(title)
             for cell, tile in zip(cells, tiles):
                 cell.update(self._text(*tile))
+
+
+class ConfirmOverwrite(ModalScreen[bool]):
+    """Asks before a stage deletes earlier output; dismisses with True to go ahead."""
+
+    DEFAULT_CSS = """
+    ConfirmOverwrite { align: center middle; }
+    ConfirmOverwrite > Vertical { width: 72; height: auto; border: thick $error; background: $surface; padding: 1 2; }
+    ConfirmOverwrite #overwrite-title { text-style: bold; color: $error; }
+    ConfirmOverwrite #overwrite-body { margin: 1 0; }
+    ConfirmOverwrite #overwrite-buttons { height: auto; align-horizontal: right; }
+    ConfirmOverwrite Button { margin-left: 1; }
+    """
+    BINDINGS = [("escape", "keep", "Keep it")]
+
+    def __init__(self, risk: OverwriteRisk, action: str) -> None:
+        super().__init__()
+        self.risk, self.action_label = risk, action
+
+    def compose(self) -> ComposeResult:
+        r = self.risk
+        files = f"{r.nfiles:,} file{'s' if r.nfiles != 1 else ''}"
+        with Vertical():
+            yield Static(f"This {self.action_label} deletes {r.what}", id="overwrite-title")
+            yield Static(f"{r.setting}\n\n{r.path}\n{r.size} in {files}\n\n"
+                         f"Everything there is lost and the stage starts from nothing. "
+                         f"To keep it, {r.keep_hint} and the stage carries on from what is there.",
+                         id="overwrite-body")
+            with Horizontal(id="overwrite-buttons"):
+                yield Button("Keep it", id="overwrite-keep", variant="primary")
+                yield Button(f"Delete {r.size} and start over", id="overwrite-go", variant="error")
+
+    @on(Button.Pressed, "#overwrite-keep")
+    def action_keep(self) -> None:
+        self.dismiss(False)
+
+    @on(Button.Pressed, "#overwrite-go")
+    def _go(self) -> None:
+        self.dismiss(True)
 
 
 class LexichronApp(App):
@@ -772,12 +813,51 @@ class LexichronApp(App):
         path = self._save_quietly()
         if path is None:
             return
+        self._guard_overwrite("run", lambda confirmed: self._start_run(path, confirmed))
+
+    def _start_run(self, project: Path, assume_yes: bool) -> None:
         self.query_one(TabbedContent).active = "tab-run"
-        self._run_stage(self.query_one("#runlog", RichLog), path)
+        self._run_stage(self.query_one("#runlog", RichLog), project, assume_yes)
+
+    def _overwrite_risk(self) -> Optional[OverwriteRisk]:
+        """What the stage, with the settings as saved, would delete first (see
+        lexichron.safeguards); None when nothing on disk is at stake. Settings
+        the stage cannot be called with are the CLI's to report."""
+        try:
+            kwargs = build_call(self.func, {k: v for k, v in self.config.items() if k in ("corpus", self.stage)},
+                                self.stage)
+            return overwrite_risk(self.stage, kwargs)
+        except Exception:
+            return None
+
+    def _guard_overwrite(self, action: str, then: Callable[[bool], None]) -> None:
+        """Run ``then(confirmed)`` once it is safe to: at once, with False, when
+        the settings delete nothing; after the user has confirmed in a dialog,
+        with True, when they do (the stage is then run with ``--yes``). Keeping
+        the data cancels the action."""
+        self._size_up_overwrite(action, then)
+
+    @work(thread=True, exclusive=True, group="guard")
+    def _size_up_overwrite(self, action: str, then: Callable[[bool], None]) -> None:
+        risk = self._overwrite_risk()               # walks the database directory: off the UI thread
+        self.call_from_thread(self._ask_overwrite, risk, action, then)
+
+    def _ask_overwrite(self, risk: Optional[OverwriteRisk], action: str, then: Callable[[bool], None]) -> None:
+        if risk is None:
+            then(False)
+            return
+
+        def answered(confirmed: Optional[bool]) -> None:
+            if confirmed:
+                then(True)
+            else:
+                self.notify(f"Kept {risk.path.name}; nothing run", severity="warning")
+
+        self.push_screen(ConfirmOverwrite(risk, action), answered)
 
     @work(thread=True, exclusive=True, group="run")
-    def _run_stage(self, log: RichLog, project: Path) -> None:
-        cmd = [sys.executable, "-m", "lexichron.cli", self.stage, str(project)]
+    def _run_stage(self, log: RichLog, project: Path, assume_yes: bool = False) -> None:
+        cmd = [sys.executable, "-m", "lexichron.cli", self.stage, str(project)] + (["--yes"] if assume_yes else [])
         self.call_from_thread(log.write, "$ " + " ".join(cmd))
         env = dict(os.environ, PYTHONUNBUFFERED="1", TQDM_MININTERVAL="2")
         self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -813,9 +893,13 @@ class LexichronApp(App):
 
     @on(Button.Pressed, "#write-sbatch")
     def _write_sbatch_pressed(self) -> None:
+        if self._save_quietly() is None:
+            return
+        self._guard_overwrite("job", self._write_sbatch)
+
+    def _write_sbatch(self, assume_yes: bool) -> None:
         try:
-            self.action_save()
-            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg())
+            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
         except (ConfigError, OSError) as exc:
             self.query_one("#submit-status", Static).update(f"Could not write script: {exc}")
             return
@@ -824,10 +908,14 @@ class LexichronApp(App):
 
     @on(Button.Pressed, "#submit")
     def _submit_pressed(self) -> None:
+        if self._save_quietly() is None:
+            return
+        self._guard_overwrite("job", self._submit)
+
+    def _submit(self, assume_yes: bool) -> None:
         status = self.query_one("#submit-status", Static)
         try:
-            self.action_save()
-            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg())
+            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
             if not self.bridge:
                 raise BridgeUnavailable("no host bridge (LEXICHRON_BRIDGE_DIR not set)")
             job_id = self.bridge.sbatch(path)

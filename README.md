@@ -329,7 +329,15 @@ n-gram-keyed record; `--info` prints the database's provenance record instead). 
 `[2011] nuclear`; an n-gram-keyed database's as the n-gram; a Davies
 corpus's as `[fic][2000] text`. A vocabulary file is shown by rank.
 
-Misspelled or missing settings are reported before anything runs. Inside the
+Misspelled or missing settings are reported before anything runs. So is
+work about to be thrown away: when the settings make a stage delete its
+earlier output first (`acquire.overwrite_db`, `filter.mode: restart`,
+`tune.mode: restart` on a named search), the command says what would go and
+how much (`filter.mode = restart deletes the pivoted 5-gram database before
+starting: .../5grams_pivoted.db (412 GB in 1,204 files)`) and asks. A batch
+job has nobody to ask, so it needs `--yes` and otherwise stops right there,
+having deleted nothing; the UI adds `--yes` to the scripts it writes once you
+have confirmed in its dialog. Inside the
 container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml` (or a
 project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
 
@@ -373,7 +381,9 @@ rocks-shim's `scan` profile (only the files its range touches, nothing
 pinned, a small cache), so it needs about 200 MB however large the
 database is, and all the CPUs of an allocation can be used: 40 workers fit
 in the default 28G. A run that is interrupted resumes from the ranges
-it had finished (`mode: resume`); `mode: restart` starts over.
+it had finished (`mode: resume`); `mode: restart` starts over, after
+deleting the destination database, and both the UI and the command line ask
+before it does (see [Command line](#command-line)).
 
 ## Terminal user interface
 
@@ -411,7 +421,10 @@ Run and Submit act on.
   (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
   single process that merges their output into RocksDB becomes the limit.
   *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
-  file; *Submit* also submits it and shows the job id.
+  file; *Submit* also submits it and shows the job id. Run, Write batch
+  script and Submit all check first whether the settings would make the
+  stage delete its earlier output (a database, a tuning search); if so, a
+  dialog says what and how much, and *Keep it* cancels.
 - **Progress** — the latest runs, newest first, whether started with *Run
   here* or by a Slurm job: a progress bar, what is being worked on, the
   run's inputs, a grid of meters, and the tail of the run's log (collapsed;
