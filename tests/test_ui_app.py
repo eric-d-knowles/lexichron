@@ -554,7 +554,7 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
             await pilot.pause()
             assert app.query_one("#inspect-search").display and not app.query_one("#inspect-generic").display
             tiles = [str(t.content) for t in app.query("#search-meters .meter")]
-            assert any("Cells" in t and "2" in t for t in tiles) and any("2/4" in t and "in progress" in t for t in tiles)
+            assert any("Cells" in t and "2" in t for t in tiles) and any("2/4" in t and "complete for this grid" in t for t in tiles)
             assert any("vs300_w2_mc5_e5_sg1_wbfreq" in t for t in tiles)
             grid = str(app.query_one("#search-grid", Static).content)
             assert grid.startswith("Grid: vector size 100/300") and "1990, 1991 scored so far" in grid

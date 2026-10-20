@@ -154,20 +154,25 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert s["best_cell"] == "vs100_w2_mc5_e5_sg1_wbfreq" and len(s["results"]) == 2 and s["pairs"] == []
     assert s["results"][1]["seed_overlap"] != s["results"][1]["seed_overlap"]       # blank -> NaN
     o = inspection.search_overview(s)
-    assert o["tiles"][0] == ("Cells", "2", "of 2 in the grid") and o["tiles"][1] == ("Years", "1/2", "in progress")
-    # all years scored for one cell but not the other: still in progress, and said so
-    s2 = dict(s, years_scored=[1990, 1991], cells=[dict(s["cells"][0], years=2), s["cells"][1]])
-    assert inspection.search_overview(s2)["tiles"][1] == ("Years", "2/2", "in progress; 1 cell(s) not yet on all years")
-    s3 = dict(s2, cells=[dict(c, years=2) for c in s2["cells"]])
-    assert inspection.search_overview(s3)["tiles"][1] == ("Years", "2/2", "finished")
-    # cells outside the current grid do not count towards finishing it
+    assert o["tiles"][0] == ("Cells", "2", "in the table; from this grid")
+    assert o["tiles"][1] == ("Years", "1/2", "complete for this grid")          # both cells have 1990
+    assert o["tiles"][2] == ("Models", "1/8", "for this grid; 1 on disk in all")
+    assert o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "")
+    # 1991 scored for one cell but not the other: the year is under way, not complete
+    rows2 = s["results"] + [dict(s["results"][0], year=1991)]
+    s2 = dict(s, results=rows2, years_scored=[1990, 1991])
+    assert inspection.search_overview(s2)["tiles"][1] == ("Years", "1/2", "complete for this grid; 1991 under way")
+    s3 = dict(s2, results=rows2 + [dict(s["results"][1], year=1991)])
+    assert inspection.search_overview(s3)["tiles"][1] == ("Years", "2/2", "complete for this grid; finished")
+    # cells outside the current grid fill the table but do not count towards its progress
     s4 = dict(s3, settings=dict(s3["settings"], grid={"vector_size": [50, 100], "weight_by": ["none"]}))
-    assert inspection.search_overview(s4)["tiles"][1] == ("Years", "2/2", "in progress; 2 cell(s) not yet on all years")
-    assert o["tiles"][2][1] == "1" and o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "")
+    o4 = inspection.search_overview(s4)
+    assert o4["tiles"][0] == ("Cells", "2", "in the table; 0 from this grid, 2 from earlier grids")
+    assert o4["tiles"][1] == ("Years", "0/2", "complete for this grid; nothing scored yet")
     assert o["grid"].startswith("Grid: vector size 50/100  ·  2 seed(s)  ·  years 1990–1991, 2 sampled")
     assert "provisional: 1990 scored so far" in o["grid"]
     lines = inspection.format_search(s)
-    assert lines[0].startswith("Search 's2': Cells 2 (of 2 in the grid); Years 1/2 (in progress)")
+    assert lines[0].startswith("Search 's2': Cells 2 (in the table; from this grid); Years 1/2 (complete for this grid)")
     assert any(l.startswith("Suggested cell: vs100_w2_mc5_e5_sg1_wbfreq") for l in lines)
     headings, rows, stems = inspection.search_table(s)
     assert headings[:3] == ["", "Dims", "Years"]            # only the axis the grid varies, then the scores

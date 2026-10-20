@@ -498,24 +498,36 @@ def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
     sampled, scored = search["years_sampled"], search["years_scored"]
     seeds, halves = int(s.get("seeds", 1) or 1), bool(s.get("split_half", False))
     per_cell = seeds + (2 if halves else 0)
-    # finished only when every cell of the current grid has every sampled year
+    # progress is the current grid's: a year is complete when every cell of
+    # the grid has a row for it; cells from earlier grids only fill the table
     try:
         from lexichron.training.grid import Grid
         grid_stems = {c.stem for c in Grid.from_settings(grid).cells()} if grid else set()
     except Exception:
         grid_stems = set()
-    in_grid = [c for c in search["cells"] if not grid_stems or c.get("cell") in grid_stems]
-    cells_done = sum(1 for c in in_grid if int(c.get("years", 0) or 0) >= len(sampled))
-    done = bool(sampled) and len(scored) >= len(sampled) and cells_done >= n_grid
-    partial = n_grid - cells_done
-    years_note = ("finished" if done else
-                  f"in progress; {partial} cell(s) not yet on all years" if scored and partial and
-                  len(scored) >= len(sampled) else "in progress" if scored else "nothing scored yet")
+    years_by_cell: Dict[str, set] = {}
+    for r in search.get("results") or []:
+        if "cell" in r and "year" in r:
+            years_by_cell.setdefault(str(r["cell"]), set()).add(int(r["year"]))
+    if not grid_stems:
+        grid_stems = set(years_by_cell)
+    complete = [y for y in sampled if all(y in years_by_cell.get(stem, ()) for stem in grid_stems)]
+    under_way = [y for y in sampled if y not in complete and any(y in years_by_cell.get(stem, ()) for stem in grid_stems)]
+    done = bool(sampled) and len(complete) == len(sampled)
+    years_note = ("complete for this grid; finished" if done else
+                  "complete for this grid" + (f"; {', '.join(str(y) for y in under_way)} under way" if under_way else
+                                              "" if complete else "; nothing scored yet"))
     n_cells = len(search["cells"])
-    tiles = [("Cells", f"{n_cells}", f"of {n_grid} in the grid" if n_cells <= n_grid
-              else f"scored; {n_grid} in the current grid"),
-             ("Years", f"{len(scored)}/{len(sampled)}" if sampled else "–", years_note),
-             ("Models", f"{search['models_on_disk']:,}", f"on disk; {per_cell} per cell and year"),
+    n_here = sum(1 for c in search["cells"] if c.get("cell") in grid_stems)
+    cells_note = (f"from this grid" if n_here == n_cells else
+                  f"{n_here} from this grid, {n_cells - n_here} from earlier grids")
+    models_total = n_grid * len(sampled) * per_cell
+    models_dir = Path(search["path"]) / "models"
+    models_here = sum(sum(1 for _ in models_dir.glob(f"y*_{stem}_*.npz")) for stem in grid_stems) \
+        if models_dir.is_dir() else 0
+    tiles = [("Cells", f"{n_cells}", f"in the table; {cells_note}"),
+             ("Years", f"{len(complete)}/{len(sampled)}" if sampled else "–", years_note),
+             ("Models", f"{models_here:,}/{models_total:,}", f"for this grid; {search['models_on_disk']:,} on disk in all"),
              ("Suggested cell", search.get("best_cell") or "–", "")]
     years_text = (f"{sampled[0]}–{sampled[-1]}, {len(sampled)} sampled" if sampled else "?")
     grid_line = (f"Grid: {axes or 'one cell'}" + (f"  ·  fixed: {fixed}" if fixed else "")
