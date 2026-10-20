@@ -422,6 +422,27 @@ def read_search(search_dir: str) -> Dict[str, Any]:
     out["results"] = read_tsv_rows(d / "results.tsv")
     out["pairs"] = read_tsv_rows(d / "pairs.tsv")
     out["years_scored"] = sorted({int(r["year"]) for r in out["results"] if "year" in r})
+    # The per-cell table is rebuilt from the rows, so it covers every scored
+    # cell whatever version of the stage wrote summary.json (versions before
+    # 0.8.2 summarized only the current grid's cells); the file is the
+    # fallback when the rows cannot be summarized.
+    if out["results"]:
+        try:
+            from lexichron.stages.tune import summarize_results
+            from lexichron.training.grid import Cell
+            rows = {(r["cell"], int(r["year"])): r for r in out["results"] if "cell" in r and "year" in r}
+            cells = []
+            for stem in sorted({c for c, _ in rows}):
+                try:
+                    cells.append(Cell.from_stem(stem))
+                except Exception:
+                    pass
+            summary = summarize_results(rows, out["pairs"], cells)
+            if len(summary.get("cells") or []) > len(out["cells"]):      # the file knows fewer cells
+                out["cells"] = summary["cells"]
+                out["best_cell"], out["best_rule"] = summary.get("best_cell"), summary.get("best_rule") or ""
+        except Exception:
+            pass
     models = d / "models"
     out["models_on_disk"] = sum(1 for _ in models.glob("*.npz")) if models.is_dir() else 0
     from lexichron.provenance import read_provenance

@@ -188,3 +188,27 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
         assert cli.main(["inspect", str(search), "--key", "vs50_w2_mc5_e5_sg1_wbfreq"]) == 0
     out = buf.getvalue()
     assert "Dims" in out and "★  100" in out and "vs50_w2_mc5_e5_sg1_wbfreq: per year" in out
+
+
+def test_search_table_is_rebuilt_from_the_rows_when_the_summary_lags(tmp_path):
+    """A summary.json written by an older stage (or a narrowed grid) lists
+    fewer cells than results.tsv has: the rows win."""
+    import json
+    search = tmp_path / "tuning" / "s3"
+    search.mkdir(parents=True)
+    (search / "search.json").write_text(json.dumps({"grid": {"vector_size": [8]}, "sample_years": [1990, 1991],
+                                                     "seeds": 2, "split_half": False}))
+    (search / "summary.json").write_text(json.dumps({"cells": [{"cell": "vs8_w2_mc2_e1_sg1_wbfreq", "vector_size": 8,
+                                                                "years": 1, "coverage": 0.9, "simlex_rho": 0.3,
+                                                                "seed_overlap": 0.5}],
+                                                      "best_cell": "vs8_w2_mc2_e1_sg1_wbfreq", "best_rule": "old"}))
+    (search / "results.tsv").write_text("cell\tyear\tvector_size\twindow\tmin_count\tepochs\tapproach\tweight_by\t"
+                                        "vocab_size\tcoverage\tsimlex_rho\tseed_overlap\n"
+                                        "vs8_w2_mc2_e1_sg1_wbfreq\t1990\t8\t2\t2\t1\tskip-gram\tfreq\t100\t0.9\t0.3\t0.5\n"
+                                        "vs16_w2_mc2_e1_sg1_wbnone\t1990\t16\t2\t2\t1\tskip-gram\tnone\t100\t0.9\t0.3\t0.6\n"
+                                        "vs16_w2_mc2_e1_sg1_wbnone\t1991\t16\t2\t2\t1\tskip-gram\tnone\t100\t0.9\t0.3\t0.6\n")
+    s = inspection.read_search(str(search))
+    assert [c["cell"] for c in s["cells"]] == ["vs16_w2_mc2_e1_sg1_wbnone", "vs8_w2_mc2_e1_sg1_wbfreq"]
+    assert s["best_cell"] == "vs16_w2_mc2_e1_sg1_wbnone" and "scored on 2 year(s)" in s["best_rule"]
+    headings, rows, stems = inspection.search_table(s)
+    assert "Weighting" in headings and "Dims" in headings          # the rows differ on them
