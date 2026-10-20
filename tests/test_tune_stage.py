@@ -283,3 +283,15 @@ def test_suggestion_compares_cells_on_equal_years_only():
              dict(base, cell="new", years=2, seed_overlap=0.7)]           # added later, early years only
     best, rule = tune._suggest(cells)
     assert best == "old_b" and "scored on 8 year(s)" in rule
+
+
+def test_summary_keeps_cells_outside_a_narrowed_grid():
+    rows = {("vs8_w2_mc2_e1_sg1_wbfreq", 1990): {"cell": "vs8_w2_mc2_e1_sg1_wbfreq", "year": 1990, "coverage": 0.9,
+                                                 "simlex_rho": 0.3, "seed_overlap": 0.5},
+            ("vs8_w2_mc2_e1_sg1_wbnone", 1990): {"cell": "vs8_w2_mc2_e1_sg1_wbnone", "year": 1990, "coverage": 0.9,
+                                                 "simlex_rho": 0.3, "seed_overlap": 0.6}}
+    grid = tune.Grid.from_settings({"vector_size": [8], "window": [2], "min_count": [2], "epochs": [1],
+                                    "weight_by": ["freq"]})
+    summary = tune.summarize_results(rows, [], grid.cells())
+    assert [c["cell"] for c in summary["cells"]] == ["vs8_w2_mc2_e1_sg1_wbfreq", "vs8_w2_mc2_e1_sg1_wbnone"]
+    assert summary["best_cell"] == "vs8_w2_mc2_e1_sg1_wbnone"                 # the earlier cell still competes

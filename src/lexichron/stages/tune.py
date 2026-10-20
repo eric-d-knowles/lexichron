@@ -523,7 +523,19 @@ def _score_pair(cell: Cell, a: int, b: int, kind: str, models_dir: Path, k: int,
 def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[Dict[str, Any]],
                       cells: Sequence[Cell]) -> Dict[str, Any]:
     """Per-cell means over years, the year-pair figures, a signal-to-noise
-    ratio, and the suggested cell."""
+    ratio, and the suggested cell. Every cell with rows is summarized, the
+    grid's cells first: a grid narrowed on resume keeps its earlier cells in
+    the table (the rows are there; a search's tables are cumulative)."""
+    known = {c.stem for c in cells}
+    extra = []
+    for stem, _ in rows:
+        if stem not in known:
+            known.add(stem)
+            try:
+                extra.append(Cell.from_stem(stem))
+            except Exception:
+                pass
+    cells = list(cells) + sorted(extra, key=lambda c: c.stem)
     per_cell: List[Dict[str, Any]] = []
     for cell in cells:
         cell_rows = [r for (stem, _), r in rows.items() if stem == cell.stem]

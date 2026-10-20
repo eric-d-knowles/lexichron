@@ -484,7 +484,9 @@ def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
     years_note = ("finished" if done else
                   f"in progress; {partial} cell(s) not yet on all years" if scored and partial and
                   len(scored) >= len(sampled) else "in progress" if scored else "nothing scored yet")
-    tiles = [("Cells", f"{len(search['cells'])}", f"of {n_grid} in the grid"),
+    n_cells = len(search["cells"])
+    tiles = [("Cells", f"{n_cells}", f"of {n_grid} in the grid" if n_cells <= n_grid
+              else f"scored; {n_grid} in the current grid"),
              ("Years", f"{len(scored)}/{len(sampled)}" if sampled else "–", years_note),
              ("Models", f"{search['models_on_disk']:,}", f"on disk; {per_cell} per cell and year"),
              ("Suggested cell", search.get("best_cell") or "–", "")]
@@ -514,9 +516,9 @@ def search_table(search: Dict[str, Any]) -> Tuple[List[str], List[List[str]], Li
     the grid varies, then the scores; the suggested cell marked ★."""
     grid = (search.get("settings") or {}).get("grid") or {}
     cells = search.get("cells") or []
+    # a parameter column is shown when the grid varies it or the rows differ on it
     shown = [(k, h, kind) for k, h, kind in SEARCH_COLUMNS
-             if k not in PARAM_KEYS or len(grid.get(k) or []) > 1
-             or (k in PARAM_KEYS and not grid and len({c.get(k) for c in cells}) > 1)]
+             if k not in PARAM_KEYS or len(grid.get(k) or []) > 1 or len({c.get(k) for c in cells}) > 1]
     headings = ["", *(h for _, h, _ in shown)]
     rows, stems = [], []
     for c in cells:
