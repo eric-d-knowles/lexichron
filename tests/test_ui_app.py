@@ -639,3 +639,49 @@ def test_run_asks_before_deleting_earlier_output(tmp_path, monkeypatch):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_clear_runs_keeps_every_run_still_going(tmp_path):
+    """A tune run spends hours in its 'training' phase, which the runs table
+    labels by phase rather than 'running'; clearing finished runs must not
+    take it with them. Nor a Slurm run that has not written for a while
+    (the queue decides whether it is gone), while a local run that has
+    gone quiet with no live process is dead and goes."""
+    import json
+    from datetime import datetime, timedelta, timezone
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  db_path_stub: {tmp_path}\n"
+                    "acquire:\n  ngram_size: 1\n")
+    now = datetime.now(timezone.utc)
+    runs = tmp_path / ".lexichron" / "runs"
+
+    def write(name, **fields):
+        d = runs / name
+        d.mkdir(parents=True)
+        doc = dict(stage="tune", state="running", started=(now - timedelta(hours=2)).isoformat(timespec="seconds"),
+                   updated=now.isoformat(timespec="seconds"), finished=None, files_total=229, files_done=21,
+                   files_failed=0, files_skipped=59, entries_written=0, uncompressed_bytes=0, chunks=0, current=[],
+                   phases={"queued": 0, "parsing": 28, "parsed": 0, "ingesting": 0}, message="", db_path="/db",
+                   log_path=None, slurm_job_id=None, hostname="n1")
+        doc.update(fields)
+        d.joinpath("progress.json").write_text(json.dumps(doc))
+        return d
+
+    stale = (now - timedelta(minutes=20)).isoformat(timespec="seconds")
+    training = write("20261020_010000_tune", phase="training", slurm_job_id="7")      # in a long phase
+    quiet_job = write("20261020_020000_tune", updated=stale, slurm_job_id="8")        # Slurm run, no write for 20 min
+    dead_local = write("20261020_030000_tune", updated=stale)                         # local run, gone quiet, no process
+    finished = write("20261020_040000_tune", state="done", finished=now.isoformat(timespec="seconds"))
+
+    async def scenario():
+        app = LexichronApp(proj)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            app._clear_runs_pressed()
+            await pilot.pause()
+            assert training.exists() and quiet_job.exists()
+            assert not dead_local.exists() and not finished.exists()
+        _assert_clean(app)
+
+    asyncio.run(scenario())

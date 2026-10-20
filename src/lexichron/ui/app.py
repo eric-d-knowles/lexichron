@@ -953,7 +953,7 @@ class LexichronApp(App):
         removed = 0
         for d in self._run_dirs():
             p = read_progress(d / "progress.json")
-            if p and self._summarize(p)["state_label"] == "running":
+            if p and self._still_running(p):
                 continue
             try:
                 shutil.rmtree(d)
@@ -963,6 +963,24 @@ class LexichronApp(App):
         self.selected_run = None
         self.refresh_jobs()
         self.notify(f"Removed {removed} run{'s' if removed != 1 else ''}")
+
+    def _still_running(self, doc: Dict[str, Any]) -> bool:
+        """Whether a run may still be going: its record says running (whatever
+        the phase label says: a long phase such as training shows its own
+        name) and nothing says otherwise. Slurm saying the job has left the
+        queue settles it. A run with no job is a local one: ours if its process
+        is alive; otherwise it is trusted while its progress file is fresh
+        and taken as dead once that goes stale."""
+        if doc.get("state", "running") != "running":
+            return False
+        info = self._summarize(doc)
+        if info["state_label"] == "stopped":
+            return False
+        if doc.get("slurm_job_id"):
+            return True
+        if self.proc is not None and self.proc.poll() is None:
+            return True
+        return not info["stale"]
 
     # -- jobs & runs ----------------------------------------------------------------
     SQUEUE_EVERY_S = 15.0        # Slurm is asked this often; the run files every refresh
