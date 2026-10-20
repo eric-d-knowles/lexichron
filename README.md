@@ -563,10 +563,14 @@ settings before any final model is trained.
   tab shows a provisional picture at any point. Only one cell's models are
   in memory at a time: the stage needs a few hundred MB per training
   process (`workers / workers_per_model` of them) plus the corpus writer,
-  whatever the size of the grid. A year with fewer models than that
-  spreads the CPUs over the models it has (`workers_per_model` is a
-  minimum): a one-cell search trains its four models with 16 threads
-  each on 64 CPUs. The image rebuilds gensim's `corpus_file` reader free
+  whatever the size of the grid. Years are not a barrier: the models are
+  one queue in year order, a training slot that frees up takes the next
+  model whose corpus is ready, and corpora are written one year ahead, so
+  a year's last models and the next year's first ones train side by side
+  (a year's corpus and non-seed-0 models are deleted when its last model
+  lands). When fewer models remain than there are slots, each gets the
+  spare CPUs (`workers_per_model` is a minimum): a search down to its
+  last four models trains them with 16 threads each on 64 CPUs. The image rebuilds gensim's `corpus_file` reader free
   of the GIL (`scripts/patch_gensim.py`): the stock build re-takes the GIL
   once per line, which on five-token n-gram lines caps a model at three or
   four cores however many threads it has.

@@ -244,12 +244,13 @@ def test_threads_per_model_grow_when_a_year_has_few_models(rocks, tmp_path):
         threads.append(workers)
         return fake_train(corpus_file, cell, seed, workers)
 
-    # one cell, 4 models a year, 64 "CPUs" at 4 threads minimum: 16 threads each
+    # one cell, 4 models a year over 2 years, 64 "CPUs" at 4 threads minimum: the 8 models
+    # train side by side (years are not a barrier), 8 threads each
     tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990, 1991], vector_size=[8], window=[2],
                      min_count=[2], epochs=[1], seeds=2, name="t3", mode="restart", workers=64, workers_per_model=4,
                      probes_per_decile=3, similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
                      train_fn=counting_train)
-    assert threads == [16] * 8
+    assert threads == [8] * 8
     # four cells, 16 models a year: the slots are full, so the minimum applies
     threads.clear()
     tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990], vector_size=[8, 16], window=[2, 3],
@@ -295,3 +296,53 @@ def test_summary_keeps_cells_outside_a_narrowed_grid():
     summary = tune.summarize_results(rows, [], grid.cells())
     assert [c["cell"] for c in summary["cells"]] == ["vs8_w2_mc2_e1_sg1_wbfreq", "vs8_w2_mc2_e1_sg1_wbnone"]
     assert summary["best_cell"] == "vs8_w2_mc2_e1_sg1_wbnone"                 # the earlier cell still competes
+
+
+def test_years_train_side_by_side_in_the_pool(rocks, tmp_path, monkeypatch):
+    """With a real pool, a slot freed by one year's model takes the next
+    year's model: the tail of a year no longer idles the node. Run with a
+    thread pool and a stand-in trainer whose models take unequal times."""
+    import threading
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setattr(tune, "_pool", lambda n: ThreadPoolExecutor(max_workers=n))
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991, 1992])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "t5"
+    events = []                                # (what, year, cell, time)
+    lock = threading.Lock()
+
+    def slow_train(corpus_file, cell, seed, workers):
+        year = int(Path(corpus_file).name.split("_")[1].lstrip("y"))      # corpus_y1990_wbfreq_strip.txt
+        with lock:
+            events.append(("start", year, cell.stem, _time.monotonic()))
+        _time.sleep(0.3 if cell.vector_size == 16 else 0.05)      # the bigger cell is the straggler
+        res = fake_train(corpus_file, cell, seed, workers)
+        with lock:
+            events.append(("end", year, cell.stem, _time.monotonic()))
+        return res
+
+    tune.tune_models(5, "20200217", "eng", str(stub), sample_years=[1990, 1991, 1992], vector_size=[8, 16],
+                     window=[2], min_count=[2], epochs=[1], seeds=2, name="t5", mode="restart", workers=8,
+                     workers_per_model=4, probes_per_decile=3,
+                     similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"), train_fn=slow_train)
+    last_end_1990 = max(t for what, y, _, t in events if what == "end" and y == 1990)
+    first_start_1991 = min(t for what, y, _, t in events if what == "start" and y == 1991)
+    assert first_start_1991 < last_end_1990                  # 1991 began while 1990's straggler ran
+    assert len([e for e in events if e[0] == "start"]) == 2 * 3 * 4
+    # never more than the two slots at once
+    running = 0
+    for what, *_ in sorted(events, key=lambda e: e[3]):
+        running += 1 if what == "start" else -1
+        assert 0 <= running <= 2
+    # everything scored: 2 cells x 3 years, adjacent pairs x 2 cells, the distant pair x 2 cells
+    rows = tune._read_results(out / "results.tsv", [1990, 1991, 1992])
+    assert len(rows) == 6 and all(isinstance(r["seed_overlap"], float) for r in rows.values())
+    pairs = tune._read_pairs(out / "pairs.tsv", [1990, 1991, 1992])
+    assert sorted(pairs) == sorted([(c, a, b) for c in ("vs8_w2_mc2_e1_sg1_wbfreq", "vs16_w2_mc2_e1_sg1_wbfreq")
+                                    for a, b in ((1990, 1991), (1991, 1992), (1990, 1992))])
+    summary = json.loads((out / "summary.json").read_text())
+    assert {c["cell"]: c["years"] for c in summary["cells"]} == {"vs8_w2_mc2_e1_sg1_wbfreq": 3,
+                                                                  "vs16_w2_mc2_e1_sg1_wbfreq": 3}
+    # the corpora were cleaned up as each year finished
+    assert not list((out / "corpus").glob("*.txt"))
