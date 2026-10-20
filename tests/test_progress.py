@@ -51,3 +51,21 @@ def test_database_figure_leaves_out_bookkeeping_keys(tmp_path):
                                             "compacted": True}
     r.set_database(db, compacted=False, bookkeeping=2)
     assert read_progress(p)["database"]["compacted"] is False
+
+
+def test_write_survives_its_directory_being_removed(tmp_path):
+    """A UI clearing runs can remove a running job's run directory from
+    under it; the next write puts the directory back rather than raising,
+    so the run reappears and, above all, the job goes on."""
+    import shutil
+    p = tmp_path / "runs" / "r1" / "progress.json"
+    r = ProgressReporter(p, stage="tune", min_interval_s=0)
+    shutil.rmtree(p.parent)
+    r.set_totals(10)                                   # would have raised FileNotFoundError
+    assert read_progress(p)["files_total"] == 10
+    # a write that cannot succeed at all is reported, not raised
+    r.path = tmp_path / "nowhere"
+    r.path.write_text("a file where the directory should be")
+    r.path = r.path / "progress.json"
+    r.set_totals(11)
+    assert r._write_failed

@@ -56,6 +56,7 @@ class ProgressReporter:
                  inputs: Optional[Dict[str, Any]] = None) -> None:
         self.path = Path(path) if path else None
         self.min_interval_s = min_interval_s
+        self._write_failed = False
         self._last_write = 0.0
         # Which in-flight files are past which phase. Workers announce that
         # they have picked a file up by touching <tag>.started in the spool
@@ -255,9 +256,22 @@ class ProgressReporter:
         self.doc["updated"] = _now()
         self._update_phases()
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(self.doc, fh, indent=1)
-        os.replace(tmp, self.path)
+        # The document is advisory: a run must never die because it could
+        # not be written. Its directory may have been removed under a
+        # running job (a UI clearing finished runs, a tidy-up); recreate it,
+        # and if the write still fails, say so once and carry on.
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(self.doc, fh, indent=1)
+            os.replace(tmp, self.path)
+        except OSError as exc:
+            if not self._write_failed:
+                self._write_failed = True
+                import logging
+                logging.getLogger(__name__).warning("could not write the progress document %s: %s", self.path, exc)
+            return
+        self._write_failed = False
         self._last_write = now
 
 
