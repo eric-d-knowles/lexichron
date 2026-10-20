@@ -498,10 +498,16 @@ def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
     sampled, scored = search["years_sampled"], search["years_scored"]
     seeds, halves = int(s.get("seeds", 1) or 1), bool(s.get("split_half", False))
     per_cell = seeds + (2 if halves else 0)
-    # finished only when every cell of the grid has every sampled year
-    cells_done = sum(1 for c in search["cells"] if int(c.get("years", 0) or 0) >= len(sampled))
-    done = bool(sampled) and len(scored) >= len(sampled) and cells_done == n_grid
-    partial = len(search["cells"]) - cells_done
+    # finished only when every cell of the current grid has every sampled year
+    try:
+        from lexichron.training.grid import Grid
+        grid_stems = {c.stem for c in Grid.from_settings(grid).cells()} if grid else set()
+    except Exception:
+        grid_stems = set()
+    in_grid = [c for c in search["cells"] if not grid_stems or c.get("cell") in grid_stems]
+    cells_done = sum(1 for c in in_grid if int(c.get("years", 0) or 0) >= len(sampled))
+    done = bool(sampled) and len(scored) >= len(sampled) and cells_done >= n_grid
+    partial = n_grid - cells_done
     years_note = ("finished" if done else
                   f"in progress; {partial} cell(s) not yet on all years" if scored and partial and
                   len(scored) >= len(sampled) else "in progress" if scored else "nothing scored yet")

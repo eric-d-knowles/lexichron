@@ -171,3 +171,11 @@ def test_patch_gensim_edits_the_corpus_file_reader(tmp_path):
     # a second run (or another gensim) fails loudly rather than silently doing nothing
     r = subprocess.run([sys.executable, str(script), "--edit", str(tmp_path)], capture_output=True, text=True)
     assert r.returncode != 0 and "expected one occurrence" in r.stderr
+
+
+def test_cell_stem_round_trips_a_value_with_an_underscore():
+    c = grid.Cell(vector_size=100, window=5, min_count=1, epochs=10, approach="skip-gram", weight_by="doc_freq")
+    assert c.stem == "vs100_w5_mc1_e10_sg1_wbdoc_freq" and grid.Cell.from_stem(c.stem) == c
+    assert grid.Cell.from_stem("vs300_w2_mc5_e5_sg0_wbnone").approach == "cbow"
+    with pytest.raises(ValueError):
+        grid.Cell.from_stem("y1990_vs100_w5_mc1_e10_sg1_wbnone_s0")

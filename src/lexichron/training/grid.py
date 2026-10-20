@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Sequence, Tuple
+from typing import Optional, Any, Dict, Iterable, List, Sequence, Tuple
 
 __all__ = ["AXES", "Axis", "Cell", "Grid", "parse_axis"]
 
@@ -103,7 +103,23 @@ class Cell:
 
     @classmethod
     def from_stem(cls, stem: str) -> "Cell":
-        parts = dict(_split_tag(p) for p in stem.split("_"))
+        # a value may itself contain an underscore (wbdoc_freq): the pieces of
+        # the stem are the tagged fields in order, so a piece that carries no
+        # tag continues the value before it
+        parts: Dict[str, str] = {}
+        last: Optional[str] = None
+        expected = iter(["vs", "w", "mc", "e", "sg", "wb"])
+        for piece in stem.split("_"):
+            tag = next(expected, None) if last != "wb" else None
+            if tag is not None and piece.startswith(tag):
+                parts[tag] = piece[len(tag):]
+                last = tag
+            elif last is not None:
+                parts[last] += "_" + piece
+            else:
+                raise ValueError(f"not a cell stem: {stem!r}")
+        if set(parts) != {"vs", "w", "mc", "e", "sg", "wb"}:
+            raise ValueError(f"not a cell stem: {stem!r}")
         return cls(vector_size=int(parts["vs"]), window=int(parts["w"]), min_count=int(parts["mc"]),
                    epochs=int(parts["e"]), approach="skip-gram" if parts["sg"] == "1" else "cbow",
                    weight_by=parts["wb"])

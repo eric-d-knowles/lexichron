@@ -160,6 +160,9 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert inspection.search_overview(s2)["tiles"][1] == ("Years", "2/2", "in progress; 1 cell(s) not yet on all years")
     s3 = dict(s2, cells=[dict(c, years=2) for c in s2["cells"]])
     assert inspection.search_overview(s3)["tiles"][1] == ("Years", "2/2", "finished")
+    # cells outside the current grid do not count towards finishing it
+    s4 = dict(s3, settings=dict(s3["settings"], grid={"vector_size": [50, 100], "weight_by": ["none"]}))
+    assert inspection.search_overview(s4)["tiles"][1] == ("Years", "2/2", "in progress; 2 cell(s) not yet on all years")
     assert o["tiles"][2][1] == "1" and o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "")
     assert o["grid"].startswith("Grid: vector size 50/100  ·  2 seed(s)  ·  years 1990–1991, 2 sampled")
     assert "provisional: 1990 scored so far" in o["grid"]
