@@ -320,7 +320,8 @@ def test_years_train_side_by_side_in_the_pool(rocks, tmp_path, monkeypatch):
         year = int(Path(corpus_file).name.split("_")[1].lstrip("y"))      # corpus_y1990_wbfreq_strip.txt
         with lock:
             events.append(("start", year, cell.stem, _time.monotonic()))
-        _time.sleep(0.3 if cell.vector_size == 16 else 0.05)      # the bigger cell is the straggler
+        # one straggler per year (the bigger cell's second-half model, queued last for its year)
+        _time.sleep(0.5 if cell.vector_size == 16 and corpus_file.endswith("_b.txt") else 0.05)
         res = fake_train(corpus_file, cell, seed, workers)
         with lock:
             events.append(("end", year, cell.stem, _time.monotonic()))
