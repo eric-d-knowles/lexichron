@@ -277,6 +277,12 @@ class Meters(Vertical):
                 cell.update(self._text(*tile))
 
 
+def _aligned(value: str, width: int) -> str:
+    """A table cell padded to its column's width: numbers (and the "–" of a
+    missing one) flush right, labels flush left."""
+    return value.rjust(width) if value[:1].isdigit() or value == "–" else value.ljust(width)
+
+
 class Confirm(ModalScreen[bool]):
     """A question with a safe answer and a risky one; dismisses with True
     when the user takes the risky one."""
@@ -1308,12 +1314,15 @@ class LexichronApp(App):
         best = best_in_columns(search, headings)
         for h in headings:
             table.add_column(h, key=h or "best")
+        # numbers are right-aligned by padding, not Text(justify=...): the
+        # DataTable re-renders a hovered row by another path, which drops the
+        # justification and clips the cell (a column's width is its widest value)
+        widths = [max([len(h)] + [len(r[i]) for r in grid]) for i, h in enumerate(headings)]
         for row, stem in zip(grid, stems):
-            starred = row[0] == "★"
             cells = [Text(row[0], style="bold yellow")]
-            for h, v in zip(headings[1:], row[1:]):
+            for i, (h, v) in enumerate(zip(headings[1:], row[1:]), start=1):
                 style = "bold" if best.get(h) == v.split(" ")[0] and v != "–" else ""      # "0.600 ±.012"
-                cells.append(Text(v, style=style, justify="right" if v[:1].isdigit() or v == "–" else "left"))
+                cells.append(Text(_aligned(v, widths[i]), style=style))
             table.add_row(*cells, key=stem)
         col, reverse = self._search_sort
         if col is not None and col in headings:
@@ -1341,8 +1350,9 @@ class LexichronApp(App):
         if rows:
             for h in headings:
                 years.add_column(h)
+            widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headings)]
             for row in rows:
-                years.add_row(*(Text(v, justify="right") for v in row))
+                years.add_row(*(Text(_aligned(v, w)) for v, w in zip(row, widths)))
         text = cell_pairs(self._search, stem)
         pairs.update(text or ("No rows for this cell yet" if not rows else ""))
         pairs.display = bool(text) or not rows
@@ -1359,7 +1369,7 @@ class LexichronApp(App):
 
     def _sort_search_table(self, col: str, reverse: bool) -> None:
         def key(value):
-            text = str(value).replace(",", "").split(" ")[0]        # "0.590 ±.012" sorts by 0.590
+            text = str(value).replace(",", "").strip().split(" ")[0]        # "0.590 ±.012" sorts by 0.590
             try:
                 return (1, float(text))
             except ValueError:

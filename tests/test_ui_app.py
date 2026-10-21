@@ -562,24 +562,24 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
             assert table.row_count == 2
             headings = [str(c.label) for c in table.columns.values()]
             assert headings[:3] == ["", "Dims", "Years"]                     # window is fixed: not a column
-            rows = [[str(c) for c in table.get_row_at(i)] for i in range(2)]
+            rows = [[str(c).strip() for c in table.get_row_at(i)] for i in range(2)]    # padded to the column
             assert rows[0][:2] == ["", "100"] and rows[1][:2] == ["★", "300"]
             assert "25,000" in rows[1] and "0.810 ±.020" in rows[1]
             seed = headings.index("Seed")
             assert table.get_row_at(1)[seed].style == "bold" and table.get_row_at(0)[seed].style == ""   # column best
-            assert str(table.get_row_at(1)[seed]) == "0.810 ±.020"                                      # with its spread
+            assert str(table.get_row_at(1)[seed]).strip() == "0.810 ±.020"                              # with its spread
             # the suggested cell's years are shown to begin with
             assert str(app.query_one("#search-cell", Static).content) == "vs300_w2_mc5_e5_sg1_wbfreq by year"
             assert app.query_one("#search-years", DataTable).row_count == 2 and table.cursor_row == 1
             # sorting by a score column puts the best first; selecting a row shows its years
             app._sort_search_table("Seed", reverse=True)           # the heading-click sort; the ± text sorts by its mean
             await pilot.pause()
-            assert str(table.get_row_at(0)[0]) == "★"
+            assert str(table.get_row_at(0)[0]).strip() == "★"
             app._search_row_selected(DataTable.RowSelected(table, 0, table.coordinate_to_cell_key((0, 0)).row_key))
             await pilot.pause()
             assert str(app.query_one("#search-cell", Static).content) == "vs300_w2_mc5_e5_sg1_wbfreq by year"
             years = app.query_one("#search-years", DataTable)
-            assert years.row_count == 2 and [str(c) for c in years.get_row_at(1)] == ["1991", "26,000", "0.920", "0.820"]
+            assert years.row_count == 2 and [str(c).strip() for c in years.get_row_at(1)] == ["1991", "26,000", "0.920", "0.820"]
             assert "adjacent 1990–1991 0.750 / 0.900" in str(app.query_one("#search-pairs", Static).content)
             # the other stages keep the record inspector
             app.select_stage("filter")
