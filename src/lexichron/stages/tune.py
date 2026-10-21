@@ -711,9 +711,10 @@ def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[D
         if not cell_rows:
             continue
         s: Dict[str, Any] = {"cell": cell.stem, **cell.as_dict(), "years": len(cell_rows)}
+        rho_keys = sorted({k for r in cell_rows for k in r if k.endswith("_rho")})     # any similarity dataset
         for key in ("vocab_size", "coverage", "seed_overlap", "seed_cosine", "split_half_overlap",
-                    "split_half_cosine", "wordsim_rho", "simlex_rho", "analogy_accuracy",
-                    "axis_rho", "axis_coverage", "axis_seed", "axis_split_half"):
+                    "split_half_cosine", *rho_keys, "analogy_accuracy",
+                    "axis_coverage", "axis_seed", "axis_split_half"):
             vals = [r[key] for r in cell_rows if key in r and r[key] == r[key]]      # drop NaN
             s[key] = statistics.fmean(vals) if vals else float("nan")
             s[f"{key}_sd"] = statistics.stdev(vals) if len(vals) > 1 else float("nan")   # spread across years
@@ -746,38 +747,118 @@ def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[D
         s["change_ratio"] = (change / noise) if by_kind["adjacent"] and by_kind["period"] and noise > 0 \
             else float("nan")
         per_cell.append(s)
-    best, rule = _suggest(per_cell)
-    return {"cells": per_cell, "best_cell": best, "best_rule": rule}
+    picks = suggest_by_family(per_cell)
+    # the overall pick: the axis family's when axis scores exist, else the neighbourhoods'
+    overall = picks.get("axis") or picks.get("neighbourhoods") or {}
+    return {"cells": per_cell, "best_cell": overall.get("cell"), "best_rule": overall.get("rule", ""),
+            "suggestions": picks}
 
 
 def _suggest(per_cell: List[Dict[str, Any]]) -> Tuple[Optional[str], str]:
-    """The most stable cell among those within 0.05 of the best coverage and
-    within 0.05 of the best similarity correlation (when measured)."""
+    """The neighbourhood family's pick (kept under this name for the tests
+    and older callers); see :func:`suggest_by_family`."""
+    picks = suggest_by_family(per_cell)
+    chosen = picks.get("neighbourhoods") or {}
+    return chosen.get("cell"), chosen.get("rule", "")
+
+
+SB = lambda r: 2 * r / (1 + r) if r == r else r           # Spearman-Brown: half-corpus agreement -> full corpus
+
+
+def suggest_by_family(per_cell: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """One suggested cell per family of scores, each with the rule it was
+    chosen by, so the tool's opinion is legible and family-specific:
+
+    - ``benchmarks``: the best general-purpose space — highest mean of the
+      benchmark correlations and accuracy (SimLex, WordSim, analogy, axis
+      validity where measured) among cells within 0.02 of the best coverage.
+    - ``neighbourhoods``: the most stable neighbourhoods — mean of seed,
+      split-half and adjacent-year overlap — among cells within 0.05 of the
+      best coverage and of the best similarity correlation.
+    - ``axis``: the most reliable axis measurement — mean of the split-half
+      agreement (Spearman-Brown corrected to the full corpus) and the
+      adjacent-year agreement — among cells within 0.02 of the best coverage
+      and 0.01 of the best axis validity; of the cells within one standard
+      error of the best, the cheapest to train (fewest epochs, then
+      dimensions). Only when axis scores exist.
+
+    Only cells scored on the most years are compared: a cell added to a
+    grid later, with its early (more stable) years in, must not win on them.
+    """
     if not per_cell:
-        return None, ""
-    # only cells scored on the same years are comparable: a cell added to a
-    # grid later, with its early (more stable) years in, must not win on them
+        return {}
     most_years = max(c.get("years", 0) for c in per_cell)
-    per_cell = [c for c in per_cell if c.get("years", 0) == most_years]
+    cells = [c for c in per_cell if c.get("years", 0) == most_years]
+    scope = f", of the cells scored on {most_years} year(s)"
+
     def ok(v):
-        return v == v                                  # not NaN
-    cov_best = max((c["coverage"] for c in per_cell if ok(c["coverage"])), default=None)
-    rho_key = "simlex_rho" if any(ok(c.get("simlex_rho", float("nan"))) for c in per_cell) else "wordsim_rho"
-    rho_best = max((c[rho_key] for c in per_cell if ok(c.get(rho_key, float("nan")))), default=None)
-    eligible = [c for c in per_cell
-                if (cov_best is None or not ok(c["coverage"]) or c["coverage"] >= cov_best - 0.05)
-                and (rho_best is None or not ok(c.get(rho_key, float("nan"))) or c[rho_key] >= rho_best - 0.05)]
-    if not eligible:
-        eligible = per_cell
+        return isinstance(v, (int, float)) and v == v
+
+    def best_of(key):
+        return max((c[key] for c in cells if ok(c.get(key))), default=None)
+
+    def within(c, key, best, tol):
+        return best is None or not ok(c.get(key)) or c[key] >= best - tol
+
+    out: Dict[str, Dict[str, Any]] = {}
+    cov_best = best_of("coverage")
+
+    # benchmarks
+    bench_keys = [k for k in ("simlex_rho", "wordsim_rho", "analogy_accuracy", "axis_rho")
+                  if any(ok(c.get(k)) for c in cells)]
+    if bench_keys:
+        eligible = [c for c in cells if within(c, "coverage", cov_best, 0.02)] or cells
+
+        def bench(c):
+            parts = [c[k] for k in bench_keys if ok(c.get(k))]
+            return statistics.fmean(parts) if parts else -1.0
+        best = max(eligible, key=bench)
+        names = {"simlex_rho": "SimLex", "wordsim_rho": "WordSim", "analogy_accuracy": "analogy",
+                 "axis_rho": "axis validity"}
+        out["benchmarks"] = {"cell": best["cell"], "rule": "highest mean of " + ", ".join(names.get(k, k) for k in bench_keys)
+                             + " among cells within 0.02 of the best coverage" + scope}
+
+    # neighbourhoods (the original rule)
+    rho_key = "simlex_rho" if any(ok(c.get("simlex_rho")) for c in cells) else "wordsim_rho"
+    rho_best = best_of(rho_key)
+    eligible = [c for c in cells if within(c, "coverage", cov_best, 0.05) and within(c, rho_key, rho_best, 0.05)] \
+        or cells
 
     def stab(c):
-        parts = [c[k] for k in ("seed_overlap", "split_half_overlap", "adjacent_overlap") if ok(c[k])]
+        parts = [c[k] for k in ("seed_overlap", "split_half_overlap", "adjacent_overlap") if ok(c.get(k))]
         return statistics.fmean(parts) if parts else -1.0
     best = max(eligible, key=stab)
-    rule = ("most stable (mean of seed, split-half and adjacent-year neighbour overlap) among cells within "
-            "0.05 of the best coverage" + (f" and of the best {rho_key.replace('_rho', '')} correlation" if rho_best is not None else "")
-            + f", of the cells scored on {most_years} year(s)")
-    return best["cell"], rule
+    out["neighbourhoods"] = {"cell": best["cell"], "rule": (
+        "most stable (mean of seed, split-half and adjacent-year neighbour overlap) among cells within 0.05 of "
+        "the best coverage" + (f" and of the best {rho_key.replace('_rho', '')} correlation" if rho_best is not None
+                               else "") + scope)}
+
+    # axis
+    if any(ok(c.get("axis_split_half")) or ok(c.get("axis_adjacent")) for c in cells):
+        rho_best = best_of("axis_rho")
+        eligible = [c for c in cells if within(c, "coverage", cov_best, 0.02) and within(c, "axis_rho", rho_best, 0.01)] \
+            or cells
+
+        def reliability(c):
+            parts = [v for v in (SB(c.get("axis_split_half", float("nan"))), c.get("axis_adjacent", float("nan")))
+                     if ok(v)]
+            return statistics.fmean(parts) if parts else -1.0
+
+        def se(c):
+            # the score's standard error from the recorded spreads across years / pairs
+            n_years, n_pairs = max(1, c.get("years", 1)), max(1, c.get("years", 1) // 2)
+            parts = [v for v in (c.get("axis_split_half_sd", float("nan")) / n_years ** 0.5,
+                                 c.get("axis_adjacent_sd", float("nan")) / n_pairs ** 0.5) if ok(v)]
+            return statistics.fmean(parts) if parts else 0.0
+        top = max(eligible, key=reliability)
+        floor = reliability(top) - se(top)
+        tied = [c for c in eligible if reliability(c) >= floor]
+        best = min(tied, key=lambda c: (c.get("epochs", 0), c.get("vector_size", 0), -reliability(c)))
+        out["axis"] = {"cell": best["cell"], "rule": (
+            "most reliable axis measurement (mean of split-half agreement, corrected to the full corpus, and "
+            "adjacent-year agreement) among cells within 0.02 of the best coverage and 0.01 of the best axis "
+            "validity; of the cells within one standard error of the best, the cheapest to train" + scope)}
+    return out
 
 
 # ---------------------------------------------------------------- files
@@ -850,7 +931,11 @@ def _read_vocabulary(path) -> List[str]:
 
 def _similarity_sets(given: Optional[str]) -> Dict[str, str]:
     if given:
-        return {Path(given).stem.lower(): given}
+        stem = Path(given).stem.lower()
+        # a user's copy of a known dataset keeps its name, so its scores land
+        # in the summary's SimLex / WordSim columns
+        label = "simlex" if stem.startswith("simlex") else "wordsim" if stem.startswith("wordsim") else stem
+        return {label: given}
     sets = {}
     for label, fname in (("wordsim", "wordsim353.tsv"), ("simlex", "simlex999.txt")):
         p = benchmarks.bundled_dataset(fname)

@@ -105,7 +105,7 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
     row = dict(zip(header, results[1].split("\t")))
     assert row["year"] == "1990" and 0 < float(row["seed_overlap"]) <= 1 and 0 < float(row["split_half_overlap"]) <= 1
     assert float(row["coverage"]) > 0.5 and int(row["vocab_size"]) > 20
-    assert "simlex999_rho" in header and "analogy_accuracy" in header
+    assert "simlex_rho" in header and "analogy_accuracy" in header           # a user's simlex999.txt is SimLex
     # the valence-axis yardstick: validity, coverage of the rated words, and reliability of the projections
     assert -1 <= float(row["axis_rho"]) <= 1 and float(row["axis_coverage"]) > 0.5
     assert -1 <= float(row["axis_seed"]) <= 1 and -1 <= float(row["axis_split_half"]) <= 1
@@ -116,7 +116,9 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
     assert "seed_overlap_se" in header and 0 < float(row["seed_overlap_se"]) < 0.5
     summary = json.loads((out / "summary.json").read_text())
     assert len(summary["cells"]) == 2 and summary["best_cell"] in {c["cell"] for c in summary["cells"]}
-    assert "most stable" in summary["best_rule"]
+    assert "axis measurement" in summary["best_rule"]                       # overall: the axis family's pick
+    assert "most stable" in summary["suggestions"]["neighbourhoods"]["rule"]
+    assert "SimLex" in summary["suggestions"]["benchmarks"]["rule"]
     for c in summary["cells"]:
         assert c["years"] == 4 and c["adjacent_overlap"] == c["adjacent_overlap"]
         assert c["period_overlap"] == c["period_overlap"] and c["change_ratio"] > 0
@@ -471,3 +473,35 @@ def test_bundled_lexicon_is_the_default(rocks, tmp_path, monkeypatch):
     tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", axis_lexicon="none", train_fn=fake_train,
                      **common)
     assert "axis_rho" not in (out / "results.tsv").read_text().splitlines()[0]
+
+
+def test_suggestions_per_family():
+    from lexichron.training.grid import Cell
+    def cell(vs, e, **scores):
+        c = Cell(vector_size=vs, window=5, min_count=1, epochs=e, approach="skip-gram", weight_by="none")
+        return {"cell": c.stem, **c.as_dict(), "years": 8, "coverage": 0.999, **scores}
+    # the search's picture: 300 dims wins the benchmarks, 200/30 the neighbourhoods, 100 dims the axis
+    cells = [cell(100, 10, simlex_rho=0.356, wordsim_rho=0.64, analogy_accuracy=0.48, seed_overlap=0.567,
+                  split_half_overlap=0.348, adjacent_overlap=0.404, axis_rho=0.725, axis_split_half=0.968,
+                  axis_split_half_sd=0.004, axis_adjacent=0.974, axis_adjacent_sd=0.007),
+             cell(100, 30, simlex_rho=0.359, wordsim_rho=0.66, analogy_accuracy=0.47, seed_overlap=0.606,
+                  split_half_overlap=0.357, adjacent_overlap=0.413, axis_rho=0.725, axis_split_half=0.969,
+                  axis_split_half_sd=0.005, axis_adjacent=0.977, axis_adjacent_sd=0.006),
+             cell(200, 30, simlex_rho=0.395, wordsim_rho=0.67, analogy_accuracy=0.53, seed_overlap=0.60,
+                  split_half_overlap=0.352, adjacent_overlap=0.422, axis_rho=0.722, axis_split_half=0.956,
+                  axis_split_half_sd=0.007, axis_adjacent=0.968, axis_adjacent_sd=0.010),
+             cell(300, 30, simlex_rho=0.411, wordsim_rho=0.665, analogy_accuracy=0.54, seed_overlap=0.59,
+                  split_half_overlap=0.342, adjacent_overlap=0.412, axis_rho=0.721, axis_split_half=0.946,
+                  axis_split_half_sd=0.009, axis_adjacent=0.960, axis_adjacent_sd=0.013)]
+    picks = tune.suggest_by_family(cells)
+    assert picks["benchmarks"]["cell"].startswith("vs300_") and "SimLex" in picks["benchmarks"]["rule"]
+    assert picks["neighbourhoods"]["cell"].startswith("vs200_") and "most stable" in picks["neighbourhoods"]["rule"]
+    # 100/30 is best on the axis score but within one SE of 100/10, which is cheaper
+    assert picks["axis"]["cell"] == "vs100_w5_mc1_e10_sg1_wbnone" and "cheapest" in picks["axis"]["rule"]
+    summary = tune.summarize_results({(c["cell"], 1990): dict(c, year=1990) for c in cells}, [], [])
+    assert summary["best_cell"].startswith("vs100_") and "axis" in summary["best_rule"]   # overall: the axis pick
+    assert set(summary["suggestions"]) == {"benchmarks", "neighbourhoods", "axis"}
+    # without axis scores: the neighbourhood pick is the overall one, and there is no axis family
+    bare = [{k: v for k, v in c.items() if not k.startswith("axis_")} for c in cells]
+    picks = tune.suggest_by_family(bare)
+    assert "axis" not in picks and picks["neighbourhoods"]["cell"].startswith("vs200_")

@@ -43,7 +43,7 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import (LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns, candidates, cell_pairs, cell_years,
+from lexichron.inspection import (LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns, suggested_for, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
@@ -579,9 +579,9 @@ class LexichronApp(App):
                                      prompt="(searches of this corpus)")
                         yield Button("Reload", id="search-reload", compact=True)
                         yield Label("Columns", classes="search-opt")
-                        yield Select([("All", "all"), ("Quality", "quality"), ("Neighbourhoods", "neighbourhoods"),
-                                      ("Valence axis", "axis")], value="all", allow_blank=False,
-                                     id="search-view", compact=True)
+                        yield Select([("All", "all"), ("Benchmarks", "benchmarks"),
+                                      ("Neighbourhoods", "neighbourhoods"), ("Valence axis", "axis")],
+                                     value="all", allow_blank=False, id="search-view", compact=True)
                         yield Label("± spreads", classes="search-opt")
                         yield Switch(value=True, id="search-spreads")
                     yield Static("", id="search-empty")
@@ -1320,11 +1320,13 @@ class LexichronApp(App):
         overview = search_overview(search)
         self.query_one("#search-meters", Meters).show([("", overview["tiles"])])
         self.query_one("#search-grid", Static).update(overview["grid"])
+        view = self.query_one("#search-view", Select).value
+        view = str(view) if view is not Select.NULL else "all"
+        starred, rule = suggested_for(search, view)
         self.query_one("#search-legend-text", Static).update(
             STABILITY_NOTE + " Click a heading to sort by it (again to reverse); select a cell for its years."
-            + (f"\nSuggested cell: {overview['rule']}." if overview["rule"] else ""))
-        view = self.query_one("#search-view", Select).value
-        headings, grid, stems = search_table(search, view=str(view) if view is not Select.NULL else "all",
+            + (f"\n★ {starred}: {rule}." if starred and rule else ""))
+        headings, grid, stems = search_table(search, view=view,
                                              spreads=self.query_one("#search-spreads", Switch).value)
         best = best_in_columns(search, headings)
         if not (set(headings) - {"", "Years"} - {h for k, h, _ in SEARCH_COLUMNS if k in PARAM_KEYS}):
@@ -1346,8 +1348,8 @@ class LexichronApp(App):
         col, reverse = self._search_sort
         if col is not None and col in headings:
             self._sort_search_table(col, reverse)
-        if stems:                                        # the suggested cell's years to begin with
-            chosen = search.get("best_cell") if search.get("best_cell") in stems else stems[0]
+        if stems:                                        # the view's suggested cell's years to begin with
+            chosen = starred if starred in stems else stems[0]
             self._show_search_cell(chosen)
             try:
                 table.move_cursor(row=table.get_row_index(chosen))

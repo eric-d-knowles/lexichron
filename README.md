@@ -574,11 +574,23 @@ settings before any final model is trained.
   for a different axis; nothing in the default assumes a research question.
 - **The tables.** `tuning/<name>/results.tsv` (cell x year), `pairs.tsv`
   (year pairs), `summary.tsv` and `summary.json` (per cell, with the
-  change ratios) and a suggested cell: the most stable among cells within
-  0.05 of the best coverage and similarity correlation; the choice stays
-  yours. The Inspect tab shows the columns in groups (all, quality,
-  neighbourhoods, valence axis) with the ± spreads on or off, so the table
-  fits an ordinary window.
+  change ratios). The Inspect tab shows the columns in families
+  (benchmarks, neighbourhoods, valence axis, or all) with the ± spreads on
+  or off, so the table fits an ordinary window.
+- **The suggestions.** Each family stars its own cell by its own rule, and
+  says so: *benchmarks* — the highest mean of SimLex, WordSim, analogy and
+  axis validity among cells within 0.02 of the best coverage (the best
+  general-purpose space); *neighbourhoods* — the most stable by the mean of
+  seed, split-half and adjacent-year overlap, within 0.05 of the best
+  coverage and SimLex (for analyses built on nearest neighbours); *valence
+  axis* — the most reliable axis measurement by the mean of split-half
+  agreement (Spearman–Brown corrected to the full corpus) and adjacent-year
+  agreement, within 0.02 of the best coverage and 0.01 of the best axis
+  validity, and of the cells within one standard error of the best, the
+  cheapest to train (for analyses that project words onto axes). Only
+  cells scored on the most years are compared. The overall suggested cell
+  is the axis family's when axis scores exist, the neighbourhoods' otherwise;
+  the choice stays yours, and the columns are there to disagree with.
   With the Tune stage selected, the Inspect tab shows a search's scores:
   one row per cell (sortable by any column, the suggested cell starred),
   how far the search has got, and on selecting a cell its per-year rows

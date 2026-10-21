@@ -383,12 +383,30 @@ SEARCH_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
 # the score columns in groups, for a narrower table: view name -> keys
 COLUMN_VIEWS: Dict[str, Tuple[str, ...]] = {
     "all": tuple(k for k, _, _ in SEARCH_COLUMNS),
-    "quality": ("years", "vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy", "axis_rho"),
+    "benchmarks": ("years", "vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy", "axis_rho"),
     "neighbourhoods": ("years", "seed_overlap", "split_half_overlap", "adjacent_overlap", "period_overlap",
                        "change_ratio"),
-    "axis": ("years", "axis_rho", "axis_seed", "axis_split_half", "axis_adjacent", "axis_period",
-             "axis_change_ratio"),
+    "axis": ("years", "axis_rho", "axis_split_half", "axis_adjacent"),      # the columns that discriminate
 }
+VIEW_LABELS = {"all": "All", "benchmarks": "Benchmarks", "neighbourhoods": "Neighbourhoods", "axis": "Valence axis"}
+FAMILY_LABELS = {"benchmarks": "benchmarks", "neighbourhoods": "neighbourhoods", "axis": "valence axis"}
+
+
+def suggested_for(search: Dict[str, Any], view: str) -> Tuple[Optional[str], str]:
+    """The cell a view stars and the rule behind it: the view's own family's
+    pick (benchmarks, neighbourhoods, axis), the overall pick for "all"."""
+    picks = search.get("suggestions") or {}
+    if view in picks:
+        return picks[view].get("cell"), picks[view].get("rule", "")
+    return search.get("best_cell"), search.get("best_rule") or ""
+
+
+def suggestions_line(search: Dict[str, Any]) -> str:
+    """Every family's pick on one line: 'benchmarks: … · neighbourhoods: … · valence axis: …'."""
+    picks = search.get("suggestions") or {}
+    parts = [f"{FAMILY_LABELS[f]}: {picks[f]['cell']}" for f in ("benchmarks", "neighbourhoods", "axis")
+             if f in picks and picks[f].get("cell")]
+    return "  ·  ".join(parts)
 # a score shown as "0.590 ±.012": the mean, and its spread as the summary records it
 # (``<key>_sd`` across years or pairs) or as a per-year row records it (``<key>_se`` across probe words)
 SPREAD_SUFFIXES = ("_sd", "_se")
@@ -421,8 +439,8 @@ def read_search(search_dir: str) -> Dict[str, Any]:
     import json
     d = Path(search_dir).expanduser()
     out: Dict[str, Any] = {"path": str(d), "name": d.name, "settings": {}, "cells": [], "best_cell": None,
-                           "best_rule": "", "results": [], "pairs": [], "years_sampled": [], "years_scored": [],
-                           "models_on_disk": 0, "provenance": None}
+                           "best_rule": "", "suggestions": {}, "results": [], "pairs": [], "years_sampled": [],
+                           "years_scored": [], "models_on_disk": 0, "provenance": None}
     if not d.is_dir():
         out["error"] = f"{d}: no such directory"
         return out
@@ -436,6 +454,7 @@ def read_search(search_dir: str) -> Dict[str, Any]:
         summary = json.loads((d / "summary.json").read_text())
         out["cells"] = list(summary.get("cells") or [])
         out["best_cell"], out["best_rule"] = summary.get("best_cell"), summary.get("best_rule") or ""
+        out["suggestions"] = dict(summary.get("suggestions") or {})
     except (OSError, ValueError):
         pass
     out["results"] = read_tsv_rows(d / "results.tsv")
@@ -460,6 +479,13 @@ def read_search(search_dir: str) -> Dict[str, Any]:
             if len(summary.get("cells") or []) > len(out["cells"]):      # the file knows fewer cells
                 out["cells"] = summary["cells"]
                 out["best_cell"], out["best_rule"] = summary.get("best_cell"), summary.get("best_rule") or ""
+                out["suggestions"] = dict(summary.get("suggestions") or {})
+        except Exception:
+            pass
+    if out["cells"] and not out["suggestions"]:          # a summary from before the per-family picks
+        try:
+            from lexichron.stages.tune import suggest_by_family
+            out["suggestions"] = suggest_by_family(out["cells"])
         except Exception:
             pass
     models = d / "models"
@@ -547,7 +573,7 @@ def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
     tiles = [("Cells", f"{n_cells}", f"in the table; {cells_note}"),
              ("Years", f"{len(complete)}/{len(sampled)}" if sampled else "–", years_note),
              ("Models", f"{models_here:,}/{models_total:,}", f"for this grid; {search['models_on_disk']:,} on disk in all"),
-             ("Suggested cell", search.get("best_cell") or "–", "")]
+             ("Suggested cell", search.get("best_cell") or "–", suggestions_line(search))]
     years_text = (f"{sampled[0]}–{sampled[-1]}, {len(sampled)} sampled" if sampled else "?")
     grid_line = (f"Grid: {axes or 'one cell'}" + (f"  ·  fixed: {fixed}" if fixed else "")
                  + f"  ·  {seeds} seed(s)" + (" + split halves" if halves else "") + f"  ·  years {years_text}")
@@ -564,7 +590,12 @@ def format_search(search: Dict[str, Any]) -> List[str]:
     lines = [f"Search '{search['name']}': " + "; ".join(f"{label} {value} ({note})" if note else f"{label} {value}"
                                                        for label, value, note in o["tiles"][:3]),
              o["grid"]]
-    if search.get("best_cell"):
+    picks = search.get("suggestions") or {}
+    if picks:
+        for family in ("benchmarks", "neighbourhoods", "axis"):
+            if family in picks and picks[family].get("cell"):
+                lines.append(f"Suggested ({FAMILY_LABELS[family]}): {picks[family]['cell']} — {picks[family]['rule']}")
+    elif search.get("best_cell"):
         lines.append(f"Suggested cell: {search['best_cell']} — {o['rule']}")
     return lines
 
@@ -588,9 +619,10 @@ def search_table(search: Dict[str, Any], view: str = "all",
              if (k in PARAM_KEYS and (len(grid.get(k) or []) > 1 or len({c.get(k) for c in cells}) > 1))
              or (k not in PARAM_KEYS and k in keys and (k == "years" or has_value(k)))]
     headings = ["", *(h for _, h, _ in shown)]
+    starred, _ = suggested_for(search, view)
     rows, stems = [], []
     for c in cells:
-        rows.append(["★" if c.get("cell") == search.get("best_cell") else ""]
+        rows.append(["★" if c.get("cell") == starred else ""]
                     + [_fmt_score(c, key, kind, spreads) for key, _, kind in shown])
         stems.append(str(c.get("cell")))
     return headings, rows, stems

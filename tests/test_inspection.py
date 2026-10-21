@@ -158,7 +158,8 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert o["tiles"][0] == ("Cells", "2", "in the table; from this grid")
     assert o["tiles"][1] == ("Years", "1/2", "complete for this grid")          # both cells have 1990
     assert o["tiles"][2] == ("Models", "1/8", "for this grid; 1 on disk in all")
-    assert o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "")
+    assert o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq",
+                             "benchmarks: vs100_w2_mc5_e5_sg1_wbfreq  ·  neighbourhoods: vs100_w2_mc5_e5_sg1_wbfreq")
     # 1991 scored for one cell but not the other: the year is under way, not complete
     rows2 = s["results"] + [dict(s["results"][0], year=1991)]
     s2 = dict(s, results=rows2, years_scored=[1990, 1991])
@@ -174,7 +175,8 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert "provisional: 1990 scored so far" in o["grid"]
     lines = inspection.format_search(s)
     assert lines[0].startswith("Search 's2': Cells 2 (in the table; from this grid); Years 1/2 (complete for this grid)")
-    assert any(l.startswith("Suggested cell: vs100_w2_mc5_e5_sg1_wbfreq") for l in lines)
+    assert any(l.startswith("Suggested (neighbourhoods): vs100_w2_mc5_e5_sg1_wbfreq") for l in lines)
+    assert set(s["suggestions"]) == {"benchmarks", "neighbourhoods"}        # computed for an older summary.json
     headings, rows, stems = inspection.search_table(s)
     assert headings[:3] == ["", "Dims", "Years"]            # only the axis the grid varies, then the scores
     assert rows[0][0] == "" and rows[1][0] == "★"
@@ -192,7 +194,7 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert inspection.cell_detail(s, "nope") == ["nope: no rows yet"]
     # describe() and the CLI treat the directory as a search
     info = inspection.describe(str(search))
-    assert info["kind"] == "search" and "Suggested cell" in inspection.format_summary(info)
+    assert info["kind"] == "search" and "Suggested (neighbourhoods)" in inspection.format_summary(info)
     from lexichron import cli
     import io, contextlib
     buf = io.StringIO()
@@ -237,12 +239,28 @@ def test_search_table_views_and_spreads():
     assert "Split-half" not in h_all and "Period" not in h_all                 # never scored: left out
     assert rows[0][h_all.index("Seed")] == "0.500 ±.020"
     h, rows, _ = inspection.search_table(s, view="axis", spreads=False)
-    assert h == ["", "Years", "Axis ρ", "Axis seed", "Axis change"] and rows[0][2:] == ["0.600", "0.900", "1.100"]
+    assert h == ["", "Years", "Axis ρ"] and rows[0][2:] == ["0.600"]         # seed and change: the "all" view only
     h, rows, _ = inspection.search_table(s, view="neighbourhoods")
     assert h == ["", "Years", "Seed", "Change ratio"] and rows[0][2] == "0.500 ±.020"
-    h, _, _ = inspection.search_table(s, view="quality")
+    h, _, _ = inspection.search_table(s, view="benchmarks")
     assert h == ["", "Years", "Vocab", "Coverage", "SimLex ρ", "Axis ρ"]
     # a pair line shows the axis agreement when it was scored
     s["pairs"] = [{"cell": "a", "year_a": 1990, "year_b": 1991, "kind": "adjacent", "overlap": 0.7, "cosine": 0.9,
                    "axis": 0.95}]
     assert "axis agreement" in inspection.cell_pairs(s, "a") and "0.700 / 0.900 / 0.950" in inspection.cell_pairs(s, "a")
+
+
+def test_each_view_stars_its_own_family_pick():
+    cells = [{"cell": "a", "vector_size": 100, "years": 2, "coverage": 0.9, "simlex_rho": 0.3, "seed_overlap": 0.5},
+             {"cell": "b", "vector_size": 300, "years": 2, "coverage": 0.9, "simlex_rho": 0.4, "seed_overlap": 0.4}]
+    s = {"settings": {"grid": {"vector_size": [100, 300]}}, "cells": cells, "best_cell": "a", "best_rule": "overall",
+         "suggestions": {"benchmarks": {"cell": "b", "rule": "best benchmarks"},
+                         "neighbourhoods": {"cell": "a", "rule": "most stable"}}}
+    assert inspection.suggested_for(s, "benchmarks") == ("b", "best benchmarks")
+    assert inspection.suggested_for(s, "all") == ("a", "overall")
+    assert inspection.suggested_for(s, "axis") == ("a", "overall")           # no axis pick: the overall one
+    _, rows, _ = inspection.search_table(s, view="benchmarks")
+    assert [r[0] for r in rows] == ["", "★"]
+    _, rows, _ = inspection.search_table(s, view="neighbourhoods")
+    assert [r[0] for r in rows] == ["★", ""]
+    assert inspection.suggestions_line(s) == "benchmarks: b  ·  neighbourhoods: a"
