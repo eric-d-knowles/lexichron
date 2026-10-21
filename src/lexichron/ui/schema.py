@@ -30,7 +30,8 @@ ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path",
             # tune
-            "neighbours", "probes_per_decile", "similarity_dataset", "analogy_dataset", "temp_dir",
+            "neighbours", "probes_per_decile", "similarity_dataset", "analogy_dataset", "axis_lexicon",
+            "axis_poles", "temp_dir",
             "keep_models"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
@@ -120,6 +121,8 @@ LABELS: Dict[str, str] = {
     "probes_per_decile": "Probe words per decile",
     "similarity_dataset": "Similarity dataset",
     "analogy_dataset": "Analogy dataset",
+    "axis_lexicon": "Valence lexicon",
+    "axis_poles": "Axis pole words",
     "temp_dir": "Corpus file directory",
     "keep_models": "Keep models",
 }
@@ -190,6 +193,8 @@ HELP: Dict[str, str] = {
     "tune.probes_per_decile": "Probe words sampled from each frequency decile of the vocabulary.",
     "tune.similarity_dataset": "A word-pair similarity file (word, word, score per line). Blank: WordSim-353 and SimLex-999.",
     "tune.analogy_dataset": "An analogy questions file (a b c d per line). Blank: Google's questions-words.",
+    "tune.axis_lexicon": "Human valence ratings (word, rating per line) for the axis scores. Blank: the VADER lexicon the image carries.",
+    "tune.axis_poles": "Two lines of pole words, pleasant then unpleasant, for the axis. Blank: the implicit-association lists.",
     "tune.temp_dir": "Where the years' corpus files are written. Blank: inside the search directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
     "tune.keep_models": "Keep the trained models after scoring (they are small).",
 }

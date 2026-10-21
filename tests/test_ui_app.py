@@ -581,6 +581,19 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
             years = app.query_one("#search-years", DataTable)
             assert years.row_count == 2 and [str(c).strip() for c in years.get_row_at(1)] == ["1991", "26,000", "0.920", "0.820"]
             assert "adjacent 1990–1991 0.750 / 0.900" in str(app.query_one("#search-pairs", Static).content)
+            # a narrower view, and the spreads switched off
+            app.query_one("#search-view", Select).value = "neighbourhoods"
+            await pilot.pause()
+            headings = [str(c.label) for c in table.columns.values()]
+            assert "SimLex ρ" not in headings and "Seed" in headings
+            app.query_one("#search-spreads").value = False
+            await pilot.pause()
+            seed = [str(c.label) for c in table.columns.values()].index("Seed")
+            plain = str(table.get_row_at(0)[seed]).strip()
+            assert "±" not in plain and float(plain) > 0                           # no spread any more
+            app.query_one("#search-view", Select).value = "all"
+            app.query_one("#search-spreads").value = True
+            await pilot.pause()
             # the other stages keep the record inspector
             app.select_stage("filter")
             await pilot.pause()

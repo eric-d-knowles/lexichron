@@ -30,7 +30,7 @@ import numpy as np
 
 from lexichron.resources import available_cpus
 from lexichron.inspection import read_tsv_rows
-from lexichron.training import benchmarks, stability
+from lexichron.training import axis, benchmarks, stability
 from lexichron.training.corpus import UNK_MODES, CorpusStats, corpus_file_name, write_corpus
 from lexichron.training.grid import AXES, Cell, Grid, corpus_variants
 from lexichron.training.trainer import TrainFn, Vectors, load_vectors, save_vectors, train_model
@@ -68,6 +68,8 @@ def tune_models(
     probes_per_decile: int = 100,
     similarity_dataset: Optional[str] = None,
     analogy_dataset: Optional[str] = None,
+    axis_lexicon: Optional[str] = None,
+    axis_poles: Optional[str] = None,
     name: Optional[str] = None,
     mode: str = "resume",
     workers: Optional[int] = None,
@@ -110,6 +112,13 @@ def tune_models(
             and SimLex-999 as bundled with gensim)
         analogy_dataset: Analogy questions file (default: gensim's
             questions-words.txt)
+        axis_lexicon: Valence ratings (word, rating per line) for the axis
+            scores: how well words projected onto the model's pleasant-
+            unpleasant axis match human ratings, and how reliably models
+            place them (default: the VADER lexicon the image carries; blank
+            and absent: the axis scores are skipped)
+        axis_poles: Two lines of pole words, pleasant then unpleasant
+            (default: the implicit-association lists)
         name: Name of this search; its directory is
             <corpus>/tuning/<name>/ (default: a timestamp)
         mode: "resume" keeps models already trained; "restart" deletes the
@@ -173,6 +182,14 @@ def tune_models(
             raise FileNotFoundError(f"similarity dataset not found: {path}")
     if ana_set and not Path(ana_set).is_file():
         raise FileNotFoundError(f"analogy dataset not found: {ana_set}")
+    lexicon = axis_lexicon or benchmarks.bundled_dataset("vader_lexicon.txt")
+    if lexicon and not Path(lexicon).is_file():
+        raise FileNotFoundError(f"axis lexicon not found: {lexicon}")
+    if axis_poles and not Path(axis_poles).is_file():
+        raise FileNotFoundError(f"axis poles file not found: {axis_poles}")
+    yard = axis.load_axis(lexicon, axis_poles)
+    if yard is None:
+        logger.warning("no valence lexicon (axis_lexicon unset and none bundled): the axis scores are skipped")
 
     log_dir = out_dir / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -183,6 +200,9 @@ def tune_models(
         inputs[f"{label}_dataset"] = path
     if ana_set:
         inputs["analogy_dataset"] = ana_set
+    if yard is not None:
+        inputs["axis_lexicon"] = yard.lexicon_path
+        inputs["axis_poles"] = yard.poles_path or "built-in pleasant/unpleasant lists"
     progress = ProgressReporter(progress_path, stage="tune", db_path=out_dir, log_path=log_file,
                                 unit_label="models", inputs=inputs)
     tasks = plan_models(cells, sampled, seeds, split_half)
@@ -196,7 +216,9 @@ def tune_models(
     settings_record = {"grid": grid.as_settings(), "years": list(years), "sample_years": sampled,
                        "seeds": seeds, "split_half": split_half, "unk_mode": unk_mode,
                        "neighbours": neighbours, "probes_per_decile": probes_per_decile,
-                       "similarity_datasets": sim_sets, "analogy_dataset": ana_set}
+                       "similarity_datasets": sim_sets, "analogy_dataset": ana_set,
+                       "axis_lexicon": yard.lexicon_path if yard else None,
+                       "axis_poles": yard.poles_path if yard else None}
     (out_dir / "search.json").write_text(json.dumps(settings_record, indent=2))
 
     t_start = time.perf_counter()
@@ -261,7 +283,7 @@ def tune_models(
             progress.file_ingesting(stems["s0"])
             models = {kind: load_vectors(str(models_dir / f"{s}.npz")) for kind, s in stems.items()}
             rows[key] = _score_year(cell, year, models, seeds, split_half, neighbours, probes_per_decile,
-                                    vocab_words, sim_sets, ana_set)
+                                    vocab_words, sim_sets, ana_set, yard)
             del models
             _write_results(out_dir / RESULTS_FILE, rows)
             logger.info("scored %s y%s: %s", cell.stem, year,
@@ -291,7 +313,7 @@ def tune_models(
                 continue                                 # on disk: this grid's, or an earlier grid's
             if pk in pairs and sa not in trained and sb not in trained:
                 continue                                 # scored by an earlier run, nothing retrained
-            row = _score_pair(cell, a, b, kind, models_dir, neighbours, probes_per_decile)
+            row = _score_pair(cell, a, b, kind, models_dir, neighbours, probes_per_decile, yard)
             if row is not None:
                 pairs[pk] = row
                 paired_now.add(pk)
@@ -572,7 +594,7 @@ def _train_across_years(todo: List[ModelTask], sampled: Sequence[int], left_in_y
 # ---------------------------------------------------------------- scoring
 def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, split_half: bool,
                 k: int, per_decile: int, vocab_words: List[str], sim_sets: Dict[str, str],
-                ana_set: Optional[str]) -> Dict[str, Any]:
+                ana_set: Optional[str], yard: Optional[axis.Axis] = None) -> Dict[str, Any]:
     """The row for one cell and year from its models, keyed by kind (``s0``,
     ``s1``, ..., ``ha``, ``hb``)."""
     main = models["s0"]
@@ -610,6 +632,13 @@ def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, s
         acc, cov = benchmarks.analogy_accuracy(main, ana_set)
         row["analogy_accuracy"] = acc
         row["analogy_coverage"] = cov
+    if yard is not None:
+        # the valence axis as a yardstick: validity against human ratings, and
+        # the same reliability contrasts as the neighbourhoods, for projections
+        row["axis_rho"], row["axis_coverage"] = axis.validity(main, yard)
+        row["axis_seed"] = statistics.fmean(axis.agreement(main, models[f"s{i}"], yard) for i in range(1, seeds)) \
+            if seeds > 1 else float("nan")
+        row["axis_split_half"] = axis.agreement(models["ha"], models["hb"], yard) if split_half else float("nan")
     return row
 
 
@@ -628,7 +657,7 @@ def year_pairs_of(sampled: Sequence[int]) -> List[Tuple[int, int, str]]:
 
 
 def _score_pair(cell: Cell, a: int, b: int, kind: str, models_dir: Path, k: int,
-                per_decile: int) -> Optional[Dict[str, Any]]:
+                per_decile: int, yard: Optional[axis.Axis] = None) -> Optional[Dict[str, Any]]:
     """Agreement between the seed-0 models of two years (``adjacent``,
     ``period`` or ``distant``), loaded for the comparison and dropped; None
     when either model is not on disk."""
@@ -637,9 +666,12 @@ def _score_pair(cell: Cell, a: int, b: int, kind: str, models_dir: Path, k: int,
         return None
     ma, mb = load_vectors(str(pa)), load_vectors(str(pb))
     probes = stability.probe_words([ma, mb], per_decile=per_decile, seed=a * 10000 + b)
-    return {"cell": cell.stem, "year_a": a, "year_b": b, "kind": kind,
-            "overlap": stability.neighbour_overlap(ma, mb, probes, k),
-            "cosine": stability.aligned_cosine(ma, mb, probes)}
+    row = {"cell": cell.stem, "year_a": a, "year_b": b, "kind": kind,
+           "overlap": stability.neighbour_overlap(ma, mb, probes, k),
+           "cosine": stability.aligned_cosine(ma, mb, probes)}
+    if yard is not None:
+        row["axis"] = axis.agreement(ma, mb, yard)
+    return row
 
 
 def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[Dict[str, Any]],
@@ -665,17 +697,31 @@ def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[D
             continue
         s: Dict[str, Any] = {"cell": cell.stem, **cell.as_dict(), "years": len(cell_rows)}
         for key in ("vocab_size", "coverage", "seed_overlap", "seed_cosine", "split_half_overlap",
-                    "split_half_cosine", "wordsim_rho", "simlex_rho", "analogy_accuracy"):
+                    "split_half_cosine", "wordsim_rho", "simlex_rho", "analogy_accuracy",
+                    "axis_rho", "axis_coverage", "axis_seed", "axis_split_half"):
             vals = [r[key] for r in cell_rows if key in r and r[key] == r[key]]      # drop NaN
             s[key] = statistics.fmean(vals) if vals else float("nan")
             s[f"{key}_sd"] = statistics.stdev(vals) if len(vals) > 1 else float("nan")   # spread across years
         by_kind: Dict[str, List[float]] = {"adjacent": [], "period": [], "distant": []}
+        axis_by_kind: Dict[str, List[float]] = {"adjacent": [], "period": []}
         for p in pairs:
-            if p["cell"] == cell.stem and p["kind"] in by_kind and p["overlap"] == p["overlap"]:
+            if p["cell"] != cell.stem or p["kind"] not in by_kind:
+                continue
+            if p["overlap"] == p["overlap"]:
                 by_kind[p["kind"]].append(p["overlap"])
+            v = p.get("axis")
+            if p["kind"] in axis_by_kind and isinstance(v, (int, float)) and v == v:
+                axis_by_kind[p["kind"]].append(v)
         for kind, vals in by_kind.items():
             s[f"{kind}_overlap"] = statistics.fmean(vals) if vals else float("nan")
             s[f"{kind}_overlap_sd"] = statistics.stdev(vals) if len(vals) > 1 else float("nan")
+        for kind, vals in axis_by_kind.items():
+            s[f"axis_{kind}"] = statistics.fmean(vals) if vals else float("nan")
+            s[f"axis_{kind}_sd"] = statistics.stdev(vals) if len(vals) > 1 else float("nan")
+        a_noise = 1.0 - s["axis_adjacent"] if axis_by_kind["adjacent"] else float("nan")
+        a_change = 1.0 - s["axis_period"] if axis_by_kind["period"] else float("nan")
+        s["axis_change_ratio"] = (a_change / a_noise) if axis_by_kind["adjacent"] and axis_by_kind["period"] \
+            and a_noise > 0 else float("nan")
         # change between periods relative to change between adjacent years: the
         # between/within ratio of a one-way analysis of the neighbourhood
         # dissimilarities, >1 when periods differ by more than noise, whatever

@@ -18,11 +18,14 @@ EXPECTED = {
     "simlex999.txt": (999, "similarity"),
     "wordsim353.tsv": (353, "similarity"),
     "questions-words.txt": (19000, "analogy"),
+    "vader_lexicon.txt": (7000, "ratings"),
 }
 SOURCES = {
     "simlex999.txt": "SimLex-999: Hill, Reichart & Korhonen (2015), Computational Linguistics 41(4).",
     "wordsim353.tsv": "WordSim-353: Finkelstein et al. (2002), ACM TOIS 20(1).",
     "questions-words.txt": "Google analogy test set: Mikolov et al. (2013), 'Efficient Estimation of Word Representations in Vector Space'.",
+    "vader_lexicon.txt": "VADER sentiment lexicon (human valence ratings, -4..4): Hutto & Gilbert (2014), ICWSM-14; MIT licence, "
+                         "from https://github.com/cjhutto/vaderSentiment.",
 }
 
 
@@ -38,6 +41,11 @@ def count_records(path: Path, kind: str) -> int:
                 # the score is the first numeric field after the two words
                 # (SimLex-999 has a part-of-speech column before it)
                 if len(parts) >= 3 and any(_is_number(f) for f in parts[2:]):
+                    n += 1
+            elif kind == "ratings":
+                # a plain word and a numeric rating (VADER: token, mean, sd, ratings)
+                parts = line.split("\t")
+                if len(parts) >= 2 and parts[0].isalpha() and _is_number(parts[1]):
                     n += 1
             elif len(parts) == 4:
                 n += 1
@@ -55,7 +63,8 @@ def _is_number(f: str) -> bool:
 def main(argv):
     d = Path(argv[1])
     lines = ["# Evaluation datasets", "",
-             "Fetched at image build from https://github.com/piskvorky/gensim (gensim/test/test_data).", ""]
+             "Fetched at image build from https://github.com/piskvorky/gensim (gensim/test/test_data) and "
+             "https://github.com/cjhutto/vaderSentiment (vaderSentiment/vader_lexicon.txt).", ""]
     ok = True
     for name, (minimum, kind) in EXPECTED.items():
         p = d / name

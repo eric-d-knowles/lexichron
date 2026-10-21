@@ -179,7 +179,8 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert headings[:3] == ["", "Dims", "Years"]            # only the axis the grid varies, then the scores
     assert rows[0][0] == "" and rows[1][0] == "★"
     assert rows[0][headings.index("Vocab")] == "1,200" and rows[0][headings.index("Seed")] == "0.500"
-    assert rows[0][headings.index("Period")] == "–" and stems == [c["cell"] for c in cells]
+    assert "Period" not in headings and stems == [c["cell"] for c in cells]      # never scored: no column
+    assert rows[0][headings.index("Change ratio")] == "–"                          # scored for one cell: "–" for the other
     assert rows[1][headings.index("Seed")] == "0.600 ±.012"                   # a score with its spread
     assert rows[1][headings.index("Change ratio")] == "1.800"                 # no spread recorded: plain
     assert inspection.best_in_columns(s, headings) == {"SimLex ρ": "0.250", "Seed": "0.600", "Change ratio": "1.800"}   # coverage ties
@@ -223,3 +224,25 @@ def test_search_table_is_rebuilt_from_the_rows_when_the_summary_lags(tmp_path):
     assert s["best_cell"] == "vs16_w2_mc2_e1_sg1_wbnone" and "scored on 2 year(s)" in s["best_rule"]
     headings, rows, stems = inspection.search_table(s)
     assert "Weighting" in headings and "Dims" in headings          # the rows differ on them
+
+
+def test_search_table_views_and_spreads():
+    cells = [{"cell": "a", "vector_size": 50, "window": 2, "min_count": 5, "epochs": 5, "approach": "skip-gram",
+              "weight_by": "freq", "years": 2, "vocab_size": 1000, "coverage": 0.9, "simlex_rho": 0.3,
+              "seed_overlap": 0.5, "seed_overlap_sd": 0.02, "change_ratio": 1.4, "axis_rho": 0.6, "axis_seed": 0.9,
+              "axis_change_ratio": 1.1}]
+    s = {"settings": {"grid": {"vector_size": [50]}}, "cells": cells, "best_cell": "a"}
+    h_all, rows, _ = inspection.search_table(s)
+    assert "Seed" in h_all and "Axis ρ" in h_all and "Axis change" in h_all
+    assert "Split-half" not in h_all and "Period" not in h_all                 # never scored: left out
+    assert rows[0][h_all.index("Seed")] == "0.500 ±.020"
+    h, rows, _ = inspection.search_table(s, view="axis", spreads=False)
+    assert h == ["", "Years", "Axis ρ", "Axis seed", "Axis change"] and rows[0][2:] == ["0.600", "0.900", "1.100"]
+    h, rows, _ = inspection.search_table(s, view="neighbourhoods")
+    assert h == ["", "Years", "Seed", "Change ratio"] and rows[0][2] == "0.500 ±.020"
+    h, _, _ = inspection.search_table(s, view="quality")
+    assert h == ["", "Years", "Vocab", "Coverage", "SimLex ρ", "Axis ρ"]
+    # a pair line shows the axis agreement when it was scored
+    s["pairs"] = [{"cell": "a", "year_a": 1990, "year_b": 1991, "kind": "adjacent", "overlap": 0.7, "cosine": 0.9,
+                   "axis": 0.95}]
+    assert "axis agreement" in inspection.cell_pairs(s, "a") and "0.700 / 0.900 / 0.950" in inspection.cell_pairs(s, "a")

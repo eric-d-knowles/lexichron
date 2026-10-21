@@ -376,14 +376,29 @@ SEARCH_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
     ("seed_overlap", "Seed", "num"), ("split_half_overlap", "Split-half", "num"),
     ("adjacent_overlap", "Adjacent", "num"), ("period_overlap", "Period", "num"),
     ("change_ratio", "Change ratio", "num"),
+    ("axis_rho", "Axis ρ", "num"), ("axis_seed", "Axis seed", "num"), ("axis_split_half", "Axis split", "num"),
+    ("axis_adjacent", "Axis adjacent", "num"), ("axis_period", "Axis period", "num"),
+    ("axis_change_ratio", "Axis change", "num"),
 )
+# the score columns in groups, for a narrower table: view name -> keys
+COLUMN_VIEWS: Dict[str, Tuple[str, ...]] = {
+    "all": tuple(k for k, _, _ in SEARCH_COLUMNS),
+    "quality": ("years", "vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy", "axis_rho"),
+    "neighbourhoods": ("years", "seed_overlap", "split_half_overlap", "adjacent_overlap", "period_overlap",
+                       "change_ratio"),
+    "axis": ("years", "axis_rho", "axis_seed", "axis_split_half", "axis_adjacent", "axis_period",
+             "axis_change_ratio"),
+}
 # a score shown as "0.590 ±.012": the mean, and its spread as the summary records it
 # (``<key>_sd`` across years or pairs) or as a per-year row records it (``<key>_se`` across probe words)
 SPREAD_SUFFIXES = ("_sd", "_se")
 STABILITY_NOTE = ("Seed, split-half and adjacent: mean overlap of the ten nearest neighbours of probe words "
                   "between two models (1 = identical neighbourhoods), ± its spread across years; period: the "
                   "same between the first years of the sampled pairs; change ratio: period change over "
-                  "adjacent-year change (>1: periods differ by more than noise, whatever the shape of the change).")
+                  "adjacent-year change (>1: periods differ by more than noise, whatever the shape of the change). "
+                  "Axis: words projected onto the model's pleasant–unpleasant axis; ρ: Spearman correlation with "
+                  "human valence ratings; seed, split, adjacent, period: correlation of the projections between "
+                  "two models; change: axis period change over adjacent-year change.")
 
 
 def searches(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
@@ -481,7 +496,7 @@ def _typed(text: str) -> Any:
 PARAM_KEYS = ("vector_size", "window", "min_count", "epochs", "approach", "weight_by")
 SCORE_KEYS = tuple(k for k, _, _ in SEARCH_COLUMNS if k not in PARAM_KEYS)
 YEAR_KEYS = ("vocab_size", "coverage", "simlex_rho", "wordsim_rho", "analogy_accuracy", "seed_overlap",
-             "split_half_overlap")
+             "split_half_overlap", "axis_rho", "axis_seed", "axis_split_half")
 
 
 def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
@@ -554,27 +569,37 @@ def format_search(search: Dict[str, Any]) -> List[str]:
     return lines
 
 
-def search_table(search: Dict[str, Any]) -> Tuple[List[str], List[List[str]], List[str]]:
+def search_table(search: Dict[str, Any], view: str = "all",
+                 spreads: bool = True) -> Tuple[List[str], List[List[str]], List[str]]:
     """The per-cell summary as (headings, rows, cell stems): the parameters
-    the grid varies, then the scores; the suggested cell marked ★."""
+    the grid varies, then the scores of ``view`` (a COLUMN_VIEWS name); the
+    suggested cell marked ★. Score columns no cell has a value for are left
+    out (a search scored before a metric existed); ``spreads`` adds each
+    score's ± spread."""
     grid = (search.get("settings") or {}).get("grid") or {}
     cells = search.get("cells") or []
+    keys = COLUMN_VIEWS.get(view, COLUMN_VIEWS["all"])
+
+    def has_value(k: str) -> bool:
+        return any(isinstance(c.get(k), (int, float)) and c.get(k) == c.get(k) for c in cells)
+
     # a parameter column is shown when the grid varies it or the rows differ on it
     shown = [(k, h, kind) for k, h, kind in SEARCH_COLUMNS
-             if k not in PARAM_KEYS or len(grid.get(k) or []) > 1 or len({c.get(k) for c in cells}) > 1]
+             if (k in PARAM_KEYS and (len(grid.get(k) or []) > 1 or len({c.get(k) for c in cells}) > 1))
+             or (k not in PARAM_KEYS and k in keys and (k == "years" or has_value(k)))]
     headings = ["", *(h for _, h, _ in shown)]
     rows, stems = [], []
     for c in cells:
         rows.append(["★" if c.get("cell") == search.get("best_cell") else ""]
-                    + [_fmt_score(c, key, kind) for key, _, kind in shown])
+                    + [_fmt_score(c, key, kind, spreads) for key, _, kind in shown])
         stems.append(str(c.get("cell")))
     return headings, rows, stems
 
 
-def _fmt_score(record: Dict[str, Any], key: str, kind: str) -> str:
+def _fmt_score(record: Dict[str, Any], key: str, kind: str, spreads: bool = True) -> str:
     """A value and, for a score with a recorded spread, "± spread"."""
     text = _fmt_cell(record.get(key), kind)
-    if kind != "num" or text == "–":
+    if kind != "num" or text == "–" or not spreads:
         return text
     for suffix in SPREAD_SUFFIXES:
         spread = record.get(key + suffix)
@@ -612,9 +637,12 @@ def cell_pairs(search: Dict[str, Any], stem: str) -> str:
     pairs = [p for p in search.get("pairs") or [] if p.get("cell") == stem]
     if not pairs:
         return ""
-    return "Year pairs (neighbour overlap / aligned cosine):  " + "   ".join(
+    with_axis = any(isinstance(p.get("axis"), (int, float)) for p in pairs)
+    label = "Year pairs (neighbour overlap / aligned cosine" + (" / axis agreement):  " if with_axis else "):  ")
+    return label + "   ".join(
         f"{p.get('kind')} {p.get('year_a')}–{p.get('year_b')} {_fmt_cell(p.get('overlap'), 'num')} / "
-        f"{_fmt_cell(p.get('cosine'), 'num')}" for p in pairs)
+        f"{_fmt_cell(p.get('cosine'), 'num')}" + (f" / {_fmt_cell(p.get('axis'), 'num')}" if with_axis else "")
+        for p in pairs)
 
 
 def cell_detail(search: Dict[str, Any], stem: str) -> List[str]:

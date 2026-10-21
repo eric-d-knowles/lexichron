@@ -555,11 +555,30 @@ settings before any final model is trained.
   shape-checked, checksums in `SOURCES.md` there); a run records which
   file scored it. Elsewhere, set `similarity_dataset` / `analogy_dataset`
   or let gensim's own copies be found.
+- **The axis yardstick.** Much diachronic work measures words by projecting
+  them onto an axis between two sets of pole words. How well a model
+  supports that is checked with the one axis every space has and every
+  rater agrees on, valence: the pleasant/unpleasant lists of the
+  implicit-association literature (Greenwald et al. 1998, as in Caliskan
+  et al. 2017) define the axis in each model, and a lexicon of human
+  valence ratings — the VADER lexicon (Hutto & Gilbert 2014, MIT licence),
+  fetched into the image with the other datasets — is projected onto it.
+  *Axis ρ* is the Spearman correlation between the projections and the
+  ratings (validity); *axis seed*, *split* and *adjacent* the correlation
+  of the projections between two models, each on its own axis
+  (reliability of that kind of measurement, which is closer to what an
+  axis analysis needs than neighbourhood overlap); *axis period* and *axis
+  change* the period contrast and change ratio for projections. Any
+  `word <tab> rating` file serves as the lexicon (`axis_lexicon`: Warriner
+  et al.'s norms, say) and any two-line file as the poles (`axis_poles`),
+  for a different axis; nothing in the default assumes a research question.
 - **The tables.** `tuning/<name>/results.tsv` (cell x year), `pairs.tsv`
-  (year pairs), `summary.tsv` and `summary.json` (per cell, with a
-  signal-to-noise ratio: change over the span relative to change over a
-  year) and a suggested cell: the most stable among cells within 0.05 of
-  the best coverage and similarity correlation; the choice stays yours.
+  (year pairs), `summary.tsv` and `summary.json` (per cell, with the
+  change ratios) and a suggested cell: the most stable among cells within
+  0.05 of the best coverage and similarity correlation; the choice stays
+  yours. The Inspect tab shows the columns in groups (all, quality,
+  neighbourhoods, valence axis) with the ± spreads on or off, so the table
+  fits an ordinary window.
   With the Tune stage selected, the Inspect tab shows a search's scores:
   one row per cell (sortable by any column, the suggested cell starred),
   how far the search has got, and on selecting a cell its per-year rows

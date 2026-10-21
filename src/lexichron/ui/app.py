@@ -376,6 +376,7 @@ class LexichronApp(App):
     #call { padding: 0 1; }
     #status { color: $warning; padding: 0 1; height: auto; }
     #submit-memory { height: auto; margin: 0 0 1 0; }
+    .search-opt { margin-left: 2; }
     #submit-memory.over { color: $warning; }
     .actions { height: auto; padding: 1 1 0 1; }
     .actions Button { margin-right: 2; }
@@ -577,6 +578,12 @@ class LexichronApp(App):
                         yield Select([], allow_blank=True, id="search-name", compact=True,
                                      prompt="(searches of this corpus)")
                         yield Button("Reload", id="search-reload", compact=True)
+                        yield Label("Columns", classes="search-opt")
+                        yield Select([("All", "all"), ("Quality", "quality"), ("Neighbourhoods", "neighbourhoods"),
+                                      ("Valence axis", "axis")], value="all", allow_blank=False,
+                                     id="search-view", compact=True)
+                        yield Label("± spreads", classes="search-opt")
+                        yield Switch(value=True, id="search-spreads")
                     yield Static("", id="search-empty")
                     yield Meters(id="search-meters")
                     yield Static("", id="search-grid")
@@ -1283,6 +1290,12 @@ class LexichronApp(App):
     def _search_reload_pressed(self) -> None:
         self._refresh_searches()
 
+    @on(Select.Changed, "#search-view")
+    @on(Switch.Changed, "#search-spreads")
+    def _search_columns_changed(self) -> None:
+        if self._search is not None:
+            self._show_search(self._search)
+
     @work(thread=True, group="search", exclusive=True)
     def _load_search(self, path: str) -> None:
         search = read_search(path)
@@ -1310,7 +1323,9 @@ class LexichronApp(App):
         self.query_one("#search-legend-text", Static).update(
             STABILITY_NOTE + " Click a heading to sort by it (again to reverse); select a cell for its years."
             + (f"\nSuggested cell: {overview['rule']}." if overview["rule"] else ""))
-        headings, grid, stems = search_table(search)
+        view = self.query_one("#search-view", Select).value
+        headings, grid, stems = search_table(search, view=str(view) if view is not Select.NULL else "all",
+                                             spreads=self.query_one("#search-spreads", Switch).value)
         best = best_in_columns(search, headings)
         for h in headings:
             table.add_column(h, key=h or "best")

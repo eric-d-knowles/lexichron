@@ -48,6 +48,9 @@ def _datasets(tmp_path, monkeypatch=None):
     (d / "simlex999.txt").write_text("word1\tword2\tPOS\tSimLex999\nw01\tw02\tN\t8.0\nw03\tw04\tN\t2.0\nw05\tw06\tN\t5.0\nw07\tw08\tN\t1.0\n")
     (d / "wordsim353.tsv").write_text("# Word 1\tWord 2\tHuman (mean)\nw01\tw02\t9\nw03\tw04\t3\nw05\tw06\t6\n")
     (d / "questions-words.txt").write_text(": test\nw01 w02 w03 w04\nw05 w06 w07 w08\n")
+    # a valence lexicon over the corpus words (VADER's layout) and pole lists
+    (d / "vader_lexicon.txt").write_text("".join(f"w{i:02d}\t{(i - 25) / 5:.1f}\t0.5\t[0]\n" for i in range(10, 40)))
+    (d / "poles.txt").write_text("w00 w01 w02 w03 w04\nw05 w06 w07 w08 w09\n")
     if monkeypatch is not None:
         monkeypatch.setenv("LEXICHRON_DATA_DIR", str(d))
     return d
@@ -88,6 +91,8 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
                            workers=1, workers_per_model=1, probes_per_decile=3,
                            similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
                            analogy_dataset=str(tmp_path / "data" / "questions-words.txt"),
+                           axis_lexicon=str(tmp_path / "data" / "vader_lexicon.txt"),
+                           axis_poles=str(tmp_path / "data" / "poles.txt"),
                            progress_path=str(progress), train_fn=fake_train)
     out = Path(out)
     assert out == paths["pivoted_db"].parent / "tuning" / "t1"
@@ -101,6 +106,9 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
     assert row["year"] == "1990" and 0 < float(row["seed_overlap"]) <= 1 and 0 < float(row["split_half_overlap"]) <= 1
     assert float(row["coverage"]) > 0.5 and int(row["vocab_size"]) > 20
     assert "simlex999_rho" in header and "analogy_accuracy" in header
+    # the valence-axis yardstick: validity, coverage of the rated words, and reliability of the projections
+    assert -1 <= float(row["axis_rho"]) <= 1 and float(row["axis_coverage"]) > 0.5
+    assert -1 <= float(row["axis_seed"]) <= 1 and -1 <= float(row["axis_split_half"]) <= 1
     pairs = (out / "pairs.tsv").read_text().splitlines()
     kinds = [l.split("\t")[3] for l in pairs[1:]]
     # per cell: 2 adjacent pairs, 1 period pair (1990 vs 2010), and the first-vs-last pair for reference
@@ -113,8 +121,14 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
         assert c["years"] == 4 and c["adjacent_overlap"] == c["adjacent_overlap"]
         assert c["period_overlap"] == c["period_overlap"] and c["change_ratio"] > 0
         assert c["seed_overlap_sd"] >= 0 and c["adjacent_overlap_sd"] >= 0            # spread across years / pairs
+        assert c["axis_rho"] == c["axis_rho"] and c["axis_adjacent"] == c["axis_adjacent"]
+        assert c["axis_period"] == c["axis_period"] and c["axis_change_ratio"] == c["axis_change_ratio"]
+    pair_header = pairs[0].split("\t")
+    assert "axis" in pair_header                                                  # agreement per year pair
     assert (out / "summary.tsv").read_text().startswith("cell\t")
-    assert json.loads((out / "search.json").read_text())["sample_years"] == [1990, 1991, 2010, 2011]
+    search_json = json.loads((out / "search.json").read_text())
+    assert search_json["sample_years"] == [1990, 1991, 2010, 2011]
+    assert search_json["axis_lexicon"].endswith("vader_lexicon.txt") and search_json["axis_poles"].endswith("poles.txt")
     assert not list((out / "corpus").glob("*.txt"))                              # corpus files cleaned up
     doc = read_progress(progress)
     assert doc["state"] == "done" and doc["files_total"] == 32 and doc["files_done"] == 32
@@ -205,7 +219,7 @@ def test_check_datasets_script_verifies_shape_and_records_checksums(tmp_path):
     script = Path(__file__).parent.parent / "scripts" / "check_datasets.py"
     r = subprocess.run([sys.executable, str(script), str(d)], capture_output=True, text=True)
     assert r.returncode == 1 and "only 4 records" in r.stderr                # the tiny files are too small
-    assert (d / "SOURCES.md").read_text().count("sha256") == 3
+    assert (d / "SOURCES.md").read_text().count("sha256") == 4
 
 
 def test_cli_runs_tune_from_a_settings_file(rocks, tmp_path, monkeypatch):

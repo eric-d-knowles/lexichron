@@ -113,6 +113,10 @@ From: {{ BASE }}
         curl -fsSL --retry 5 --retry-delay 10 -o "/opt/lexichron/data/$f" \
             "https://raw.githubusercontent.com/piskvorky/gensim/4.3.3/gensim/test/test_data/$f"
     done
+    # the VADER lexicon (human valence ratings; MIT licence) is the yardstick
+    # for the search's axis scores
+    curl -fsSL --retry 5 --retry-delay 10 -o /opt/lexichron/data/vader_lexicon.txt \
+        "https://raw.githubusercontent.com/cjhutto/vaderSentiment/44fc044cd877310ee8278a0eadf34bcd50d41d06/vaderSentiment/vader_lexicon.txt"
     python /opt/lexichron/scripts/check_datasets.py /opt/lexichron/data
 
     # -------------------------------------------------------------------------
