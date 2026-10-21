@@ -453,3 +453,21 @@ def test_resume_adds_axis_scores_to_rows_scored_before_them(rocks, tmp_path):
     tune.tune_models(5, "20200217", "eng", str(stub), mode="resume", axis_lexicon=str(d / "vader_lexicon.txt"),
                      axis_poles=str(d / "poles.txt"), train_fn=fake_train, **common)
     assert (out / "results.tsv").stat().st_mtime_ns == before
+
+
+def test_bundled_lexicon_is_the_default(rocks, tmp_path, monkeypatch):
+    """With the lexicon bundled (LEXICHRON_DATA_DIR) and axis_lexicon unset,
+    the axis scores are computed; 'none' switches them off."""
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "t8"
+    _datasets(tmp_path, monkeypatch)                                  # bundles vader_lexicon.txt too
+    common = dict(sample_years=[1990, 1991], vector_size=[8], window=[2], min_count=[2], epochs=[1], seeds=2,
+                  name="t8", workers=1, probes_per_decile=3, axis_poles=str(tmp_path / "data" / "poles.txt"))
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", train_fn=fake_train, **common)
+    header = (out / "results.tsv").read_text().splitlines()[0]
+    assert "axis_rho" in header and "axis_seed" in header
+    assert json.loads((out / "search.json").read_text())["axis_lexicon"].endswith("vader_lexicon.txt")
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", axis_lexicon="none", train_fn=fake_train,
+                     **common)
+    assert "axis_rho" not in (out / "results.tsv").read_text().splitlines()[0]

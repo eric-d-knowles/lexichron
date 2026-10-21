@@ -182,8 +182,10 @@ def tune_models(
             raise FileNotFoundError(f"similarity dataset not found: {path}")
     if ana_set and not Path(ana_set).is_file():
         raise FileNotFoundError(f"analogy dataset not found: {ana_set}")
-    lexicon = None if str(axis_lexicon).strip().lower() in ("none", "off", "false") else \
-        axis_lexicon or benchmarks.bundled_dataset("vader_lexicon.txt")
+    if isinstance(axis_lexicon, str) and axis_lexicon.strip().lower() in ("none", "off", "false"):
+        lexicon = None                                   # switched off (an unset value is the default, not off)
+    else:
+        lexicon = axis_lexicon or benchmarks.bundled_dataset("vader_lexicon.txt")
     if lexicon and not Path(lexicon).is_file():
         raise FileNotFoundError(f"axis lexicon not found: {lexicon}")
     if axis_poles and not Path(axis_poles).is_file():
