@@ -43,7 +43,7 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import (LAYOUTS, STABILITY_NOTE, best_in_columns, candidates, cell_pairs, cell_years,
+from lexichron.inspection import (LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
@@ -1327,6 +1327,10 @@ class LexichronApp(App):
         headings, grid, stems = search_table(search, view=str(view) if view is not Select.NULL else "all",
                                              spreads=self.query_one("#search-spreads", Switch).value)
         best = best_in_columns(search, headings)
+        if not (set(headings) - {"", "Years"} - {h for k, h, _ in SEARCH_COLUMNS if k in PARAM_KEYS}):
+            self.query_one("#search-grid", Static).update(
+                overview["grid"] + "\n(no scores of this kind yet: a run on this version adds them to every "
+                "cell whose models are on disk)")
         for h in headings:
             table.add_column(h, key=h or "best")
         # numbers are right-aligned by padding, not Text(justify=...): the

@@ -425,3 +425,30 @@ def test_resume_scores_missing_pairs_for_every_cell_with_models(rocks, tmp_path)
     ratios = {c["cell"]: c["change_ratio"] for c in summary["cells"]}
     assert set(ratios) == {"vs8_w2_mc2_e1_sg1_wbfreq", "vs16_w2_mc2_e1_sg1_wbfreq"}
     assert all(r == r and r > 0 for r in ratios.values())
+
+
+def test_resume_adds_axis_scores_to_rows_scored_before_them(rocks, tmp_path):
+    """Rows and pairs from a run without a valence lexicon are rescored, from
+    the models on disk, by a resume that has one; nothing retrains."""
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "t7"
+    d = _datasets(tmp_path)
+    common = dict(sample_years=[1990, 1991], vector_size=[8], window=[2], min_count=[2], epochs=[1], seeds=2,
+                  name="t7", workers=1, probes_per_decile=3, similarity_dataset=str(d / "simlex999.txt"))
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", train_fn=fake_train, **common)
+    assert "axis_rho" not in (out / "results.tsv").read_text().splitlines()[0]
+    trained = []
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="resume", axis_lexicon=str(d / "vader_lexicon.txt"),
+                     axis_poles=str(d / "poles.txt"), train_fn=lambda *a: trained.append(a) or fake_train(*a), **common)
+    assert trained == []
+    rows = tune._read_results(out / "results.tsv", [1990, 1991])
+    assert len(rows) == 2 and all(r["axis_coverage"] == r["axis_coverage"] for r in rows.values())
+    pairs = tune._read_pairs(out / "pairs.tsv", [1990, 1991])
+    assert all(isinstance(p.get("axis"), float) for p in pairs.values())
+    assert "axis_adjacent" in json.loads((out / "summary.json").read_text())["cells"][0]
+    # a third run has nothing left to do: the tables are untouched
+    before = (out / "results.tsv").stat().st_mtime_ns
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="resume", axis_lexicon=str(d / "vader_lexicon.txt"),
+                     axis_poles=str(d / "poles.txt"), train_fn=fake_train, **common)
+    assert (out / "results.tsv").stat().st_mtime_ns == before

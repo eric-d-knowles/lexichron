@@ -279,7 +279,7 @@ def tune_models(
         scored it and nothing of it was retrained."""
         key = (cell.stem, year)
         stems = {kind: _stem(cell, year, kind) for kind in kinds}
-        if key not in rows or any(s in trained for s in stems.values()):
+        if key not in rows or any(s in trained for s in stems.values()) or _lacks_axis(rows[key], yard):
             progress.file_ingesting(stems["s0"])
             models = {kind: load_vectors(str(models_dir / f"{s}.npz")) for kind, s in stems.items()}
             rows[key] = _score_year(cell, year, models, seeds, split_half, neighbours, probes_per_decile,
@@ -311,7 +311,7 @@ def tune_models(
                 continue
             if not all(st in trained or (models_dir / f"{st}.npz").exists() for st in (sa, sb)):
                 continue                                 # on disk: this grid's, or an earlier grid's
-            if pk in pairs and sa not in trained and sb not in trained:
+            if pk in pairs and sa not in trained and sb not in trained and not _lacks_axis(pairs[pk], yard):
                 continue                                 # scored by an earlier run, nothing retrained
             row = _score_pair(cell, a, b, kind, models_dir, neighbours, probes_per_decile, yard)
             if row is not None:
@@ -640,6 +640,18 @@ def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, s
             if seeds > 1 else float("nan")
         row["axis_split_half"] = axis.agreement(models["ha"], models["hb"], yard) if split_half else float("nan")
     return row
+
+
+def _lacks_axis(record: Dict[str, Any], yard: Optional[axis.Axis]) -> bool:
+    """Whether a row or pair from an earlier run predates the axis scores
+    this run would add (a resume then rescores it from the models on disk)."""
+    if yard is None:
+        return False
+    # a blank cell reads back as NaN, as a never-computed one would in a table
+    # that gained the column later; coverage is a number whenever the row was
+    # scored with a yardstick, so it tells the two apart
+    v = record.get("axis_coverage" if "year" in record else "axis")
+    return not isinstance(v, (int, float)) or v != v
 
 
 def year_pairs_of(sampled: Sequence[int]) -> List[Tuple[int, int, str]]:
