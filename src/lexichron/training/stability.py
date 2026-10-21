@@ -42,13 +42,14 @@ def probe_words(models: Sequence[Vectors], per_decile: int = 100, seed: int = 0,
     return out
 
 
-def neighbour_overlap(a: Vectors, b: Vectors, probes: Sequence[str], k: int = 10) -> float:
-    """Mean Jaccard overlap of the k nearest neighbours of each probe in the
-    two models, within their shared vocabulary. 1.0 means the models agree
-    completely about every probe's neighbourhood; NaN with no usable probe."""
+def neighbour_overlaps(a: Vectors, b: Vectors, probes: Sequence[str], k: int = 10) -> np.ndarray:
+    """Jaccard overlap of the k nearest neighbours of each probe in the two
+    models, within their shared vocabulary, one value per usable probe (1.0:
+    the models agree completely about that probe's neighbourhood). Empty
+    when no probe is usable."""
     common = [w for w in a.words if w in b]
     if len(common) <= k + 1:
-        return float("nan")
+        return np.empty(0)
     ia = np.array([a.index(w) for w in common])
     ib = np.array([b.index(w) for w in common])
     ua = a.unit()[ia]
@@ -62,7 +63,18 @@ def neighbour_overlap(a: Vectors, b: Vectors, probes: Sequence[str], k: int = 10
         na = _top_k(ua @ ua[p], p, k)
         nb = _top_k(ub @ ub[p], p, k)
         scores.append(len(na & nb) / len(na | nb))
-    return float(np.mean(scores)) if scores else float("nan")
+    return np.array(scores, dtype=float)
+
+
+def neighbour_overlap(a: Vectors, b: Vectors, probes: Sequence[str], k: int = 10) -> float:
+    """Mean of :func:`neighbour_overlaps`; NaN with no usable probe."""
+    scores = neighbour_overlaps(a, b, probes, k)
+    return float(scores.mean()) if scores.size else float("nan")
+
+
+def standard_error(scores: np.ndarray) -> float:
+    """Standard error of a mean over probes (NaN below two values)."""
+    return float(scores.std(ddof=1) / np.sqrt(scores.size)) if scores.size > 1 else float("nan")
 
 
 def _top_k(sims: np.ndarray, self_index: int, k: int) -> set:

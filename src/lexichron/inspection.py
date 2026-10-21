@@ -374,12 +374,16 @@ SEARCH_COLUMNS: Tuple[Tuple[str, str, str], ...] = (
     ("years", "Years", "int"), ("vocab_size", "Vocab", "int"), ("coverage", "Coverage", "num"),
     ("simlex_rho", "SimLex ρ", "num"), ("wordsim_rho", "WordSim ρ", "num"), ("analogy_accuracy", "Analogy", "num"),
     ("seed_overlap", "Seed", "num"), ("split_half_overlap", "Split-half", "num"),
-    ("adjacent_overlap", "Adjacent", "num"), ("distant_overlap", "Distant", "num"),
-    ("signal_to_noise", "Signal/noise", "num"),
+    ("adjacent_overlap", "Adjacent", "num"), ("period_overlap", "Period", "num"),
+    ("change_ratio", "Change ratio", "num"),
 )
+# a score shown as "0.590 ±.012": the mean, and its spread as the summary records it
+# (``<key>_sd`` across years or pairs) or as a per-year row records it (``<key>_se`` across probe words)
+SPREAD_SUFFIXES = ("_sd", "_se")
 STABILITY_NOTE = ("Seed, split-half and adjacent: mean overlap of the ten nearest neighbours of probe words "
-                  "between two models (1 = identical neighbourhoods); distant: the same between the first and "
-                  "last sampled years; signal/noise: change over the span relative to change over a year.")
+                  "between two models (1 = identical neighbourhoods), ± its spread across years; period: the "
+                  "same between the first years of the sampled pairs; change ratio: period change over "
+                  "adjacent-year change (>1: periods differ by more than noise, whatever the shape of the change).")
 
 
 def searches(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
@@ -562,9 +566,21 @@ def search_table(search: Dict[str, Any]) -> Tuple[List[str], List[List[str]], Li
     rows, stems = [], []
     for c in cells:
         rows.append(["★" if c.get("cell") == search.get("best_cell") else ""]
-                    + [_fmt_cell(c.get(key), kind) for key, _, kind in shown])
+                    + [_fmt_score(c, key, kind) for key, _, kind in shown])
         stems.append(str(c.get("cell")))
     return headings, rows, stems
+
+
+def _fmt_score(record: Dict[str, Any], key: str, kind: str) -> str:
+    """A value and, for a score with a recorded spread, "± spread"."""
+    text = _fmt_cell(record.get(key), kind)
+    if kind != "num" or text == "–":
+        return text
+    for suffix in SPREAD_SUFFIXES:
+        spread = record.get(key + suffix)
+        if isinstance(spread, (int, float)) and spread == spread:
+            return f"{text} ±{float(spread):.3f}".replace("±0.", "±.")
+    return text
 
 
 def best_in_columns(search: Dict[str, Any], headings: List[str]) -> Dict[str, Any]:
@@ -586,7 +602,7 @@ def cell_years(search: Dict[str, Any], stem: str) -> Tuple[List[str], List[List[
     keys = [k for k in YEAR_KEYS if any(k in r for r in rows)]
     labels = {key: h for key, h, _ in SEARCH_COLUMNS}
     headings = ["Year"] + [labels.get(k, k) for k in keys]
-    out = [[str(r.get("year"))] + [_fmt_cell(r.get(k), "int" if k == "vocab_size" else "num") for k in keys]
+    out = [[str(r.get("year"))] + [_fmt_score(r, k, "int" if k == "vocab_size" else "num") for k in keys]
            for r in rows]
     return headings, out
 

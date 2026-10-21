@@ -537,9 +537,18 @@ settings before any final model is trained.
 - **The scores.** Agreement between two models is the mean overlap of the
   ten nearest neighbours of probe words sampled from every frequency decile,
   within the vocabulary the two share (and a Procrustes-aligned cosine as a
-  second view). Three contrasts: *seed* (same corpus, another seed),
-  *split-half* (the two halves of a year), *adjacent year*; and *distant*
-  (first vs last sampled year), the signal to compare them with. Quality:
+  second view). Three noise contrasts: *seed* (same corpus, another seed),
+  *split-half* (the two halves of a year), *adjacent year*; and one change
+  contrast, *period* (the first year of each sampled pair against the
+  others, six comparisons for four pairs). The *change ratio* is period
+  dissimilarity over adjacent-year dissimilarity — the between/within ratio
+  of a one-way analysis of the neighbourhood differences — and says how
+  far periods differ beyond year-to-year noise without assuming the change
+  runs one way over the span (a first-vs-last *distant* pair is kept in
+  `pairs.tsv` for reference). Every per-year overlap carries its standard
+  error across probe words (`_se` in `results.tsv`), and every summary
+  score its spread across years or pairs (`_sd`), shown as `0.590 ±.012` so
+  that a difference between cells can be read against it. Quality:
   Spearman correlation on SimLex-999 and WordSim-353, analogy accuracy, and
   coverage of the vocabulary list. The image carries the three datasets
   under `/opt/lexichron/data` (fetched at build from gensim's repository,

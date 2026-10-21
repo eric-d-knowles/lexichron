@@ -26,6 +26,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import numpy as np
+
 from lexichron.resources import available_cpus
 from lexichron.inspection import read_tsv_rows
 from lexichron.training import benchmarks, stability
@@ -244,10 +246,7 @@ def tune_models(
                 futs.append(writer.submit(write_corpus, *args, **kw))
         pending[year] = futs
 
-    # the year pairs compared: each adjacent pair, and first-to-last once the span allows
-    all_pairs: List[Tuple[int, int, str]] = [(y - 1, y, "adjacent") for y in sampled if y - 1 in sampled]
-    if sampled[-1] - sampled[0] > 1:
-        all_pairs.append((sampled[0], sampled[-1], "distant"))
+    all_pairs = year_pairs_of(sampled)
     scored_cells: set = set()                                     # (cell stem, year) with a row this run
     paired_now: set = set()                                       # pairs scored in this run
 
@@ -281,12 +280,12 @@ def tune_models(
     def score_pairs(cell: Cell) -> None:
         """The cell's year pairs whose two seed-0 models are both final: on
         disk from an earlier run, or trained in this one. Years train side by
-        side now, so a later year's cell can be complete before the earlier
-        year's model is; the pair is scored when the second of the two lands."""
+        side, so either model may land first; the pair is scored when the
+        second does (or up front, on a resume, when an earlier run left it)."""
         for a, b, kind in all_pairs:
             pk = (cell.stem, a, b)
             sa, sb = _stem(cell, a, "s0"), _stem(cell, b, "s0")
-            if (cell.stem, b) not in scored_cells or pk in paired_now:
+            if pk in paired_now:
                 continue
             if not all(st in existing or st in trained for st in (sa, sb)):
                 continue
@@ -569,20 +568,29 @@ def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, s
     row: Dict[str, Any] = {"cell": cell.stem, "year": year, **cell.as_dict(),
                            "vocab_size": len(main),
                            "coverage": benchmarks.coverage(main, vocab_words) if vocab_words else float("nan")}
+    # overlap scores keep their standard error across probe words (``_se``),
+    # the precision of the per-year figure
     if seeds > 1:
         others = [models[f"s{s}"] for s in range(1, seeds)]
         probes = stability.probe_words([main] + others, per_decile=per_decile, seed=year)
-        row["seed_overlap"] = statistics.fmean(stability.neighbour_overlap(main, o, probes, k) for o in others)
+        per_probe = [stability.neighbour_overlaps(main, o, probes, k) for o in others]
+        usable = [x for x in per_probe if x.size]
+        pooled = np.mean(usable, axis=0) if usable and len({x.size for x in usable}) == 1 else \
+            np.concatenate(usable) if usable else np.empty(0)
+        row["seed_overlap"] = float(pooled.mean()) if pooled.size else float("nan")
+        row["seed_overlap_se"] = stability.standard_error(pooled)
         row["seed_cosine"] = statistics.fmean(stability.aligned_cosine(main, o, probes) for o in others)
     else:
-        row["seed_overlap"] = row["seed_cosine"] = float("nan")
+        row["seed_overlap"] = row["seed_overlap_se"] = row["seed_cosine"] = float("nan")
     if split_half:
         a, b = models["ha"], models["hb"]
         probes = stability.probe_words([a, b], per_decile=per_decile, seed=year)
-        row["split_half_overlap"] = stability.neighbour_overlap(a, b, probes, k)
+        per_probe = stability.neighbour_overlaps(a, b, probes, k)
+        row["split_half_overlap"] = float(per_probe.mean()) if per_probe.size else float("nan")
+        row["split_half_overlap_se"] = stability.standard_error(per_probe)
         row["split_half_cosine"] = stability.aligned_cosine(a, b, probes)
     else:
-        row["split_half_overlap"] = row["split_half_cosine"] = float("nan")
+        row["split_half_overlap"] = row["split_half_overlap_se"] = row["split_half_cosine"] = float("nan")
     for label, path in sim_sets.items():
         rho, cov = benchmarks.similarity_score(main, path)
         row[f"{label}_rho"] = rho
@@ -594,11 +602,25 @@ def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, s
     return row
 
 
+def year_pairs_of(sampled: Sequence[int]) -> List[Tuple[int, int, str]]:
+    """The year pairs a search compares, as (earlier, later, kind): every
+    ``adjacent`` pair (noise: one year apart), every ``period`` pair (the
+    first year of each adjacent pair against the others: change across the
+    span, whatever its shape), and ``distant`` (first vs last sampled year)
+    for reference."""
+    out: List[Tuple[int, int, str]] = [(y - 1, y, "adjacent") for y in sampled if y - 1 in sampled]
+    firsts = [y for y in sampled if y - 1 not in sampled]
+    out += [(a, b, "period") for i, a in enumerate(firsts) for b in firsts[i + 1:] if b - a > 1]
+    if sampled[-1] - sampled[0] > 1 and (sampled[0], sampled[-1], "period") not in out:
+        out.append((sampled[0], sampled[-1], "distant"))
+    return out
+
+
 def _score_pair(cell: Cell, a: int, b: int, kind: str, models_dir: Path, k: int,
                 per_decile: int) -> Optional[Dict[str, Any]]:
-    """Agreement between the seed-0 models of two years (``adjacent`` or
-    ``distant``), loaded for the comparison and dropped; None when either
-    model is not on disk."""
+    """Agreement between the seed-0 models of two years (``adjacent``,
+    ``period`` or ``distant``), loaded for the comparison and dropped; None
+    when either model is not on disk."""
     pa, pb = models_dir / f"{_stem(cell, a, 's0')}.npz", models_dir / f"{_stem(cell, b, 's0')}.npz"
     if not (pa.exists() and pb.exists()):
         return None
@@ -611,8 +633,8 @@ def _score_pair(cell: Cell, a: int, b: int, kind: str, models_dir: Path, k: int,
 
 def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[Dict[str, Any]],
                       cells: Sequence[Cell]) -> Dict[str, Any]:
-    """Per-cell means over years, the year-pair figures, a signal-to-noise
-    ratio, and the suggested cell. Every cell with rows is summarized, the
+    """Per-cell means over years (with their spread across years, ``_sd``),
+    the year-pair figures, the change ratio, and the suggested cell. Every cell with rows is summarized, the
     grid's cells first: a grid narrowed on resume keeps its earlier cells in
     the table (the rows are there; a search's tables are cumulative)."""
     known = {c.stem for c in cells}
@@ -635,15 +657,22 @@ def summarize_results(rows: Dict[Tuple[str, int], Dict[str, Any]], pairs: List[D
                     "split_half_cosine", "wordsim_rho", "simlex_rho", "analogy_accuracy"):
             vals = [r[key] for r in cell_rows if key in r and r[key] == r[key]]      # drop NaN
             s[key] = statistics.fmean(vals) if vals else float("nan")
-        adj = [p["overlap"] for p in pairs if p["cell"] == cell.stem and p["kind"] == "adjacent" and p["overlap"] == p["overlap"]]
-        dist = [p["overlap"] for p in pairs if p["cell"] == cell.stem and p["kind"] == "distant" and p["overlap"] == p["overlap"]]
-        s["adjacent_overlap"] = statistics.fmean(adj) if adj else float("nan")
-        s["distant_overlap"] = statistics.fmean(dist) if dist else float("nan")
-        # change over the study span relative to change over one year: >1 means
-        # the span moves neighbourhoods more than a year does
-        noise = 1.0 - s["adjacent_overlap"] if adj else float("nan")
-        signal = 1.0 - s["distant_overlap"] if dist else float("nan")
-        s["signal_to_noise"] = (signal / noise) if adj and dist and noise > 0 else float("nan")
+            s[f"{key}_sd"] = statistics.stdev(vals) if len(vals) > 1 else float("nan")   # spread across years
+        by_kind: Dict[str, List[float]] = {"adjacent": [], "period": [], "distant": []}
+        for p in pairs:
+            if p["cell"] == cell.stem and p["kind"] in by_kind and p["overlap"] == p["overlap"]:
+                by_kind[p["kind"]].append(p["overlap"])
+        for kind, vals in by_kind.items():
+            s[f"{kind}_overlap"] = statistics.fmean(vals) if vals else float("nan")
+            s[f"{kind}_overlap_sd"] = statistics.stdev(vals) if len(vals) > 1 else float("nan")
+        # change between periods relative to change between adjacent years: the
+        # between/within ratio of a one-way analysis of the neighbourhood
+        # dissimilarities, >1 when periods differ by more than noise, whatever
+        # the shape of the change over the span
+        noise = 1.0 - s["adjacent_overlap"] if by_kind["adjacent"] else float("nan")
+        change = 1.0 - s["period_overlap"] if by_kind["period"] else float("nan")
+        s["change_ratio"] = (change / noise) if by_kind["adjacent"] and by_kind["period"] and noise > 0 \
+            else float("nan")
         per_cell.append(s)
     best, rule = _suggest(per_cell)
     return {"cells": per_cell, "best_cell": best, "best_rule": rule}

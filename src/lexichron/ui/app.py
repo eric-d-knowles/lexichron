@@ -1312,7 +1312,7 @@ class LexichronApp(App):
             starred = row[0] == "★"
             cells = [Text(row[0], style="bold yellow")]
             for h, v in zip(headings[1:], row[1:]):
-                style = "bold" if best.get(h) == v and v != "–" else ""
+                style = "bold" if best.get(h) == v.split(" ")[0] and v != "–" else ""      # "0.600 ±.012"
                 cells.append(Text(v, style=style, justify="right" if v[:1].isdigit() or v == "–" else "left"))
             table.add_row(*cells, key=stem)
         col, reverse = self._search_sort
@@ -1359,7 +1359,7 @@ class LexichronApp(App):
 
     def _sort_search_table(self, col: str, reverse: bool) -> None:
         def key(value):
-            text = str(value).replace(",", "")
+            text = str(value).replace(",", "").split(" ")[0]        # "0.590 ±.012" sorts by 0.590
             try:
                 return (1, float(text))
             except ValueError:

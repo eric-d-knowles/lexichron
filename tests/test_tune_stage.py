@@ -103,12 +103,16 @@ def test_tune_trains_scores_and_summarizes(rocks, tmp_path):
     assert "simlex999_rho" in header and "analogy_accuracy" in header
     pairs = (out / "pairs.tsv").read_text().splitlines()
     kinds = [l.split("\t")[3] for l in pairs[1:]]
-    assert kinds.count("adjacent") == 4 and kinds.count("distant") == 2       # per cell: 2 adjacent + 1 distant
+    # per cell: 2 adjacent pairs, 1 period pair (1990 vs 2010), and the first-vs-last pair for reference
+    assert kinds.count("adjacent") == 4 and kinds.count("period") == 2 and kinds.count("distant") == 2
+    assert "seed_overlap_se" in header and 0 < float(row["seed_overlap_se"]) < 0.5
     summary = json.loads((out / "summary.json").read_text())
     assert len(summary["cells"]) == 2 and summary["best_cell"] in {c["cell"] for c in summary["cells"]}
     assert "most stable" in summary["best_rule"]
     for c in summary["cells"]:
         assert c["years"] == 4 and c["adjacent_overlap"] == c["adjacent_overlap"]
+        assert c["period_overlap"] == c["period_overlap"] and c["change_ratio"] > 0
+        assert c["seed_overlap_sd"] >= 0 and c["adjacent_overlap_sd"] >= 0            # spread across years / pairs
     assert (out / "summary.tsv").read_text().startswith("cell\t")
     assert json.loads((out / "search.json").read_text())["sample_years"] == [1990, 1991, 2010, 2011]
     assert not list((out / "corpus").glob("*.txt"))                              # corpus files cleaned up
@@ -341,8 +345,39 @@ def test_years_train_side_by_side_in_the_pool(rocks, tmp_path, monkeypatch):
     pairs = tune._read_pairs(out / "pairs.tsv", [1990, 1991, 1992])
     assert sorted(pairs) == sorted([(c, a, b) for c in ("vs8_w2_mc2_e1_sg1_wbfreq", "vs16_w2_mc2_e1_sg1_wbfreq")
                                     for a, b in ((1990, 1991), (1991, 1992), (1990, 1992))])
+    assert {p["kind"] for p in pairs.values()} == {"adjacent", "distant"}       # three consecutive years: one period
     summary = json.loads((out / "summary.json").read_text())
     assert {c["cell"]: c["years"] for c in summary["cells"]} == {"vs8_w2_mc2_e1_sg1_wbfreq": 3,
                                                                   "vs16_w2_mc2_e1_sg1_wbfreq": 3}
     # the corpora were cleaned up as each year finished
     assert not list((out / "corpus").glob("*.txt"))
+
+
+def test_year_pairs_of_a_search():
+    # four adjacent pairs: 4 adjacent, 6 period (first years crossed), and first-vs-last for reference
+    pairs = tune.year_pairs_of([1968, 1969, 1985, 1986, 2001, 2002, 2018, 2019])
+    assert [p for p in pairs if p[2] == "adjacent"] == [(1968, 1969, "adjacent"), (1985, 1986, "adjacent"),
+                                                        (2001, 2002, "adjacent"), (2018, 2019, "adjacent")]
+    assert [p[:2] for p in pairs if p[2] == "period"] == [(1968, 1985), (1968, 2001), (1968, 2018), (1985, 2001),
+                                                          (1985, 2018), (2001, 2018)]
+    assert (1968, 2019, "distant") in pairs
+    # two adjacent years only: nothing but the adjacent pair
+    assert tune.year_pairs_of([1990, 1991]) == [(1990, 1991, "adjacent")]
+    # lone years are periods of their own
+    assert [p[:2] for p in tune.year_pairs_of([1990, 2000, 2010]) if p[2] == "period"] == [(1990, 2000), (1990, 2010), (2000, 2010)]
+
+
+def test_change_ratio_is_period_over_adjacent_dissimilarity():
+    from lexichron.training.grid import Cell
+    cell = Cell(vector_size=8, window=2, min_count=2, epochs=1, approach="skip-gram", weight_by="none")
+    rows = {(cell.stem, y): {"cell": cell.stem, "year": y, "seed_overlap": v, "split_half_overlap": 0.5}
+            for y, v in ((1990, 0.60), (1991, 0.62), (2010, 0.58), (2011, 0.60))}
+    pairs = [{"cell": cell.stem, "year_a": 1990, "year_b": 1991, "kind": "adjacent", "overlap": 0.80},
+             {"cell": cell.stem, "year_a": 2010, "year_b": 2011, "kind": "adjacent", "overlap": 0.70},
+             {"cell": cell.stem, "year_a": 1990, "year_b": 2010, "kind": "period", "overlap": 0.50},
+             {"cell": cell.stem, "year_a": 1990, "year_b": 2011, "kind": "distant", "overlap": 0.45}]
+    c = tune.summarize_results(rows, pairs, [cell])["cells"][0]
+    assert abs(c["adjacent_overlap"] - 0.75) < 1e-9 and abs(c["period_overlap"] - 0.5) < 1e-9
+    assert abs(c["change_ratio"] - 0.5 / 0.25) < 1e-9                     # (1-0.5) / (1-0.75)
+    assert abs(c["seed_overlap"] - 0.6) < 1e-9 and abs(c["seed_overlap_sd"] - 0.01632993) < 1e-6
+    assert "signal_to_noise" not in c

@@ -140,7 +140,8 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
               "simlex_rho": 0.2, "seed_overlap": 0.5, "distant_overlap": None},
              {"cell": "vs100_w2_mc5_e5_sg1_wbfreq", "vector_size": 100, "window": 2, "min_count": 5, "epochs": 5,
               "approach": "skip-gram", "weight_by": "freq", "years": 1, "vocab_size": 1200, "coverage": 0.8,
-              "simlex_rho": 0.25, "seed_overlap": 0.6, "distant_overlap": None}]
+              "simlex_rho": 0.25, "seed_overlap": 0.6, "seed_overlap_sd": 0.0123, "change_ratio": 1.8,
+              "change_ratio_sd": None, "distant_overlap": None}]
     (search / "summary.json").write_text(json.dumps({"cells": cells, "best_cell": cells[1]["cell"], "best_rule": "rule"}))
     (search / "results.tsv").write_text("cell\tyear\tvocab_size\tcoverage\tseed_overlap\n"
                                         "vs50_w2_mc5_e5_sg1_wbfreq\t1990\t1200\t0.8000\t0.5000\n"
@@ -178,8 +179,10 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert headings[:3] == ["", "Dims", "Years"]            # only the axis the grid varies, then the scores
     assert rows[0][0] == "" and rows[1][0] == "★"
     assert rows[0][headings.index("Vocab")] == "1,200" and rows[0][headings.index("Seed")] == "0.500"
-    assert rows[0][headings.index("Distant")] == "–" and stems == [c["cell"] for c in cells]
-    assert inspection.best_in_columns(s, headings) == {"SimLex ρ": "0.250", "Seed": "0.600"}   # coverage ties
+    assert rows[0][headings.index("Period")] == "–" and stems == [c["cell"] for c in cells]
+    assert rows[1][headings.index("Seed")] == "0.600 ±.012"                   # a score with its spread
+    assert rows[1][headings.index("Change ratio")] == "1.800"                 # no spread recorded: plain
+    assert inspection.best_in_columns(s, headings) == {"SimLex ρ": "0.250", "Seed": "0.600", "Change ratio": "1.800"}   # coverage ties
     yh, yrows = inspection.cell_years(s, "vs100_w2_mc5_e5_sg1_wbfreq")
     assert yh == ["Year", "Vocab", "Coverage", "Seed"] and yrows == [["1990", "1,200", "0.800", "–"]]
     assert inspection.cell_pairs(s, "vs100_w2_mc5_e5_sg1_wbfreq") == ""
