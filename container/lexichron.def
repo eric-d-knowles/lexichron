@@ -130,6 +130,9 @@ From: {{ BASE }}
     # -------------------------------------------------------------------------
     mkdir -p /usr/local/share/nltk_data
     python -c "import nltk; nltk.download('swadesh', download_dir='/usr/local/share/nltk_data')"
+    # NLTK (3.9.2+) refuses data in a directory other accounts can write to;
+    # fakeroot builds leave the directory group-writable
+    chmod -R go-w /usr/local/share/nltk_data
 
     # -------------------------------------------------------------------------
     # Sanity checks: fail the build if any resource is missing.
