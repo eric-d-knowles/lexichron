@@ -381,3 +381,32 @@ def test_change_ratio_is_period_over_adjacent_dissimilarity():
     assert abs(c["change_ratio"] - 0.5 / 0.25) < 1e-9                     # (1-0.5) / (1-0.75)
     assert abs(c["seed_overlap"] - 0.6) < 1e-9 and abs(c["seed_overlap_sd"] - 0.01632993) < 1e-6
     assert "signal_to_noise" not in c
+
+
+def test_resume_scores_missing_pairs_for_every_cell_with_models(rocks, tmp_path):
+    """A search scored by a version without period pairs, resumed on a grid
+    narrowed to one of its cells: the resume scores the period pairs of
+    every cell whose seed-0 models are on disk, the other grid's included,
+    and retrains nothing."""
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991, 2010, 2011])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "t6"
+    common = dict(sample_years=[1990, 1991, 2010, 2011], window=[2], min_count=[2], epochs=[1], seeds=2,
+                  name="t6", workers=1, probes_per_decile=3,
+                  similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"))
+    tune.tune_models(5, "20200217", "eng", str(stub), vector_size=[8, 16], mode="restart", train_fn=fake_train, **common)
+    # as the old version left it: no period rows
+    lines = (out / "pairs.tsv").read_text().splitlines()
+    (out / "pairs.tsv").write_text("\n".join(l for l in lines if "\tperiod\t" not in l) + "\n")
+    assert "period" not in (out / "pairs.tsv").read_text()
+    trained = []
+    tune.tune_models(5, "20200217", "eng", str(stub), vector_size=[16], mode="resume",
+                     train_fn=lambda *a: trained.append(a) or fake_train(*a), **common)
+    assert trained == []
+    pairs = tune._read_pairs(out / "pairs.tsv", [1990, 1991, 2010, 2011])
+    assert {k for k, p in pairs.items() if p["kind"] == "period"} == {
+        ("vs8_w2_mc2_e1_sg1_wbfreq", 1990, 2010), ("vs16_w2_mc2_e1_sg1_wbfreq", 1990, 2010)}
+    summary = json.loads((out / "summary.json").read_text())
+    ratios = {c["cell"]: c["change_ratio"] for c in summary["cells"]}
+    assert set(ratios) == {"vs8_w2_mc2_e1_sg1_wbfreq", "vs16_w2_mc2_e1_sg1_wbfreq"}
+    assert all(r == r and r > 0 for r in ratios.values())

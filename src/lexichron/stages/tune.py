@@ -287,8 +287,8 @@ def tune_models(
             sa, sb = _stem(cell, a, "s0"), _stem(cell, b, "s0")
             if pk in paired_now:
                 continue
-            if not all(st in existing or st in trained for st in (sa, sb)):
-                continue
+            if not all(st in trained or (models_dir / f"{st}.npz").exists() for st in (sa, sb)):
+                continue                                 # on disk: this grid's, or an earlier grid's
             if pk in pairs and sa not in trained and sb not in trained:
                 continue                                 # scored by an earlier run, nothing retrained
             row = _score_pair(cell, a, b, kind, models_dir, neighbours, probes_per_decile)
@@ -312,6 +312,17 @@ def tune_models(
             for cell in cells:
                 if len(ready[(cell.stem, year)]) == len(kinds):
                     score_cell(cell, year)
+        # cells of earlier grids of this search (rows, and seed-0 models on disk,
+        # but not in this grid) get any year pairs they lack, e.g. the period
+        # pairs a version before them did not score
+        for stem in sorted({stem for stem, _ in rows} - {c.stem for c in cells}):
+            try:
+                score_pairs(Cell.from_stem(stem))
+            except ValueError:
+                pass
+        if paired_now:
+            _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON,
+                           summarize_results(rows, list(pairs.values()), cells))
         left_in_year: Dict[int, int] = {y: 0 for y in sampled}
         for t in todo:
             left_in_year[t.year] += 1
