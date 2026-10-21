@@ -115,8 +115,8 @@ def tune_models(
         axis_lexicon: Valence ratings (word, rating per line) for the axis
             scores: how well words projected onto the model's pleasant-
             unpleasant axis match human ratings, and how reliably models
-            place them (default: the VADER lexicon the image carries; blank
-            and absent: the axis scores are skipped)
+            place them (default: the VADER lexicon the image carries; "none"
+            skips the axis scores, as does a blank with no lexicon bundled)
         axis_poles: Two lines of pole words, pleasant then unpleasant
             (default: the implicit-association lists)
         name: Name of this search; its directory is
@@ -182,7 +182,8 @@ def tune_models(
             raise FileNotFoundError(f"similarity dataset not found: {path}")
     if ana_set and not Path(ana_set).is_file():
         raise FileNotFoundError(f"analogy dataset not found: {ana_set}")
-    lexicon = axis_lexicon or benchmarks.bundled_dataset("vader_lexicon.txt")
+    lexicon = None if str(axis_lexicon).strip().lower() in ("none", "off", "false") else \
+        axis_lexicon or benchmarks.bundled_dataset("vader_lexicon.txt")
     if lexicon and not Path(lexicon).is_file():
         raise FileNotFoundError(f"axis lexicon not found: {lexicon}")
     if axis_poles and not Path(axis_poles).is_file():

@@ -193,7 +193,7 @@ HELP: Dict[str, str] = {
     "tune.probes_per_decile": "Probe words sampled from each frequency decile of the vocabulary.",
     "tune.similarity_dataset": "A word-pair similarity file (word, word, score per line). Blank: WordSim-353 and SimLex-999.",
     "tune.analogy_dataset": "An analogy questions file (a b c d per line). Blank: Google's questions-words.",
-    "tune.axis_lexicon": "Human valence ratings (word, rating per line) for the axis scores. Blank: the VADER lexicon the image carries.",
+    "tune.axis_lexicon": "Human valence ratings (word, rating per line) for the axis scores. Blank: the VADER lexicon the image carries; none: skip them.",
     "tune.axis_poles": "Two lines of pole words, pleasant then unpleasant, for the axis. Blank: the implicit-association lists.",
     "tune.temp_dir": "Where the years' corpus files are written. Blank: inside the search directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
     "tune.keep_models": "Keep the trained models after scoring (they are small).",

@@ -436,7 +436,8 @@ def test_resume_adds_axis_scores_to_rows_scored_before_them(rocks, tmp_path):
     d = _datasets(tmp_path)
     common = dict(sample_years=[1990, 1991], vector_size=[8], window=[2], min_count=[2], epochs=[1], seeds=2,
                   name="t7", workers=1, probes_per_decile=3, similarity_dataset=str(d / "simlex999.txt"))
-    tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", train_fn=fake_train, **common)
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", axis_lexicon="none", train_fn=fake_train,
+                     **common)                                          # 'none': even where a lexicon is bundled
     assert "axis_rho" not in (out / "results.tsv").read_text().splitlines()[0]
     trained = []
     tune.tune_models(5, "20200217", "eng", str(stub), mode="resume", axis_lexicon=str(d / "vader_lexicon.txt"),
