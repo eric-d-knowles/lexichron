@@ -128,10 +128,13 @@ From: {{ BASE }}
     # -------------------------------------------------------------------------
     # NLTK Swadesh list (model alignment)
     # -------------------------------------------------------------------------
+    # NLTK (3.9.2+) refuses to install into, or load from, a directory other
+    # accounts can write to, and fakeroot builds create directories
+    # group-writable: make it private before the download, and check the
+    # download succeeded (nltk.download() reports failure by returning False)
     mkdir -p /usr/local/share/nltk_data
-    python -c "import nltk; nltk.download('swadesh', download_dir='/usr/local/share/nltk_data')"
-    # NLTK (3.9.2+) refuses data in a directory other accounts can write to;
-    # fakeroot builds leave the directory group-writable
+    chmod -R go-w /usr/local/share/nltk_data
+    python -c "import nltk, sys; sys.exit(0 if nltk.download('swadesh', download_dir='/usr/local/share/nltk_data') else 1)"
     chmod -R go-w /usr/local/share/nltk_data
 
     # -------------------------------------------------------------------------
