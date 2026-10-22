@@ -581,11 +581,14 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
             years = app.query_one("#search-years", DataTable)
             assert years.row_count == 2 and [str(c).strip() for c in years.get_row_at(1)] == ["1991", "26,000", "0.920", "0.820"]
             assert "adjacent 1990–1991 0.750 / 0.900" in str(app.query_one("#search-pairs", Static).content)
-            # a narrower view, and the spreads switched off
+            # a narrower view, and the spreads switched off; the tile follows the family
             app.query_one("#search-view", Select).value = "neighbourhoods"
             await pilot.pause()
             headings = [str(c.label) for c in table.columns.values()]
             assert "SimLex ρ" not in headings and "Seed" in headings
+            from lexichron.ui.app import Meters
+            meters = app.query_one("#search-meters", Meters)
+            assert any("neighbourhoods rule" in str(t.content) for t in meters.query(".meter"))
             app.query_one("#search-spreads").value = False
             await pilot.pause()
             seed = [str(c.label) for c in table.columns.values()].index("Seed")

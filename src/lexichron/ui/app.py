@@ -43,7 +43,8 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import (LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns, suggested_for, candidates, cell_pairs, cell_years,
+from lexichron.inspection import (FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns,
+                                  suggested_for, suggestions_line, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
@@ -1318,11 +1319,20 @@ class LexichronApp(App):
             return
         empty.display = False
         overview = search_overview(search)
-        self.query_one("#search-meters", Meters).show([("", overview["tiles"])])
-        self.query_one("#search-grid", Static).update(overview["grid"])
         view = self.query_one("#search-view", Select).value
         view = str(view) if view is not Select.NULL else "all"
         starred, rule = suggested_for(search, view)
+        # the tile follows the family selector: that family's pick, with the
+        # others noted; the overall pick and every family's on "all"
+        tiles = list(overview["tiles"])
+        others = suggestions_line(search) if view == "all" else "  ·  ".join(
+            f"{FAMILY_LABELS[f]}: {c}" for f, c in ((f, (search.get("suggestions") or {}).get(f, {}).get("cell"))
+                                                     for f in ("benchmarks", "neighbourhoods", "axis"))
+            if f != view and c)
+        tiles[3] = (f"Suggested cell ({FAMILY_LABELS[view]} rule)" if view != "all" else "Suggested cell",
+                    starred or "–", others)
+        self.query_one("#search-meters", Meters).show([("", tiles)])
+        self.query_one("#search-grid", Static).update(overview["grid"])
         self.query_one("#search-legend-text", Static).update(
             STABILITY_NOTE + " Click a heading to sort by it (again to reverse); select a cell for its years."
             + (f"\n★ {starred}: {rule}." if starred and rule else ""))
