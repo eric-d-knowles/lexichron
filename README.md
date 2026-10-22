@@ -203,6 +203,26 @@ environment is tied to the image's Python version (3.11): if a future image
 moves to a newer Python, run `new-project` again and reinstall from your frozen
 list; the command tells you when this is needed.
 
+#### Updating a project to a new release
+
+A project is not tied to the image that created it. To move one to a newer
+release: install the release as above (it adds the new image next to the old
+one and repoints the `lexichron` commands), then run `new-project` again on
+the same project directory with the new image:
+
+```bash
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-<version>.sif /path/to/project
+```
+
+It keeps `.venv` and everything installed into it (both images carry Python
+3.11; the command refuses and says so if a future image changes that),
+rewrites `.venv/host-python` to run the new image, and registers a kernel
+named for the new version. In Jupyter, switch the notebook to that kernel and
+restart it; the old kernel entry can be removed with
+`rm -r ~/.local/share/jupyter/kernels/<project>-lexichron-<old version>`.
+Data, settings files, searches and notebooks are untouched, and a Slurm job
+already running keeps the image it started with.
+
 #### Running scripts and batch jobs
 
 `new-project` also writes `<project>/.venv/host-python`, a launcher that runs
