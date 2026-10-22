@@ -44,7 +44,7 @@ from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
 from lexichron.inspection import (FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns,
-                                  suggested_for, suggestions_line, candidates, cell_pairs, cell_years,
+                                  suggested_for, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
@@ -1322,15 +1322,14 @@ class LexichronApp(App):
         view = self.query_one("#search-view", Select).value
         view = str(view) if view is not Select.NULL else "all"
         starred, rule = suggested_for(search, view)
-        # the tile follows the family selector: that family's pick, with the
-        # others noted; the overall pick and every family's on "all"
+        # the tile follows the family selector: that family's pick alone, under
+        # its rule's name; on "all", the overall pick and the rule it came from
         tiles = list(overview["tiles"])
-        others = suggestions_line(search) if view == "all" else "  ·  ".join(
-            f"{FAMILY_LABELS[f]}: {c}" for f, c in ((f, (search.get("suggestions") or {}).get(f, {}).get("cell"))
-                                                     for f in ("benchmarks", "neighbourhoods", "axis"))
-            if f != view and c)
-        tiles[3] = (f"Suggested cell ({FAMILY_LABELS[view]} rule)" if view != "all" else "Suggested cell",
-                    starred or "–", others)
+        picks = search.get("suggestions") or {}
+        overall_family = "axis" if "axis" in picks else "neighbourhoods" if "neighbourhoods" in picks else None
+        family = view if view != "all" else overall_family
+        tiles[3] = ("Suggested cell", starred or "–",
+                    f"by the {FAMILY_LABELS[family]} rule" if family and starred else "")
         self.query_one("#search-meters", Meters).show([("", tiles)])
         self.query_one("#search-grid", Static).update(overview["grid"])
         self.query_one("#search-legend-text", Static).update(

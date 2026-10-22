@@ -588,7 +588,8 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
             assert "SimLex ρ" not in headings and "Seed" in headings
             from lexichron.ui.app import Meters
             meters = app.query_one("#search-meters", Meters)
-            assert any("neighbourhoods rule" in str(t.content) for t in meters.query(".meter"))
+            tile = next(str(t.content) for t in meters.query(".meter") if "Suggested cell" in str(t.content))
+            assert "by the neighbourhoods rule" in tile and "benchmarks" not in tile      # that family's pick alone
             app.query_one("#search-spreads").value = False
             await pilot.pause()
             seed = [str(c.label) for c in table.columns.values()].index("Seed")

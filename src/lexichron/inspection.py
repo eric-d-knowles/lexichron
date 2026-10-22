@@ -401,6 +401,12 @@ def suggested_for(search: Dict[str, Any], view: str) -> Tuple[Optional[str], str
     return search.get("best_cell"), search.get("best_rule") or ""
 
 
+def _overall_family_note(search: Dict[str, Any]) -> str:
+    picks = search.get("suggestions") or {}
+    family = "axis" if "axis" in picks else "neighbourhoods" if "neighbourhoods" in picks else None
+    return f"by the {FAMILY_LABELS[family]} rule" if family and search.get("best_cell") else ""
+
+
 def suggestions_line(search: Dict[str, Any]) -> str:
     """Every family's pick on one line: 'benchmarks: … · neighbourhoods: … · valence axis: …'."""
     picks = search.get("suggestions") or {}
@@ -573,7 +579,7 @@ def search_overview(search: Dict[str, Any]) -> Dict[str, Any]:
     tiles = [("Cells", f"{n_cells}", f"in the table; {cells_note}"),
              ("Years", f"{len(complete)}/{len(sampled)}" if sampled else "–", years_note),
              ("Models", f"{models_here:,}/{models_total:,}", f"for this grid; {search['models_on_disk']:,} on disk in all"),
-             ("Suggested cell", search.get("best_cell") or "–", suggestions_line(search))]
+             ("Suggested cell", search.get("best_cell") or "–", _overall_family_note(search))]
     years_text = (f"{sampled[0]}–{sampled[-1]}, {len(sampled)} sampled" if sampled else "?")
     grid_line = (f"Grid: {axes or 'one cell'}" + (f"  ·  fixed: {fixed}" if fixed else "")
                  + f"  ·  {seeds} seed(s)" + (" + split halves" if halves else "") + f"  ·  years {years_text}")

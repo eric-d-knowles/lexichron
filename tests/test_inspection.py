@@ -158,8 +158,7 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     assert o["tiles"][0] == ("Cells", "2", "in the table; from this grid")
     assert o["tiles"][1] == ("Years", "1/2", "complete for this grid")          # both cells have 1990
     assert o["tiles"][2] == ("Models", "1/8", "for this grid; 1 on disk in all")
-    assert o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq",
-                             "benchmarks: vs100_w2_mc5_e5_sg1_wbfreq  ·  neighbourhoods: vs100_w2_mc5_e5_sg1_wbfreq")
+    assert o["tiles"][3] == ("Suggested cell", "vs100_w2_mc5_e5_sg1_wbfreq", "by the neighbourhoods rule")
     # 1991 scored for one cell but not the other: the year is under way, not complete
     rows2 = s["results"] + [dict(s["results"][0], year=1991)]
     s2 = dict(s, results=rows2, years_scored=[1990, 1991])
