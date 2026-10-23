@@ -21,7 +21,8 @@ __all__ = ["Field", "Section", "stage_sections", "SLURM_FIELDS", "parse_args_doc
 
 # Settings that are not meaningful in a form (set by the CLI / runtime).
 HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write:packed24 is the only sensible value
-          "train_fn"}                                            # tune: a test hook
+          "train_fn",                                            # tune, train: a test hook
+          "array_task", "array_count"}                           # set by the batch script (Submit: Jobs)
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
@@ -331,4 +332,7 @@ SLURM_FIELDS = Section("slurm", [
     Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; the Submit tab shows the estimate.", label="Memory"),
     Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS", label="Time limit"),
     Field("job_name", "text", "lexichron", False, help="Job name shown in squeue", label="Job name"),
+    Field("jobs", "int", 1, False, help=("Split the run over this many jobs (a Slurm job array), each taking "
+          "every N-th year and writing into the same output. For the tune and train stages; the "
+          "others run as one job. Each job gets the CPUs, memory and time above."), label="Jobs"),
 ])

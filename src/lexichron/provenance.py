@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ngramprep.ngram_acquire.progress import slurm_job_id
+
 PROVENANCE_FILENAME = "lexichron.json"
 FORMAT = 1
 
@@ -76,7 +78,8 @@ def build_record(stage: str, settings: Dict[str, Any], doc: Dict[str, Any]) -> D
         "build": BUILD,
         "rocks_shim": rocks,
         "hostname": doc.get("hostname") or socket.gethostname(),
-        "slurm_job_id": doc.get("slurm_job_id") or os.environ.get("SLURM_JOB_ID"),
+        "slurm_job_id": doc.get("slurm_job_id") or slurm_job_id(),
+        "array": doc.get("array"),
         "settings": _json_safe({k: v for k, v in settings.items() if k != "progress_path"}),
         "inputs": inputs,
         "figures": _json_safe(figures),
@@ -161,7 +164,8 @@ def format_provenance(p: Dict[str, Any]) -> List[str]:
     lines.append(f"Made by lexichron {p.get('lexichron')}" + (f" ({p['build']})" if p.get("build") else "")
                  + f", stage {p.get('stage')}, finished {when[:19].replace('T', ' ')}"
                  + (f" after {_fmt_duration(elapsed)}" if elapsed else "")
-                 + f" on {where}" + (f", Slurm job {job}" if job else ""))
+                 + f" on {where}" + (f", Slurm job {job}" if job else "")
+                 + (f" (task {p['array']['task'] + 1} of {p['array']['count']})" if p.get("array") else ""))
     inputs = p.get("inputs") or {}
     src = inputs.get("source") or {}
     if src:

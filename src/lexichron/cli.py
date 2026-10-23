@@ -104,8 +104,15 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
     import inspect
     from datetime import datetime
     if "progress_path" in inspect.signature(func).parameters and "progress_path" not in kwargs:
+        # the tasks of a job array start in the same second: each gets its own
+        # run directory, named by its task
+        from lexichron.arrays import array_task
+        try:
+            task = array_task(kwargs.get("array_task"), kwargs.get("array_count"))
+        except ValueError:
+            task = None                                  # the stage reports it
         run_dir = (Path(args.project).resolve().parent / ".lexichron" / "runs"
-                   / f"{datetime.now():%Y%m%d_%H%M%S}_{stage}")
+                   / f"{datetime.now():%Y%m%d_%H%M%S}_{stage}{'_' + task.suffix if task else ''}")
         kwargs["progress_path"] = str(run_dir / "progress.json")
         print(f"Progress: {kwargs['progress_path']}", flush=True)
 

@@ -20,6 +20,8 @@ import struct
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from lexichron.training.scores import read_tsv_rows, _typed          # noqa: F401  (callers import them from here)
+
 LAYOUTS = ("auto", "pivoted", "ngram", "davies", "raw")
 MODES = ("head", "key", "prefix")
 BOOKKEEPING_PREFIXES = (b"__rangemap__/", b"__processed__/")
@@ -463,13 +465,22 @@ def read_search(search_dir: str) -> Dict[str, Any]:
         out["suggestions"] = dict(summary.get("suggestions") or {})
     except (OSError, ValueError):
         pass
-    out["results"] = read_tsv_rows(d / "results.tsv")
-    out["pairs"] = read_tsv_rows(d / "pairs.tsv")
+    # The scores come from the search's score files (one per cell-year and
+    # per pair), which are the truth while the tasks of a job array are still
+    # adding to them; a search from before the files has only its tables, and
+    # the store reads those instead.
+    from lexichron.training.scores import ScoreStore
+    store = ScoreStore(d)
+    rows_by_key = store.load_rows()
+    pairs_by_key = store.load_pairs()
+    out["results"] = [rows_by_key[k] for k in sorted(rows_by_key, key=lambda k: (k[1], k[0]))]
+    out["pairs"] = [pairs_by_key[k] for k in sorted(pairs_by_key, key=lambda k: (k[1], k[2], k[0]))]
     out["years_scored"] = sorted({int(r["year"]) for r in out["results"] if "year" in r})
     # The per-cell table is rebuilt from the rows, so it covers every scored
     # cell whatever version of the stage wrote summary.json (versions before
-    # 0.8.2 summarized only the current grid's cells); the file is the
-    # fallback when the rows cannot be summarized.
+    # 0.8.2 summarized only the current grid's cells, and a task of a job
+    # array writes the table from what it saw); the file is the fallback
+    # when the rows cannot be summarized.
     if out["results"]:
         try:
             from lexichron.stages.tune import summarize_results
@@ -482,8 +493,10 @@ def read_search(search_dir: str) -> Dict[str, Any]:
                 except Exception:
                     pass
             summary = summarize_results(rows, out["pairs"], cells)
-            if len(summary.get("cells") or []) > len(out["cells"]):      # the file knows fewer cells
-                out["cells"] = summary["cells"]
+            file_years = max((int(c.get("years") or 0) for c in out["cells"]), default=0)
+            row_years = max((int(c.get("years") or 0) for c in summary.get("cells") or []), default=0)
+            if len(summary.get("cells") or []) > len(out["cells"]) or row_years > file_years:
+                out["cells"] = summary["cells"]                           # the file knows fewer cells or years
                 out["best_cell"], out["best_rule"] = summary.get("best_cell"), summary.get("best_rule") or ""
                 out["suggestions"] = dict(summary.get("suggestions") or {})
         except Exception:
@@ -501,28 +514,6 @@ def read_search(search_dir: str) -> Dict[str, Any]:
     return out
 
 
-def read_tsv_rows(path: Path) -> List[Dict[str, Any]]:
-    """Rows of a tab-separated table with a header, numbers restored (blank
-    cells are NaN); [] when the file is missing or unreadable."""
-    try:
-        lines = Path(path).read_text().splitlines()
-    except OSError:
-        return []
-    if not lines:
-        return []
-    cols = lines[0].split("\t")
-    return [{c: _typed(v) for c, v in zip(cols, line.split("\t"))} for line in lines[1:] if line.strip()]
-
-
-def _typed(text: str) -> Any:
-    if text == "":
-        return float("nan")
-    for cast in (int, float):
-        try:
-            return cast(text)
-        except ValueError:
-            continue
-    return text
 
 
 PARAM_KEYS = ("vector_size", "window", "min_count", "epochs", "approach", "weight_by")

@@ -11,6 +11,12 @@ best on coverage and quality; the choice is yours.
 The sampled years are chosen as adjacent pairs spread over the study
 range, so adjacent-year agreement is measured alongside the agreement
 between the first and last sampled years (the signal to compare it with).
+
+A search too long for one job is split over the tasks of a Slurm job array
+(``array_task`` / ``array_count``, which the batch script sets): each task
+trains and scores its share of the sampled years into the same search
+directory, and a year pair is scored by whichever task finds both years'
+models on disk.
 """
 from __future__ import annotations
 
@@ -21,18 +27,22 @@ import os
 import shutil
 import statistics
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
+from concurrent.futures import Future, ProcessPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Hashable, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from lexichron.arrays import ArrayTask, task_share
+from lexichron.arrays import array_task as _array_task
 from lexichron.resources import available_cpus
-from lexichron.inspection import read_tsv_rows
 from lexichron.training import axis, benchmarks, stability
 from lexichron.training.corpus import UNK_MODES, CorpusStats, corpus_file_name, write_corpus
 from lexichron.training.grid import AXES, Cell, Grid, corpus_variants
+from lexichron.training.scheduler import train_across_years
+from lexichron.training.scores import (PAIRS_FILE, RESULTS_FILE, SUMMARY_FILE, SUMMARY_JSON, ScoreStore,
+                                       read_tsv_rows, write_json)
 from lexichron.training.trainer import TrainFn, Vectors, load_vectors, save_vectors, train_model
 from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
@@ -40,11 +50,6 @@ from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
 __all__ = ["tune_models", "sample_years", "plan_models", "summarize_results"]
 
 logger = logging.getLogger(__name__)
-
-RESULTS_FILE = "results.tsv"      # one row per cell and year
-PAIRS_FILE = "pairs.tsv"          # one row per cell and year pair
-SUMMARY_FILE = "summary.tsv"      # one row per cell
-SUMMARY_JSON = "summary.json"
 
 
 def tune_models(
@@ -76,6 +81,8 @@ def tune_models(
     workers_per_model: int = 4,
     temp_dir: Optional[str] = None,
     keep_models: bool = True,
+    array_task: Optional[int] = None,
+    array_count: Optional[int] = None,
     progress_path: Optional[str] = None,
     train_fn: Optional[TrainFn] = None,
 ) -> str:
@@ -132,6 +139,11 @@ def tune_models(
         temp_dir: Where corpus files are written (default: inside the search
             directory; a job's $TMPDIR is faster, and may be written as "$TMPDIR")
         keep_models: Keep the trained models (.npz) after scoring
+        array_task: This run's task in a job array (0-based), with
+            array_count: it trains and scores every array_count-th sampled
+            year from this one. Set by the batch script from Slurm's
+            $SLURM_ARRAY_TASK_ID; blank outside an array
+        array_count: How many tasks the job array has
         progress_path: Progress document for the UI
     """
     paths = derive_paths(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
@@ -149,17 +161,26 @@ def tune_models(
     sampled = sorted(set(int(y) for y in sampled))
     if not sampled:
         raise ValueError("no years to sample")
+    task = _array_task(array_task, array_count)
+    mine = task_share(sampled, task)
+    if mode not in ("resume", "restart"):
+        raise ValueError("mode must be 'resume' or 'restart'")
+    if mode == "restart" and task is not None:
+        raise ValueError("a search cannot be restarted by the tasks of a job array (each would delete what the "
+                         "others are writing): delete the search directory first, then run the array in resume "
+                         "mode, or run the restart as one job")
     corpus_dir = db_path.parent
     name = name or datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = corpus_dir / "tuning" / name
     if mode == "restart" and out_dir.exists():
         shutil.rmtree(out_dir)
-    elif mode not in ("resume", "restart"):
-        raise ValueError("mode must be 'resume' or 'restart'")
     models_dir = out_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
     spool = Path(os.path.expandvars(os.path.expanduser(temp_dir))) if temp_dir else out_dir / "corpus"   # $TMPDIR works
     spool.mkdir(parents=True, exist_ok=True)
+    store = ScoreStore(out_dir)
+    if store.import_tables():
+        logger.info("imported the scores of an earlier version of this search into %s", store.scores_dir)
 
     total_cpus = workers or available_cpus()      # the allocation's CPUs, not the node's
     per_model = max(1, int(workers_per_model))
@@ -196,7 +217,7 @@ def tune_models(
 
     log_dir = out_dir / "logs"
     log_dir.mkdir(exist_ok=True)
-    log_file = log_dir / f"tune_{datetime.now():%Y%m%d_%H%M%S}.log"
+    log_file = log_dir / f"tune_{datetime.now():%Y%m%d_%H%M%S}{'_' + task.suffix if task else ''}.log"
     _setup_log(log_file)
     inputs: Dict[str, Any] = {"source": str(db_path), "vocabulary": str(whitelist) if vocab_words else None}
     for label, path in sim_sets.items():
@@ -208,13 +229,17 @@ def tune_models(
         inputs["axis_poles"] = yard.poles_path or "built-in pleasant/unpleasant lists"
     progress = ProgressReporter(progress_path, stage="tune", db_path=out_dir, log_path=log_file,
                                 unit_label="models", inputs=inputs)
-    tasks = plan_models(cells, sampled, seeds, split_half)
+    if task is not None:
+        progress.doc["array"] = {"task": task.index, "count": task.count, "years": mine}
+    tasks = plan_models(cells, mine, seeds, split_half)
     existing = {t.stem for t in tasks if (models_dir / f"{t.stem}.npz").exists()}
     progress.set_totals(len(tasks), files_skipped=len(existing))
-    print(f"Hyperparameter search '{name}': {grid.describe()}; years {sampled}; "
+    share = f" ({task.label}: years {mine})" if task else ""
+    print(f"Hyperparameter search '{name}': {grid.describe()}; years {sampled}{share}; "
           f"{seeds} seed(s){' + split halves' if split_half else ''} -> {len(tasks)} models "
           f"({len(existing)} already trained); {parallel} at a time x {per_model} threads")
-    logger.info("grid %s; years %s; %d models; %d already trained", grid.describe(), sampled, len(tasks), len(existing))
+    logger.info("grid %s; years %s%s; %d models; %d already trained", grid.describe(), sampled, share,
+                len(tasks), len(existing))
 
     settings_record = {"grid": grid.as_settings(), "years": list(years), "sample_years": sampled,
                        "seeds": seeds, "split_half": split_half, "unk_mode": unk_mode,
@@ -222,14 +247,18 @@ def tune_models(
                        "similarity_datasets": sim_sets, "analogy_dataset": ana_set,
                        "axis_lexicon": yard.lexicon_path if yard else None,
                        "axis_poles": yard.poles_path if yard else None}
-    (out_dir / "search.json").write_text(json.dumps(settings_record, indent=2))
+    write_json(out_dir / "search.json", settings_record)
+    if task is not None and not mine:
+        progress.finish("done", f"{task.label}: no sampled year falls to this task")
+        print(f"{task.label}: no sampled year falls to this task (there are {len(sampled)}); nothing to do")
+        return str(out_dir)
 
     t_start = time.perf_counter()
     corpus_stats: Dict[Tuple[int, str], CorpusStats] = {}
-    # results of an earlier run of this search, so a resume rescores only
-    # what it retrains; both tables are rewritten after every addition
-    rows = _read_results(out_dir / RESULTS_FILE, sampled)         # (cell stem, year) -> row
-    pairs = _read_pairs(out_dir / PAIRS_FILE, sampled)            # (cell stem, year a, year b) -> row
+    # results of earlier runs of this search (any task's), so a resume
+    # rescores only what it retrains
+    rows = store.load_rows(sampled)                               # (cell stem, year) -> row
+    pairs = store.load_pairs(sampled)                             # (cell stem, year a, year b) -> row
     kinds = [f"s{s}" for s in range(seeds)] + (["ha", "hb"] if split_half else [])
     trained: set = set()                                          # stems trained in this run
     variants = corpus_variants(cells)
@@ -238,10 +267,7 @@ def tune_models(
     # (with a stand-in trainer, as in the tests, the files are written inline:
     # the stand-in's database lives in this process)
     writer = None if (train_fn is not None and _pool is _process_pool) else _pool(1)
-    pending: Dict[int, List[Future]] = {}
-
-    def needs_corpus(year: int) -> bool:
-        return any(t.stem not in existing for t in tasks if t.year == year)
+    pending: Dict[Hashable, List[Future]] = {}
 
     def corpus_paths(year: int) -> Dict[Tuple[str, str], Path]:
         files: Dict[Tuple[str, str], Path] = {}
@@ -271,9 +297,30 @@ def tune_models(
                 futs.append(writer.submit(write_corpus, *args, **kw))
         pending[year] = futs
 
-    all_pairs = year_pairs_of(sampled)
+    def corpus_written(year: int, results: List[CorpusStats]) -> None:
+        for st in results:
+            corpus_stats[(year, st.weight_by)] = st
+            logger.info("corpus y%s %s: %s", year, st.weight_by, st.as_dict())
+        progress.doc["counters"]["corpus_lines"] = progress.doc["counters"].get("corpus_lines", 0) + \
+            sum(s.lines for (y, _), s in corpus_stats.items() if y == year)
+        progress.doc["counters"]["ngrams_used"] = progress.doc["counters"].get("ngrams_used", 0) + \
+            sum(s.ngrams_used for (y, _), s in corpus_stats.items() if y == year)
+
+    all_pairs = year_pairs_of(sampled)                            # every task's years: pairs cross tasks
     scored_cells: set = set()                                     # (cell stem, year) with a row this run
     paired_now: set = set()                                       # pairs scored in this run
+    written: List[str] = []                                       # score files this run wrote
+
+    def export() -> Dict[str, Any]:
+        """The tables, from every score file on disk (a sibling task's too):
+        the summary always, the row tables once this run has scored
+        something or when one is missing (a run with nothing to rescore
+        leaves them untouched)."""
+        fresh_rows, fresh_pairs = store.load_rows(sampled), store.load_pairs(sampled)
+        summary = summarize_results(fresh_rows, list(fresh_pairs.values()), cells)
+        missing = not all((out_dir / f).exists() for f in (RESULTS_FILE, PAIRS_FILE))
+        store.export(fresh_rows, fresh_pairs, summary, tables=bool(written) or missing)
+        return summary
 
     def score_cell(cell: Cell, year: int) -> None:
         """Score a cell as soon as its models for the year are all on disk:
@@ -288,7 +335,7 @@ def tune_models(
             rows[key] = _score_year(cell, year, models, seeds, split_half, neighbours, probes_per_decile,
                                     vocab_words, sim_sets, ana_set, yard)
             del models
-            _write_results(out_dir / RESULTS_FILE, rows)
+            written.append(str(store.put_row(rows[key])))
             logger.info("scored %s y%s: %s", cell.stem, year,
                         {k: round(v, 4) if isinstance(v, float) else v for k, v in rows[key].items()
                          if k in ("vocab_size", "coverage", "seed_overlap", "split_half_overlap")})
@@ -298,15 +345,15 @@ def tune_models(
                                    counters={"models": 1})
         scored_cells.add(key)
         score_pairs(cell)
-        # the summary follows every addition, so the per-cell table never lags the rows
-        _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON,
-                       summarize_results(rows, list(pairs.values()), cells))
+        # the tables follow every addition, so a reader of the tables never lags the rows
+        export()
 
     def score_pairs(cell: Cell) -> None:
         """The cell's year pairs whose two seed-0 models are both final: on
-        disk from an earlier run, or trained in this one. Years train side by
-        side, so either model may land first; the pair is scored when the
-        second does (or up front, on a resume, when an earlier run left it)."""
+        disk from an earlier run or a sibling task, or trained in this one.
+        Years train side by side, so either model may land first; the pair
+        is scored when the second does (or up front, on a resume, when an
+        earlier run left it)."""
         for a, b, kind in all_pairs:
             pk = (cell.stem, a, b)
             sa, sb = _stem(cell, a, "s0"), _stem(cell, b, "s0")
@@ -320,20 +367,22 @@ def tune_models(
             if row is not None:
                 pairs[pk] = row
                 paired_now.add(pk)
-                _write_pairs(out_dir / PAIRS_FILE, pairs)
+                written.append(str(store.put_pair(row)))
                 logger.info("scored %s %s pair y%s-y%s: overlap %.4f", cell.stem, kind, a, b, row["overlap"])
 
     summary: Dict[str, Any] = {}
+    partial = False
+    scored_years: List[int] = []
     try:
         todo = [t for t in tasks if t.stem not in existing]           # in year order
         for t in todo:
             progress.file_started(t.stem)
         # cells complete from an earlier run are scored first (only if unscored)
-        ready: Dict[Tuple[str, int], set] = {(cell.stem, y): set() for cell in cells for y in sampled}
+        ready: Dict[Tuple[str, int], set] = {(cell.stem, y): set() for cell in cells for y in mine}
         for t in tasks:
             if t.stem in existing:
                 ready[(t.cell.stem, t.year)].add(t.kind)
-        for year in sampled:
+        for year in mine:
             for cell in cells:
                 if len(ready[(cell.stem, year)]) == len(kinds):
                     score_cell(cell, year)
@@ -345,19 +394,12 @@ def tune_models(
                 score_pairs(Cell.from_stem(stem))
             except ValueError:
                 pass
-        if paired_now:
-            _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON,
-                           summarize_results(rows, list(pairs.values()), cells))
-        left_in_year: Dict[int, int] = {y: 0 for y in sampled}
-        for t in todo:
-            left_in_year[t.year] += 1
 
         def finish_year(year: int) -> None:
             """A year's models are all in: the summary, then what the pairs do
             not need goes (every model but seed 0, and the corpus)."""
             nonlocal summary
-            summary = summarize_results(rows, list(pairs.values()), cells)
-            _write_summary(out_dir / SUMMARY_FILE, out_dir / SUMMARY_JSON, summary)
+            summary = export()
             if not keep_models:
                 for t in tasks:
                     if t.year == year and t.kind != "s0":
@@ -366,11 +408,11 @@ def tune_models(
                 for f in corpus_paths(year).values():
                     f.unlink(missing_ok=True)
 
-        for year in sampled:
-            if not left_in_year[year]:
+        for year in mine:
+            if not any(t.year == year for t in todo):
                 finish_year(year)
 
-        def on_trained(t: ModelTask) -> None:
+        def on_trained(t: ModelTask, secs: float, n: int) -> None:
             trained.add(t.stem)
             ready[(t.cell.stem, t.year)].add(t.kind)
             if len(ready[(t.cell.stem, t.year)]) == len(kinds):
@@ -379,15 +421,35 @@ def tune_models(
                 score_pairs(t.cell)                      # a seed-0 model a scored later year was waiting for
 
         if todo:
+            inline = parallel == 1 or (train_fn is not None and _pool is _process_pool)
             with progress.long_phase("training"):
-                _train_across_years(todo, sampled, left_in_year, corpus_paths, submit_corpus, pending,
-                                    corpus_stats, models_dir, threads_for, parallel, progress, train_fn,
-                                    on_trained=on_trained, on_year_done=finish_year)
+                train_across_years(todo, models_dir=models_dir, parallel=parallel, threads_for=threads_for,
+                                   corpus_file=lambda t: corpus_paths(t.year)[(t.cell.weight_by, t.corpus_part)],
+                                   submit_corpus=submit_corpus, pending=pending, on_corpus_written=corpus_written,
+                                   on_trained=on_trained, on_corpus_done=lambda key: None,
+                                   on_year_done=finish_year, progress=progress, train_fn=train_fn,
+                                   pool_factory=_pool, inline=inline)
+        # a sibling task's seed-0 model that landed while this task's model
+        # for the other year of a pair was already on disk: the pair is this
+        # task's to score if the sibling has not (it is written either way)
+        if task is not None:
+            for cell in cells:
+                score_pairs(cell)
+            if paired_now:
+                export()
         if not keep_models:
-            shutil.rmtree(models_dir, ignore_errors=True)
+            if task is None:
+                shutil.rmtree(models_dir, ignore_errors=True)
+            else:
+                logger.info("keep_models is off: the seed-0 models stay for the year pairs of the other tasks")
+        summary = export()
         progress.doc["counters"]["cells"] = len(cells)
-        progress.doc["counters"]["years"] = len(sampled)
-        progress.finish("done", f"best cell: {summary['best_cell']}" if summary.get("best_cell") else "")
+        progress.doc["counters"]["years"] = len(mine)
+        scored_years = sorted({y for _, y in store.load_rows(sampled)})
+        partial = task is not None and len(scored_years) < len(sampled)
+        note = (f"best cell so far: {summary['best_cell']} ({len(scored_years)} of {len(sampled)} years scored)"
+                if partial else f"best cell: {summary['best_cell']}") if summary.get("best_cell") else ""
+        progress.finish("done", note)
     except BaseException as exc:
         progress.finish("failed", str(exc))
         raise
@@ -397,7 +459,9 @@ def tune_models(
     minutes = (time.perf_counter() - t_start) / 60
     print(f"Done in {minutes:.1f} min: {out_dir}")
     if summary.get("best_cell"):
-        print(f"Suggested cell: {summary['best_cell']} ({summary['best_rule']})")
+        print(f"Suggested cell{' so far' if partial else ''}: {summary['best_cell']} ({summary['best_rule']})"
+              + (f"; {len(scored_years)} of {len(sampled)} years scored, other tasks may still be running"
+                 if partial else ""))
     return str(out_dir)
 
 
@@ -421,6 +485,10 @@ class ModelTask:
     @property
     def corpus_part(self) -> str:
         return {"ha": "a", "hb": "b"}.get(self.kind, "full")
+
+    @property
+    def corpus_key(self) -> int:
+        return self.year                                  # one write covers the year's files
 
 
 def _stem(cell: Cell, year: int, kind: str) -> str:
@@ -465,14 +533,6 @@ sample_years = sample_years_in
 
 
 # ---------------------------------------------------------------- training
-def _train_one(args):
-    """Runs in a worker process (or inline): train and save one model."""
-    corpus_file, cell, seed, threads, out_path, train_fn = args
-    res = train_model(corpus_file, cell, seed, threads, train_fn)
-    save_vectors(res.vectors, out_path)
-    return out_path, res.seconds, res.vocab_size
-
-
 def _process_pool(n: int) -> ProcessPoolExecutor:
     # spawn, not fork: the parent holds numpy/BLAS and RocksDB threads, which a
     # forked child can inherit in a locked state
@@ -480,118 +540,6 @@ def _process_pool(n: int) -> ProcessPoolExecutor:
 
 
 _pool = _process_pool      # tests swap in a thread pool to run the scheduler with a stand-in trainer
-
-
-def _train_across_years(todo: List[ModelTask], sampled: Sequence[int], left_in_year: Dict[int, int],
-                        corpus_paths: Callable[[int], Dict[Tuple[str, str], Path]],
-                        submit_corpus: Callable[[int], None], pending: Dict[int, List[Future]],
-                        corpus_stats: Dict[Tuple[int, str], CorpusStats], models_dir: Path,
-                        threads_for: Callable[[int], int], parallel: int, progress: ProgressReporter,
-                        train_fn: Optional[TrainFn], on_trained: Callable[[ModelTask], Any],
-                        on_year_done: Callable[[int], None], corpus_ahead: int = 2) -> None:
-    """Train ``todo`` (in year order) ``parallel`` at a time across years: a
-    slot that frees up takes the next model whose year's corpus is ready,
-    so a year's last models and the next year's first ones train side by
-    side instead of the tail of each year idling the node. Corpora are
-    written ahead for the first ``corpus_ahead`` years still in play, and a
-    year's corpus goes (``on_year_done``) when its last model lands.
-    ``on_trained`` is called in this process as each model finishes (it is
-    on disk; nothing is kept here); threads per model are set as a slot is
-    filled from how many models remain, so the final few get the spare CPUs.
-
-    With a stand-in trainer (tests) models train inline, one at a time, in
-    the same order the pool would start them."""
-    inline = parallel == 1 or (train_fn is not None and _pool is _process_pool)
-    logger.info("training %d models, %d at a time x %d threads", len(todo), min(parallel, len(todo)),
-                threads_for(len(todo)))
-    queue = list(todo)
-    in_flight: Dict[Future, ModelTask] = {}
-    ready_years: set = set()
-    corpus_done: Dict[int, int] = {}
-
-    def years_in_play() -> List[int]:
-        seen = []
-        for t in list(in_flight.values()) + queue:
-            if t.year not in seen:
-                seen.append(t.year)
-        return seen
-
-    def keep_corpora_coming() -> None:
-        for y in years_in_play()[:corpus_ahead]:
-            if y not in ready_years and y not in pending:
-                submit_corpus(y)
-
-    def corpus_ready(year: int) -> bool:
-        """Whether the year's corpus files are all written; collects the
-        statistics of any that just finished."""
-        if year in ready_years:
-            return True
-        futs = pending.get(year)
-        if futs is None or not all(f.done() for f in futs):
-            return False
-        for fut in pending.pop(year):
-            st = fut.result()
-            corpus_stats[(year, st.weight_by)] = st
-            logger.info("corpus y%s %s: %s", year, st.weight_by, st.as_dict())
-        progress.doc["counters"]["corpus_lines"] = progress.doc["counters"].get("corpus_lines", 0) + \
-            sum(s.lines for (y, _), s in corpus_stats.items() if y == year)
-        progress.doc["counters"]["ngrams_used"] = progress.doc["counters"].get("ngrams_used", 0) + \
-            sum(s.ngrams_used for (y, _), s in corpus_stats.items() if y == year)
-        ready_years.add(year)
-        return True
-
-    def finished(t: ModelTask, secs: float, n: int) -> None:
-        logger.info("trained %s: %d words, %.0fs", t.stem, n, secs)
-        progress.doc["counters"]["train_seconds"] = progress.doc["counters"].get("train_seconds", 0) + int(secs)
-        progress.file_parsed(t.stem)
-        on_trained(t)
-        left_in_year[t.year] -= 1
-        if left_in_year[t.year] == 0:
-            on_year_done(t.year)
-
-    def job_for(t: ModelTask, threads: int):
-        corpus_file = corpus_paths(t.year)[(t.cell.weight_by, t.corpus_part)]
-        return (str(corpus_file), t.cell, t.seed, threads, str(models_dir / f"{t.stem}.npz"), train_fn)
-
-    pool = None if inline else _pool(parallel)
-    try:
-        while queue or in_flight:
-            keep_corpora_coming()
-            # fill the free slots from the front of the queue; threads per model
-            # from what remains at the start of this pass, so models that start
-            # together get the same share
-            threads = threads_for(len(queue) + len(in_flight))
-            while queue and len(in_flight) < parallel and corpus_ready(queue[0].year):
-                t = queue.pop(0)
-                progress.file_active(t.stem)
-                if inline:
-                    _, secs, n = _train_one(job_for(t, threads))
-                    finished(t, secs, n)
-                    keep_corpora_coming()
-                else:
-                    in_flight[pool.submit(_train_one, job_for(t, threads))] = t
-            if not queue and not in_flight:
-                break
-            progress._write(force=True)
-            # wait for a model to finish, or for the corpus the next model needs
-            waits: List[Future] = list(in_flight)
-            if queue and not corpus_ready(queue[0].year):
-                waits += pending.get(queue[0].year, [])
-                if not in_flight:
-                    progress.set_phase("corpus")
-                    logger.info("waiting for the corpus of y%s", queue[0].year)
-            if not waits:
-                continue
-            done, _ = wait(waits, return_when=FIRST_COMPLETED)
-            progress.set_phase("training")
-            for fut in done:
-                if fut in in_flight:
-                    t = in_flight.pop(fut)
-                    _, secs, n = fut.result()
-                    finished(t, secs, n)
-    finally:
-        if pool is not None:
-            pool.shutdown(wait=True)
 
 
 # ---------------------------------------------------------------- scoring
@@ -862,61 +810,17 @@ def suggest_by_family(per_cell: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any
 
 
 # ---------------------------------------------------------------- files
-def _write_results(path: Path, rows: Dict[Tuple[str, int], Dict[str, Any]]) -> None:
-    ordered = [rows[k] for k in sorted(rows, key=lambda k: (k[1], k[0]))]
-    _write_tsv(path, ordered)
 
 
-def _write_pairs(path: Path, pairs: Dict[Tuple[str, int, int], Dict[str, Any]]) -> None:
-    ordered = [pairs[k] for k in sorted(pairs, key=lambda k: (k[1], k[2], k[0]))]
-    _write_tsv(path, ordered)
-
-
+# ---------------------------------------------------------------- files
 def _read_results(path: Path, years: Sequence[int]) -> Dict[Tuple[str, int], Dict[str, Any]]:
-    """Rows of an earlier run, for the sampled years only."""
-    return {(r["cell"], int(r["year"])): r for r in read_tsv_rows(path)
-            if "cell" in r and r.get("year") in years}
+    """Rows of a search (its score files, or its table), for ``years``;
+    ``path`` is the table's, as older callers passed it."""
+    return ScoreStore(Path(path).parent).load_rows(years)
 
 
 def _read_pairs(path: Path, years: Sequence[int]) -> Dict[Tuple[str, int, int], Dict[str, Any]]:
-    return {(r["cell"], int(r["year_a"]), int(r["year_b"])): r for r in read_tsv_rows(path)
-            if "cell" in r and r.get("year_a") in years and r.get("year_b") in years}
-
-
-def _write_summary(tsv: Path, js: Path, summary: Dict[str, Any]) -> None:
-    _write_tsv(tsv, summary["cells"])
-    js.write_text(json.dumps(summary, indent=2, default=_json_num))
-
-
-def _write_tsv(path: Path, rows: List[Dict[str, Any]]) -> None:
-    if not rows:
-        path.write_text("")
-        return
-    cols: List[str] = []
-    for r in rows:
-        for k in r:
-            if k not in cols:
-                cols.append(k)
-    lines = ["\t".join(cols)]
-    for r in rows:
-        lines.append("\t".join(_cell_text(r.get(c)) for c in cols))
-    tmp = path.with_suffix(path.suffix + ".part")
-    tmp.write_text("\n".join(lines) + "\n")
-    os.replace(tmp, path)
-
-
-def _cell_text(v: Any) -> str:
-    if v is None:
-        return ""
-    if isinstance(v, float):
-        return "" if v != v else f"{v:.4f}"
-    return str(v)
-
-
-def _json_num(v):
-    if isinstance(v, float) and v != v:
-        return None
-    raise TypeError(str(type(v)))
+    return ScoreStore(Path(path).parent).load_pairs(years)
 
 
 def _read_vocabulary(path) -> List[str]:

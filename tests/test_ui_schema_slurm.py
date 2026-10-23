@@ -71,3 +71,32 @@ def test_stage_command_falls_back_to_image(tmp_path, monkeypatch):
 
 def test_slurm_fields_have_required_account():
     assert next(f for f in SLURM_FIELDS.fields if f.name == "account").required
+
+
+def test_write_sbatch_job_array_splits_a_tune_search(tmp_path, monkeypatch):
+    """slurm.jobs above 1 makes the script a job array whose tasks run the
+    stage in resume mode on their share of the years; the other stages
+    ignore it."""
+    yaml_path = tmp_path / "project.yaml"; yaml_path.write_text("corpus: {}\n")
+    monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
+    text = write_sbatch(yaml_path, "tune", {"account": "a", "cpus": 16, "mem": "32G", "time": "08:00:00",
+                                            "jobs": 4}, extra_sets=["tune.mode=restart"]).read_text()
+    assert "#SBATCH --array=0-3" in text and "%A_%a.out" in text and "%j" not in text
+    assert "--set tune.array_task=$SLURM_ARRAY_TASK_ID --set tune.array_count=$SLURM_ARRAY_TASK_COUNT" in text
+    assert "--set tune.mode=resume" in text and "tune.mode=restart" not in text   # the caller deleted first
+    assert "--set tune.workers=$SLURM_CPUS_PER_TASK" in text
+    plain = write_sbatch(yaml_path, "tune", {"account": "a", "cpus": 16, "mem": "32G", "time": "08:00:00",
+                                             "jobs": 1}).read_text()
+    assert "--array" not in plain and "array_task" not in plain and "%j.out" in plain
+    other = write_sbatch(yaml_path, "filter", {"account": "a", "cpus": 16, "mem": "32G", "time": "08:00:00",
+                                               "jobs": 4}).read_text()
+    assert "--array" not in other and "array_task" not in other
+
+
+def test_array_settings_are_hidden_from_the_form():
+    from lexichron.stages.tune import tune_models
+    _, stage = stage_sections(tune_models, "tune")
+    names = {f.name for f in stage.fields}
+    assert "array_task" not in names and "array_count" not in names
+    assert next(f for f in SLURM_FIELDS.fields if f.name == "jobs").default == 1

@@ -505,3 +505,72 @@ def test_suggestions_per_family():
     bare = [{k: v for k, v in c.items() if not k.startswith("axis_")} for c in cells]
     picks = tune.suggest_by_family(bare)
     assert "axis" not in picks and picks["neighbourhoods"]["cell"].startswith("vs200_")
+
+
+def test_a_job_array_shares_the_years_and_the_pairs_between_tasks(rocks, tmp_path):
+    """Two tasks of an array each train and score their years into one
+    search; a year pair is scored by whichever task has both models, the
+    score files are the truth, and the tables are rebuilt from them."""
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991, 2010, 2011])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "arr"
+    d = _datasets(tmp_path)
+    common = dict(years=(1990, 2011), year_pairs=2, vector_size=[8], window=[2], min_count=[2], epochs=[1],
+                  seeds=2, name="arr", workers=1, probes_per_decile=3, train_fn=fake_train,
+                  similarity_dataset=str(d / "simlex999.txt"), axis_lexicon="none")
+    with pytest.raises(ValueError, match="restart"):
+        tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", array_task=0, array_count=2, **common)
+    # task 0 of 2: years 1990 and 2010 (round-robin)
+    tune.tune_models(5, "20200217", "eng", str(stub), array_task=0, array_count=2,
+                     progress_path=str(tmp_path / "t0.json"), **common)
+    doc0 = read_progress(tmp_path / "t0.json")
+    assert doc0["array"] == {"task": 0, "count": 2, "years": [1990, 2010]} and doc0["files_total"] == 8
+    rows = tune._read_results(out / "results.tsv", [1990, 1991, 2010, 2011])
+    assert {y for _, y in rows} == {1990, 2010}
+    pairs = tune._read_pairs(out / "pairs.tsv", [1990, 1991, 2010, 2011])
+    assert {(a, b) for _, a, b in pairs} == {(1990, 2010)}              # the period pair: both its models are in
+    assert "so far" in doc0["message"] and "2 of 4 years" in doc0["message"]
+    assert (out / "scores").is_dir() and len(list((out / "scores").glob("*.json"))) == 2
+    # task 1 of 2: 1991 and 2011; the adjacent pairs and the distant pair are now its to score
+    tune.tune_models(5, "20200217", "eng", str(stub), array_task=1, array_count=2,
+                     progress_path=str(tmp_path / "t1.json"), **common)
+    doc1 = read_progress(tmp_path / "t1.json")
+    assert doc1["files_total"] == 8 and doc1["files_done"] == 8 and "so far" not in doc1["message"]
+    rows = tune._read_results(out / "results.tsv", [1990, 1991, 2010, 2011])
+    assert {y for _, y in rows} == {1990, 1991, 2010, 2011}
+    pairs = tune._read_pairs(out / "pairs.tsv", [1990, 1991, 2010, 2011])
+    assert {(a, b) for _, a, b in pairs} == {(1990, 1991), (2010, 2011), (1990, 2010), (1990, 2011)}
+    assert len((out / "results.tsv").read_text().splitlines()) == 5          # the export has every task's rows
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["cells"][0]["years"] == 4
+    # a task past the sampled years has nothing to do, and says so
+    tune.tune_models(5, "20200217", "eng", str(stub), array_task=5, array_count=6,
+                     progress_path=str(tmp_path / "t5.json"), **common)
+    doc5 = read_progress(tmp_path / "t5.json")
+    assert doc5["state"] == "done" and "no sampled year" in doc5["message"] and doc5["files_total"] == 0
+    # a plain resume over the whole range finds everything done
+    tune.tune_models(5, "20200217", "eng", str(stub), progress_path=str(tmp_path / "all.json"), **common)
+    assert read_progress(tmp_path / "all.json")["files_skipped"] == 16
+
+
+def test_a_search_from_before_the_score_files_is_imported(rocks, tmp_path):
+    """A search with only its tables (versions before the per-score files)
+    gets one file per row on its next run, and nothing is rescored."""
+    stub = tmp_path / "corpora"
+    _corpus(stub, [1990, 1991])
+    out = stub / "20200217" / "eng" / "5gram_files" / "tuning" / "old"
+    d = _datasets(tmp_path)
+    common = dict(sample_years=[1990, 1991], vector_size=[8], window=[2], min_count=[2], epochs=[1], seeds=2,
+                  name="old", workers=1, probes_per_decile=3, similarity_dataset=str(d / "simlex999.txt"),
+                  axis_lexicon="none", train_fn=fake_train)
+    tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", **common)
+    import shutil
+    shutil.rmtree(out / "scores"); shutil.rmtree(out / "pairs")               # as an older version left it
+    from lexichron.inspection import read_search
+    before = read_search(str(out))
+    assert len(before["results"]) == 2 and len(before["pairs"]) == 1           # read from the tables
+    trained = []
+    tune.tune_models(5, "20200217", "eng", str(stub), **{**common, "train_fn": lambda *a: trained.append(a) or fake_train(*a)})
+    assert trained == [] and len(list((out / "scores").glob("*.json"))) == 2 and len(list((out / "pairs").glob("*.json"))) == 1
+    after = read_search(str(out))
+    assert len(after["results"]) == 2 and after["best_cell"] == before["best_cell"]
