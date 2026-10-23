@@ -6,7 +6,7 @@ Each subcommand reads the project file, merges any ``--set`` overrides, builds
 the keyword arguments for the stage's Python entry point, and calls it. With
 ``--dry-run`` it prints the call instead. When the settings make the stage
 delete earlier output (``acquire.overwrite_db``, ``filter.mode = restart``,
-``tune.mode = restart``) it says what and how much and asks first; ``--yes``
+``tune.mode = restart``, ``train.mode = restart``) it says what and how much and asks first; ``--yes``
 answers for a batch job, which otherwise stops there.
 """
 from __future__ import annotations
@@ -39,6 +39,10 @@ STAGES: Dict[str, tuple[str, str]] = {
     "tune": (
         "lexichron.stages.tune:tune_models",
         "Hyperparameter search: train a grid of word2vec models on sampled years and score their stability and quality",
+    ),
+    "train": (
+        "lexichron.stages.train:train_models",
+        "Final models: a replicate ensemble (corpus resamples x seeds) of one cell for every year of the study",
     ),
 }
 
@@ -153,6 +157,8 @@ def _inspect(args: argparse.Namespace) -> int:
         for line in format_provenance(prov):
             print(line)
         return 0
+    if info["kind"] == "ensemble":                     # a model ensemble: its per-year table (printed above)
+        return 0
     if info["kind"] == "search":                       # a tuning search: its per-cell table
         from lexichron.inspection import cell_detail, search_table
         headings, grid, stems = search_table(info["search"])
@@ -237,7 +243,7 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--yes", "-y", action="store_true",
             help="go ahead without asking when the settings delete earlier output "
-                 "(acquire.overwrite_db, filter.mode = restart, tune.mode = restart); "
+                 "(acquire.overwrite_db, filter.mode = restart, tune.mode = restart, train.mode = restart); "
                  "a batch job cannot be asked and stops without this",
         )
         p.set_defaults(stage=stage)

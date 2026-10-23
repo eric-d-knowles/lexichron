@@ -33,7 +33,9 @@ ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             # tune
             "neighbours", "probes_per_decile", "similarity_dataset", "analogy_dataset", "axis_lexicon",
             "axis_poles", "temp_dir",
-            "keep_models"}
+            "keep_models",
+            # train
+            "noise_seed", "corpus_writers"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
 # single entry is shown as fixed text rather than a menu.
@@ -46,6 +48,10 @@ CHOICES: Dict[str, List[str]] = {
     "mode": ["resume", "restart"],
     "text_language": ["en", "fr", "de", "it", "es", "ru", "he", "zh"],
     "unk_mode": ["strip", "reject", "retain"],
+    # train: the hyperparameters take one value each (tune's grid rows take several)
+    "approach": ["skip-gram", "cbow"],
+    "weight_by": ["freq", "doc_freq", "none"],
+    "resampling": ["poisson", "none"],
 }
 
 # Hyperparameter axes of the tune stage: shown as rows of toggles.
@@ -64,6 +70,10 @@ ORDER_BY_STAGE = {
     "tune": ["release", "language", "ngram_size", "db_path_stub",
              "years", "sample_years", "year_pairs", "vector_size", "window", "min_count", "epochs", "approach",
              "weight_by", "seeds", "split_half", "unk_mode", "name", "mode", "workers", "workers_per_model"],
+    "train": ["release", "language", "ngram_size", "db_path_stub",
+              "years", "vector_size", "window", "min_count", "epochs", "approach", "weight_by",
+              "corpus_replicates", "seeds_per_corpus", "resampling", "unk_mode", "name", "mode", "workers",
+              "workers_per_model"],
 }
 
 # Plain-language labels for the form (settings-file keys stay as they are).
@@ -126,6 +136,12 @@ LABELS: Dict[str, str] = {
     "axis_poles": "Axis pole words",
     "temp_dir": "Corpus file directory",
     "keep_models": "Keep models",
+    # train
+    "corpus_replicates": "Corpus replicates",
+    "seeds_per_corpus": "Seeds per corpus",
+    "resampling": "Resampling",
+    "noise_seed": "Ensemble seed",
+    "corpus_writers": "Corpus writers",
 }
 
 # User-facing help, where the docstring is too terse or too technical.
@@ -198,6 +214,26 @@ HELP: Dict[str, str] = {
     "tune.axis_poles": "Two lines of pole words, pleasant then unpleasant, for the axis. Blank: the implicit-association lists.",
     "tune.temp_dir": "Where the years' corpus files are written. Blank: inside the search directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
     "tune.keep_models": "Keep the trained models after scoring (they are small).",
+    "train.years": "First and last year of the study; every year between them with data gets an ensemble.",
+    "train.vector_size": "Dimensions of each word vector. The Inspect tab's search table shows what tuning suggested.",
+    "train.window": "Context words on each side of the target.",
+    "train.min_count": "Words seen fewer times than this in a year's corpus are left out of that year's model.",
+    "train.epochs": "Passes over the corpus.",
+    "train.approach": "skip-gram predicts context from the word (slower, better for rarer words); cbow the reverse.",
+    "train.weight_by": "How often an n-gram is repeated in the corpus: log5 of its match count (freq), of its volume count (doc_freq), or once (none).",
+    "train.corpus_replicates": "Resamples of each year's corpus, each trained separately: the spread across them is the text's share of a measurement's error. 20 is a working default; 40 for a tight error estimate; 1 with resampling off.",
+    "train.seeds_per_corpus": "Models trained on each resample with different seeds: their spread is the fit's share. 2 separates it from the text's.",
+    "train.resampling": "poisson: every n-gram's repeat count is redrawn from a Poisson with that mean, another same-sized sample of books. none: the corpus as it is; only the seeds vary.",
+    "train.noise_seed": "The number every replicate's seeds derive from; the same number reproduces the ensemble.",
+    "train.unk_mode": "strip: drop <UNK> tokens, keep the n-gram if two real tokens remain. reject: drop any n-gram with one. retain: keep <UNK> as a token.",
+    "train.axis_lexicon": "Human valence ratings (word, rating per line) for the noise profile measured across each year's replicates. Blank: the VADER lexicon the image carries; none: skip it.",
+    "train.axis_poles": "Two lines of pole words, pleasant then unpleasant, for that axis. Blank: the implicit-association lists.",
+    "train.name": "Name of this ensemble; the models go to <corpus>/models/<name>/. Blank: a timestamp.",
+    "train.mode": "resume keeps models already trained; restart deletes the ensemble first.",
+    "train.workers": "CPUs to use in total. Blank = all of the job's.",
+    "train.workers_per_model": "Threads per model, at least; CPUs / threads models train at once, across years. When fewer models remain than that, each gets more threads.",
+    "train.corpus_writers": "Processes writing corpus resamples ahead of training (each streams the pivoted database).",
+    "train.temp_dir": "Where the corpus resamples are written. Blank: inside the ensemble directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
 }
 
 
@@ -249,8 +285,8 @@ def parse_args_doc(doc: Optional[str]) -> Dict[str, str]:
     return out
 
 
-def _kind_for(annotation: Any, default: Any, name: str) -> str:
-    if name in GRID_AXES:
+def _kind_for(annotation: Any, default: Any, name: str, stage: str = "") -> str:
+    if name in GRID_AXES and stage == "tune":
         return "grid"
     if name in CHOICES:
         return "choice"
@@ -303,7 +339,7 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
         default = None if p.default is inspect.Parameter.empty else p.default
         required = p.default is inspect.Parameter.empty
         key = api_to_corpus.get(pname, pname)
-        kind = _kind_for(ann, default, key)
+        kind = _kind_for(ann, default, key, stage)
         choices = CHOICES.get(key)
         if kind == "grid":
             from lexichron.training.grid import AXIS_BY_NAME

@@ -17,13 +17,13 @@ from __future__ import annotations
 import os
 from dataclasses import asdict, dataclass
 from math import floor, log
-from typing import Dict, Iterator, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple
 
 import numpy as np
 
 from ngramprep.ngram_pivot.encoding import decode_year_ngram_key, decode_year_stats, year_prefix
 
-__all__ = ["CorpusStats", "write_corpus", "weight_for", "UNK_MODES", "WEIGHTINGS"]
+__all__ = ["CorpusStats", "write_corpus", "weight_for", "years_with_data", "UNK_MODES", "WEIGHTINGS"]
 
 UNK = "<UNK>"
 UNK_MODES = ("strip", "reject", "retain")
@@ -129,6 +129,20 @@ def _year_records(db_path: str, year: int) -> Iterator[Tuple[bytes, int, int]]:
             _y, ngram = decode_year_ngram_key(bytes(key))
             count, volumes = decode_year_stats(bytes(value))
             yield ngram, count, volumes
+
+
+def years_with_data(db_path: str, years: Iterable[int]) -> List[int]:
+    """The years among ``years`` the database has at least one record for
+    (a binned database holds only its bin-start years)."""
+    from ngramprep.common_db.api import open_db, range_scan
+    out: List[int] = []
+    with open_db(db_path, mode="r", profile="scan:packed24") as db:
+        for year in years:
+            lo, hi = year_prefix(year), year_prefix(year + 1)
+            for _ in range_scan(db, lo, hi, fill_cache=False):
+                out.append(int(year))
+                break
+    return out
 
 
 def corpus_file_name(year: int, weight_by: str, unk_mode: str, part: str = "") -> str:

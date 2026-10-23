@@ -3,7 +3,8 @@
 Three settings make a stage start by deleting its own earlier output:
 ``acquire.overwrite_db`` removes the raw database, ``filter.mode = restart``
 removes the processed or pivoted database, ``tune.mode = restart`` removes a
-named search (its models and scores). Each is the right thing sometimes and
+named search (its models and scores), ``train.mode = restart`` a named
+ensemble of final models. Each is the right thing sometimes and
 a day of lost compute the rest of the time, and a 5-gram database is hundreds
 of gigabytes. ``overwrite_risk`` works out, from the arguments a stage is
 about to be called with, whether it would delete anything and how much; the
@@ -111,6 +112,13 @@ def _target(stage: str, kwargs: Dict[str, Any]) -> Optional[tuple[Path, str, str
         paths = derive_paths(str(stub), int(n), str(release), str(lang))
         return Path(paths["pivoted_db"]).parent / "tuning" / str(kwargs["name"]), \
             f"the tuning search '{kwargs['name']}' (its models and scores)", "tune.mode = restart"
+    if stage == "train":
+        if kwargs.get("mode", "resume") != "restart" or not kwargs.get("name"):
+            return None                     # an unnamed ensemble gets a fresh timestamp directory
+        from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+        paths = derive_paths(str(stub), int(n), str(release), str(lang))
+        return Path(paths["pivoted_db"]).parent / "models" / str(kwargs["name"]), \
+            f"the model ensemble '{kwargs['name']}' (every year's replicates)", "train.mode = restart"
     return None
 
 

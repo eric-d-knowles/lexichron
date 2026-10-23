@@ -41,6 +41,9 @@ def describe(path: str) -> Dict[str, Any]:
     if p.is_dir() and (p / "search.json").is_file():
         search = read_search(str(p))
         return {"kind": "search", "layout": "search", "search": search, "provenance": search.get("provenance")}
+    if p.is_dir() and (p / "train.json").is_file():
+        ens = read_ensemble(str(p))
+        return {"kind": "ensemble", "layout": "ensemble", "ensemble": ens, "provenance": ens.get("provenance")}
     if p.is_file():
         try:
             with open(p, "rb") as fh:
@@ -348,6 +351,8 @@ def format_summary(info: Dict[str, Any]) -> str:
         return info["error"]
     if info["kind"] == "search":
         return "\n".join(format_search(info["search"]))
+    if info["kind"] == "ensemble":
+        return "\n".join(format_ensemble(info["ensemble"]))
     if info["kind"] == "table":
         text = f"table: {info['lines']:,} rows, {len(info['columns'])} columns"
         if info.get("search") and info["search"].get("best_cell"):
@@ -425,6 +430,132 @@ STABILITY_NOTE = ("Seed, split-half and adjacent: mean overlap of the ten neares
                   "Axis: words projected onto the model's pleasant–unpleasant axis; ρ: Spearman correlation with "
                   "human valence ratings; seed, split, adjacent, period: correlation of the projections between "
                   "two models; change: axis period change over adjacent-year change.")
+
+
+def ensembles(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
+    """Model ensembles (the train stage's output) of a corpus directory,
+    newest first, as (name, path)."""
+    if not corpus_dir:
+        return []
+    models = Path(corpus_dir).expanduser() / "models"
+    if not models.is_dir():
+        return []
+    found = [s for s in models.iterdir() if s.is_dir() and (s / "train.json").is_file()]
+    found.sort(key=lambda s: (s / "train.json").stat().st_mtime, reverse=True)
+    return [(s.name, str(s)) for s in found]
+
+
+ENSEMBLE_COLUMNS = (
+    ("year", "Year", "plain"), ("models_on_disk", "Models", "int"), ("vocab_size", "Vocab", "int"),
+    ("train_seconds", "Seconds", "int"), ("axis_words", "Axis words", "int"),
+    ("axis_var_corpus", "Corpus var", "sci"), ("axis_var_seed", "Seed var", "sci"),
+    ("axis_var_replicate", "Replicate var", "sci"), ("axis_se_mean", "SE of mean", "sci"),
+    ("axis_noise_share", "Noise share", "num"),
+)
+ENSEMBLE_LEGEND = (
+    "Each year's models are a crossed design: corpus replicates (Poisson resamples of the year's n-gram counts) x "
+    "seeds. The noise profile projects the valence lexicon's words onto each model's own pleasant-unpleasant axis "
+    "and decomposes the spread across models: Corpus var is the variance across resamples (the sample of text), "
+    "Seed var the variance across seeds within a resample (the fit), both averaged over words; Replicate var stands "
+    "in for both when the design has one level of either. SE of mean is the standard error of a word's ensemble "
+    "mean (sqrt of corpus var / C + seed var / (C x S)); Noise share compares its square with the variance of the "
+    "ensemble means across words (how much of the between-word spread is noise). The same arithmetic applied to "
+    "your own axis and words gives the measurement error of your series."
+)
+
+
+def read_ensemble(ens_dir: str) -> Dict[str, Any]:
+    """What a train run has written: its manifest (``train.json``), one
+    record per finished year (``y<year>/year.json``), how far it has got,
+    and its provenance when finished."""
+    import json
+    d = Path(ens_dir).expanduser()
+    out: Dict[str, Any] = {"path": str(d), "name": d.name, "manifest": {}, "years": [], "years_with_data": [],
+                           "years_done": [], "models_on_disk": 0, "models_expected": 0, "provenance": None}
+    if not d.is_dir():
+        out["error"] = f"{d}: no such directory"
+        return out
+    try:
+        out["manifest"] = json.loads((d / "train.json").read_text())
+    except (OSError, ValueError):
+        out["error"] = f"{d}: not a model ensemble (no train.json)"
+        return out
+    m = out["manifest"]
+    out["years_with_data"] = [int(y) for y in m.get("years_with_data") or []]
+    per_year = int(m.get("corpus_replicates") or 1) * int(m.get("seeds_per_corpus") or 1)
+    out["models_expected"] = per_year * len(out["years_with_data"])
+    years: List[Dict[str, Any]] = []
+    on_disk = 0
+    for ydir in sorted(d.glob("y[0-9]*")):
+        if not ydir.is_dir():
+            continue
+        n = sum(1 for _ in ydir.glob("c*_s*.npz"))
+        on_disk += n
+        try:
+            rec = json.loads((ydir / "year.json").read_text())
+            rec = {k: (float("nan") if v is None else v) for k, v in rec.items()}
+            rec["done"] = True
+        except (OSError, ValueError):
+            rec = {"year": int(ydir.name[1:]), "models_on_disk": n, "done": False}
+        years.append(rec)
+    years.sort(key=lambda r: int(r.get("year", 0)))
+    out["years"] = years
+    out["years_done"] = [int(r["year"]) for r in years if r.get("done")]
+    out["models_on_disk"] = on_disk
+    from lexichron.provenance import read_provenance
+    out["provenance"] = read_provenance(d)
+    return out
+
+
+def ensemble_table(ens: Dict[str, Any]) -> Tuple[List[str], List[List[str]]]:
+    """(headings, rows) of the per-year records, one row per year that has
+    begun; columns with no value anywhere are left out."""
+    years = ens.get("years") or []
+
+    def has_value(k: str) -> bool:
+        return any(isinstance(r.get(k), (int, float)) and r.get(k) == r.get(k) for r in years)
+    shown = [(k, h, kind) for k, h, kind in ENSEMBLE_COLUMNS if k in ("year", "models_on_disk") or has_value(k)]
+    headings = [h for _, h, _ in shown]
+    rows = []
+    for r in years:
+        cells = []
+        for k, _, kind in shown:
+            v = r.get(k)
+            if k == "models_on_disk":
+                per_year = int((ens.get("manifest") or {}).get("corpus_replicates") or 1) * \
+                    int((ens.get("manifest") or {}).get("seeds_per_corpus") or 1)
+                cells.append(f"{int(v or 0)}/{per_year}" + ("" if r.get("done") else " (training)"))
+            else:
+                cells.append(_fmt_cell(v, kind))
+        rows.append(cells)
+    return headings, rows
+
+
+def ensemble_overview(ens: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    """Tiles: (label, value, note)."""
+    m = ens.get("manifest") or {}
+    years = ens.get("years_with_data") or []
+    span = f"{years[0]}-{years[-1]}" if years else "-"
+    done = len(ens.get("years_done") or [])
+    return [("Cell", str(m.get("cell_stem") or "-"), f"{m.get('corpus_replicates', '?')} corpus x "
+             f"{m.get('seeds_per_corpus', '?')} seed replicates per year"),
+            ("Years", f"{done}/{len(years)}", f"complete; {span}"),
+            ("Models", f"{ens.get('models_on_disk', 0)}/{ens.get('models_expected', 0)}", "on disk"),
+            ("Resampling", str(m.get("resampling") or "-"), f"ensemble seed {m.get('noise_seed', '?')}")]
+
+
+def format_ensemble(ens: Dict[str, Any]) -> List[str]:
+    if ens.get("error"):
+        return [ens["error"]]
+    lines = [f"ensemble {ens['name']}: " + "; ".join(f"{l} {v} ({n})" for l, v, n in ensemble_overview(ens))]
+    headings, rows = ensemble_table(ens)
+    if rows:
+        widths = [max(len(headings[i]), *(len(r[i]) for r in rows)) for i in range(len(headings))]
+        for row in [headings] + rows:
+            lines.append("  ".join(f"{c:<{w}}" for c, w in zip(row, widths)).rstrip())
+    else:
+        lines.append("(no year finished yet)")
+    return lines
 
 
 def searches(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
@@ -699,6 +830,11 @@ def _fmt_cell(v: Any, kind: str) -> str:
     if kind == "num":
         try:
             return f"{float(v):.3f}"
+        except (TypeError, ValueError):
+            return str(v)
+    if kind == "sci":                       # a variance: small, best read in exponent form
+        try:
+            return f"{float(v):.2e}"
         except (TypeError, ValueError):
             return str(v)
     return str(v)
