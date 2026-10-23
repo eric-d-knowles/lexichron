@@ -46,3 +46,41 @@ filter:
   workers: 20
   mode: resume                 # resume | restart
   compact_after_ingest: true
+
+tune:                          # hyperparameter search on sampled years (ngram_size 2-5)
+  years: [1968, 2019]          # study period; sampled years are spread over it
+  year_pairs: 4                # 4 adjacent pairs = 8 years
+  vector_size: [100, 300]      # each axis may list several values: the grid is their product
+  window: [2]
+  min_count: [5]
+  epochs: [10]
+  approach: [skip-gram]
+  weight_by: [none]
+  seeds: 2
+  split_half: true
+  name: search1                # results in <corpus>/tuning/search1/
+  mode: resume
+  workers_per_model: 4
+
+train:                         # the final models: a replicate ensemble of one cell per year
+  years: [1968, 2019]
+  vector_size: 100             # the cell (the UI's "Use its suggested cell" copies a search's pick)
+  window: 2
+  min_count: 5
+  epochs: 10
+  approach: skip-gram
+  weight_by: none
+  corpus_replicates: 20        # Poisson resamples of each year's corpus (1 with resampling: none)
+  seeds_per_corpus: 2
+  resampling: poisson          # poisson | none
+  name: final                  # models in <corpus>/models/final/y<year>/c<corpus>_s<seed>.npz
+  mode: resume
+  workers_per_model: 4
+  # temp_dir: $TMPDIR          # corpus resamples on node-local disk
+
+slurm:
+  account: ACCOUNT
+  cpus: 40
+  mem: 28G
+  time: "12:00:00"
+  jobs: 1                      # above 1: a job array for tune or train, each task its share of the years

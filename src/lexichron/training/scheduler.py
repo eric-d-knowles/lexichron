@@ -12,7 +12,8 @@ stage (one write produces every file the year's models read), the year
 and the replicate for the train stage (a file per replicate). The caller
 supplies the writing (``submit_corpus(key)`` starts it, ``pending[key]`` is
 its futures) and the file to train from (``corpus_file(task)``); the
-scheduler keeps ``corpus_ahead`` keys being written, and calls
+scheduler keeps the queue's next ``corpus_ahead`` keys written or being
+written, and calls
 ``on_trained(task)`` as each model lands (it is on disk), ``on_corpus_done
 (key)`` when a key's last model lands, and ``on_year_done(year)`` when a
 year's last model lands, all in the calling process.
@@ -81,15 +82,20 @@ def train_across_years(todo: Sequence[Task], *, models_dir: Path, parallel: int,
         left_in_key[t.corpus_key] = left_in_key.get(t.corpus_key, 0) + 1
         left_in_year[t.year] = left_in_year.get(t.year, 0) + 1
 
-    def keys_in_play() -> List[Hashable]:
+    def keys_ahead() -> List[Hashable]:
+        """The next ``corpus_ahead`` distinct keys the queue will need (the
+        in-flight models' corpora are ready already, so they do not use up
+        the window)."""
         seen: List[Hashable] = []
-        for t in list(in_flight.values()) + queue:
+        for t in queue:
             if t.corpus_key not in seen:
                 seen.append(t.corpus_key)
+                if len(seen) == corpus_ahead:
+                    break
         return seen
 
     def keep_corpora_coming() -> None:
-        for key in keys_in_play()[:corpus_ahead]:
+        for key in keys_ahead():
             if key not in ready and key not in pending:
                 submit_corpus(key)
 
