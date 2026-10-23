@@ -55,7 +55,7 @@ from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
-from lexichron.ui.slurm import ARRAY_STAGES, array_size, write_sbatch
+from lexichron.ui.slurm import ARRAY_STAGES, array_size, stage_command, write_sbatch
 from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.progress import read_progress
 
@@ -348,6 +348,21 @@ class ConfirmMemory(Confirm):
         self.estimate = estimate
 
 
+class ConfirmReplaceSettings(Confirm):
+    """Asks before Save replaces a settings file that this session did not
+    open: the form was not filled from it, so saving would overwrite it with
+    the form's values and drop anything the form does not show."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__("This replaces a settings file you did not open",
+                         f"{path}\n\nThe file exists, but this session did not open it, so the form was not "
+                         f"filled from it. Saving replaces everything in it with what the form shows; settings "
+                         f"it holds that the form does not show are lost. To build on it instead, go back and "
+                         f"open it:  lexichron ui {path}",
+                         "Replace the file", "Keep the file", severity="warning")
+        self.path = path
+
+
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
@@ -459,8 +474,12 @@ class LexichronApp(App):
         self.corpus_section = corpus
         self.sections: List[Section] = [corpus] + list(self.stage_sections.values()) + [SLURM_FIELDS]
         self.config: Dict[str, Any] = {}
+        # Settings files this session opened or wrote: Save replaces any other
+        # file on disk only after asking (see ConfirmReplaceSettings).
+        self._known_settings: set = set()
         if self.explicit_project and self.explicit_project.exists():
             self.config = load_project(self.explicit_project)
+            self._known_settings.add(self.explicit_project.resolve())
         self.loaded_dir: Optional[Path] = self._corpus_dir(self.config)
         self.bridge: Optional[SlurmRunner] = slurm_backend()
         self._status: Dict[str, Any] = {"jobs": None, "jobs_error": "", "docs": [], "selected": None, "log_lines": []}
@@ -567,6 +586,7 @@ class LexichronApp(App):
                     with Horizontal(classes="actions"):
                         yield Button("Write batch script", id="write-sbatch")
                         yield Button("Submit to Slurm", id="submit", variant="primary")
+                    yield Static("", id="submit-command", classes="muted")
                     yield Static("", id="submit-memory", classes="muted")
                     yield Static("", id="submit-status")
             with TabPane("Progress", id="tab-jobs"):
@@ -800,6 +820,7 @@ class LexichronApp(App):
         self.query_one("#dest", Static).update(
             f"Settings file: {dest if dest else '(fill in the corpus directory, language and n-gram size)'}"
             + ("  (reopened from last time)" if self.reopened else ""))
+        self._refresh_command_line(dest)
         try:
             kwargs = build_call(self.func, {k: v for k, v in cfg.items() if k in ("corpus", self.stage)},
                                 self.stage)
@@ -984,42 +1005,54 @@ class LexichronApp(App):
 
     # -- actions ------------------------------------------------------------------
     def action_save(self) -> None:
+        """Save (ctrl+s, the Save button). Asks first when the target is a file
+        on disk that this session did not open or write."""
+        self._save(lambda path: None)
+
+    def _save(self, then: Callable[[Path], None]) -> None:
+        """Write the settings, then run ``then(path)``: at once, or after the
+        user agrees to replace a file this session did not open. Invalid
+        settings are reported and nothing runs."""
         try:
             cfg = self._collect()
             self.config = cfg
             path = self._require_project_path()
         except ConfigError as exc:
             self.notify(str(exc), severity="error")
-            raise
+            return
+        if path.exists() and path.resolve() not in self._known_settings:
+            def answered(go: bool) -> None:
+                if go:
+                    self._write_settings(cfg, path)
+                    then(path)
+                else:
+                    self.notify("Not saved", severity="warning")
+            self.push_screen(ConfirmReplaceSettings(path), answered)
+            return
+        self._write_settings(cfg, path)
+        then(path)
+
+    def _write_settings(self, cfg: Dict[str, Any], path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(f"# lexichron settings file (written by lexichron ui {__version__})\n")
             yaml.safe_dump(cfg, fh, sort_keys=False, default_flow_style=False)
+        self._known_settings.add(path.resolve())
         self.explicit_project = path
         self.loaded_dir = self._corpus_dir(cfg)
         remember_settings_path(path)
         self.notify(f"Saved {path}")
 
-    def _save_quietly(self) -> Optional[Path]:
-        try:
-            self.action_save()
-        except ConfigError:
-            return None
-        return self.project_path
-
     @on(Button.Pressed, "#save")
     def _save_pressed(self) -> None:
-        self._save_quietly()
+        self.action_save()
 
     @on(Button.Pressed, "#run")
     def _run_pressed(self) -> None:
         if self.proc and self.proc.poll() is None:
             self.notify("A run is already in progress", severity="warning")
             return
-        path = self._save_quietly()
-        if path is None:
-            return
-        self._guard_overwrite("run", lambda confirmed: self._start_run(path, confirmed))
+        self._save(lambda path: self._guard_overwrite("run", lambda confirmed: self._start_run(path, confirmed)))
 
     def _start_run(self, project: Path, assume_yes: bool) -> None:
         self.query_one(TabbedContent).active = "tab-run"
@@ -1048,6 +1081,20 @@ class LexichronApp(App):
             def then(confirmed: bool) -> None:
                 self._ask_memory(lambda: inner(confirmed))
         self._size_up_overwrite(action, then)
+
+    def _refresh_command_line(self, dest: Optional[Path]) -> None:
+        """What a batch script written now would run the stage with: the
+        project's own launcher, the image this UI runs in, or the `lexichron`
+        on the job's PATH (a development environment, not the image)."""
+        cmd = stage_command(dest or Path(SETTINGS_FILENAME), self.stage)
+        if cmd[0] == "apptainer":
+            text = f"Jobs run in the image {cmd[2]}"
+        elif cmd[0] == "lexichron":
+            text = ("Jobs run the 'lexichron' on the job's PATH (this environment, not the image); "
+                    "for the image, start the UI with lexichron-ui.")
+        else:
+            text = f"Jobs run with {cmd[0]}"
+        self.query_one("#submit-command", Static).update(text)
 
     def _memory_estimate(self) -> Optional[MemoryEstimate]:
         try:
@@ -1126,9 +1173,7 @@ class LexichronApp(App):
 
     @on(Button.Pressed, "#write-sbatch")
     def _write_sbatch_pressed(self) -> None:
-        if self._save_quietly() is None:
-            return
-        self._guard_overwrite("job", self._write_sbatch)
+        self._save(lambda path: self._guard_overwrite("job", self._write_sbatch))
 
     def _clear_for_array(self, assume_yes: bool) -> Optional[str]:
         """A restart submitted as a job array cannot delete in the job (every
@@ -1161,9 +1206,7 @@ class LexichronApp(App):
 
     @on(Button.Pressed, "#submit")
     def _submit_pressed(self) -> None:
-        if self._save_quietly() is None:
-            return
-        self._guard_overwrite("job", self._submit)
+        self._save(lambda path: self._guard_overwrite("job", self._submit))
 
     def _submit(self, assume_yes: bool) -> None:
         status = self.query_one("#submit-status", Static)

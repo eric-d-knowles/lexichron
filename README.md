@@ -447,7 +447,10 @@ Run and Submit act on.
   settings file beside the database it describes,
   `<corpus directory>/<release>/<language>/<n>gram_files/lexichron.yaml`, so
   each corpus carries its own settings; that corpus's runs, logs and
-  progress go in `.lexichron/` next to it. The exact Python call
+  progress go in `.lexichron/` next to it. If that file exists but was not
+  the one opened (the UI was started with no path, or the corpus fields
+  were changed to another corpus), *Save* asks before replacing it, since
+  the form was not filled from it. The exact Python call
   that will run is under *Resolved call* for anyone who wants to check it.
   Plain `lexichron-ui` reopens the file you saved last time, so closing the
   UI while a job runs and reopening it later brings back the settings and
@@ -458,7 +461,10 @@ Run and Submit act on.
   (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
   single process that merges their output into RocksDB becomes the limit.
   *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
-  file; *Submit* also submits it and shows the job id. *Jobs* splits a
+  file; *Submit* also submits it and shows the job id. A line above the
+  buttons says what the script runs the stage with: the image the UI was
+  started from, or, from a development environment, the `lexichron` on
+  the job's PATH. *Jobs* splits a
   tune (or train) run over that many jobs: the script becomes a Slurm job
   array whose tasks each take every N-th year of the run and write into
   the same output, so a run too long for one job's time limit, or one

@@ -919,3 +919,75 @@ def test_slurm_backend_chosen_at_startup(tmp_path, monkeypatch):
     empty = tmp_path / "empty"; empty.mkdir()
     monkeypatch.setenv("PATH", str(empty))
     asyncio.run(with_nothing())
+
+
+def test_save_asks_before_replacing_a_file_this_session_did_not_open(tmp_path):
+    """The save path follows the corpus fields. Pointing them at a corpus
+    whose settings file already exists, in a session that never opened that
+    file, must not overwrite it silently: the form was not filled from it,
+    so saving would drop whatever it holds."""
+    from textual.widgets import Button
+    from lexichron.ui.app import ConfirmReplaceSettings
+    opened = tmp_path / "a.yaml"
+    opened.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+    other = tmp_path / "20200217" / "eng" / "2gram_files" / "lexichron.yaml"
+    other.parent.mkdir(parents=True)
+    original = (f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 2\n  db_path_stub: {tmp_path}\n"
+                "filter:\n  min_len: 9\ntune:\n  name: precious\n")
+    other.write_text(original)
+
+    async def scenario():
+        app = LexichronApp(opened)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            app.query_one("#f-corpus-ngram_size").value = "2"       # now describes the other corpus
+            await pilot.pause()
+            assert app.project_path == other
+            app.action_save()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmReplaceSettings) and app.screen.path == other
+            await pilot.click("#confirm-keep")
+            await pilot.pause()
+            assert other.read_text() == original                   # kept
+            app.action_save()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmReplaceSettings)
+            await pilot.click("#confirm-go")
+            await pilot.pause()
+            assert "written by lexichron ui" in other.read_text() and "precious" not in other.read_text()
+            app.action_save()                                      # written by this session: no question now
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmReplaceSettings)
+            # a path with no file there yet never asks
+            app.query_one("#f-corpus-ngram_size").value = "3"
+            await pilot.pause()
+            fresh = tmp_path / "20200217" / "eng" / "3gram_files" / "lexichron.yaml"
+            assert app.project_path == fresh and not fresh.exists()
+            app.action_save()
+            await pilot.pause()
+            assert not isinstance(app.screen, ConfirmReplaceSettings) and fresh.exists()
+        _assert_clean(app)
+
+    asyncio.run(scenario())
+
+
+def test_submit_tab_says_what_a_job_would_run(tmp_path, monkeypatch):
+    from textual.widgets import Static
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+
+    async def scenario(expect: str):
+        app = LexichronApp(proj)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert expect in str(app.query_one("#submit-command", Static).content)
+        _assert_clean(app)
+
+    monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
+    asyncio.run(scenario("on the job's PATH"))                      # a development environment
+    monkeypatch.setenv("APPTAINER_CONTAINER", "/images/lexichron-9.9.sif")
+    asyncio.run(scenario("Jobs run in the image /images/lexichron-9.9.sif"))
