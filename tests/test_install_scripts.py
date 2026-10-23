@@ -54,6 +54,17 @@ exit 1
     (bin_dir.parent / "singularity-only" / "singularity").chmod(0o755)
 
 
+def _path_without_runtimes() -> str:
+    """This machine's PATH minus any directory that holds apptainer or
+    singularity, so the fake runtime is the only one the scripts can find
+    (a cluster with a system-wide apptainer would otherwise shadow it)."""
+    keep = []
+    for d in os.environ["PATH"].split(os.pathsep):
+        if d and not any((Path(d) / r).exists() for r in ("apptainer", "singularity")):
+            keep.append(d)
+    return os.pathsep.join(keep)
+
+
 @pytest.fixture
 def env(tmp_path):
     home = tmp_path / "home"; home.mkdir()
@@ -64,11 +75,17 @@ def env(tmp_path):
     fake_bin = tmp_path / "fakebin"
     log = tmp_path / "calls.log"
     _fake_apptainer(fake_bin, log, ui_copy)
-    e = dict(os.environ, HOME=str(home), PATH=f"{fake_bin}:{os.environ['PATH']}",
+    base_path = _path_without_runtimes()
+    e = dict(os.environ, HOME=str(home), PATH=f"{fake_bin}:{base_path}",
              SCRATCH=str(tmp_path / "scratch"), USER="tester")
     e.pop("APPTAINER_CONTAINER", None); e.pop("SINGULARITY_CONTAINER", None)
+    # A cluster may set BASH_ENV to a profile script that every non-interactive
+    # bash sources before running; here it would put the real apptainer back
+    # on the PATH ahead of the fake one. The launchers unset it for the image
+    # themselves; the tests must not inherit it either.
+    e.pop("BASH_ENV", None); e.pop("ENV", None)
     (tmp_path / "scratch").mkdir()
-    return {"home": home, "env": e, "log": log, "tmp": tmp_path, "ui_copy": ui_copy}
+    return {"home": home, "env": e, "log": log, "tmp": tmp_path, "ui_copy": ui_copy, "base_path": base_path}
 
 
 def test_install_ui_writes_both_commands(env):
@@ -127,7 +144,7 @@ def test_install_sh_end_to_end(env):
 def test_install_sh_works_with_singularity_instead_of_apptainer(env):
     """A cluster that only has `singularity` (NYUAD's Jubail, say): the
     installer uses it, and the launchers it writes run the image with it."""
-    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{os.environ['PATH']}")   # no fake apptainer
+    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{env['base_path']}")   # no fake apptainer
     assert shutil.which("apptainer", path=e["PATH"]) is None
     r = subprocess.run(["bash", str(INSTALL_SH)], env=e, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr + r.stdout
@@ -147,7 +164,7 @@ def test_install_sh_works_with_singularity_instead_of_apptainer(env):
     r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=e, capture_output=True, text=True)
     assert r.returncode == 0 and "exec: lexichron --help" in r.stdout
     # and neither at all is a clear message, not a stack of errors
-    bare = dict(e, PATH=os.environ["PATH"])
+    bare = dict(e, PATH=env["base_path"])
     r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=bare, capture_output=True, text=True)
     assert r.returncode == 127 and "neither 'apptainer' nor 'singularity'" in r.stderr
 
@@ -157,7 +174,7 @@ def test_install_sh_copes_with_modules_bash_env_and_older_images(env):
     which the image lacks): the installer must not pass it in. And an image
     from before 0.8 writes launchers that call apptainer by name: on a
     singularity-only cluster the installer points them at singularity."""
-    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{os.environ['PATH']}",
+    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{env['base_path']}",
              BASH_ENV="/share/apps/Modules/init/bash", FAKE_OLD_IMAGE="1")
     r = subprocess.run(["bash", str(INSTALL_SH)], env=e, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr + r.stdout
