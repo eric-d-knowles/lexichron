@@ -338,7 +338,9 @@ lexichron filter lexichron.yaml                        # filter the ingested dat
 lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
 lexichron filter lexichron.yaml --dry-run              # show the call, don't run it
 lexichron tune lexichron.yaml                          # hyperparameter search
+lexichron train lexichron.yaml                         # the final models, as replicate ensembles
 lexichron inspect 5grams_pivoted.db --prefix "[2011] nuclear"   # look at a database
+lexichron inspect models/eng-us-final                  # an ensemble's years and noise profile
 ```
 
 `lexichron inspect` opens a database read-only (any size, any node) and
@@ -352,7 +354,8 @@ corpus's as `[fic][2000] text`. A vocabulary file is shown by rank.
 Misspelled or missing settings are reported before anything runs. So is
 work about to be thrown away: when the settings make a stage delete its
 earlier output first (`acquire.overwrite_db`, `filter.mode: restart`,
-`tune.mode: restart` on a named search), the command says what would go and
+`tune.mode: restart` on a named search, `train.mode: restart` on a named
+ensemble), the command says what would go and
 how much (`filter.mode = restart deletes the pivoted 5-gram database before
 starting: .../5grams_pivoted.db (412 GB in 1,204 files)`) and asks. A batch
 job has nobody to ask, so it needs `--yes` and otherwise stops right there,
@@ -534,6 +537,9 @@ them:
     {N}grams_processed.db       2-5-grams keyed by n-gram, only when
                                 "Pivot by year" is turned off
     logs/                       one log per filter run
+    tuning/<name>/              a hyperparameter search (tune): models, scores, tables
+    models/<name>/              an ensemble of final models (train): train.json,
+                                y<year>/c<corpus>_s<seed>.npz, y<year>/year.json
     lexichron.yaml              the settings the UI saved
     .lexichron/runs/            progress records of every run
 ```
@@ -660,6 +666,54 @@ settings before any final model is trained.
   complete when the last task is; a task that finishes first reports its
   best cell as "so far". A task cannot restart a search (`mode: restart`
   is refused under an array): delete the search first, as the UI does.
+
+## Final models (`train`)
+
+`lexichron train` fits the cell you chose (the search's suggestion, copied
+into the form by *Use its suggested cell*, or any other) for every year of
+the study, as an ensemble per year rather than one model: `corpus_replicates`
+resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
+
+- **Why replicates.** Anything measured on a word2vec model — a word's
+  projection on an axis, say — carries two kinds of noise: the sample of
+  text the model saw, and the fit (random initialisation and negative
+  sampling). One model per year cannot tell either from change over time.
+  A corpus replicate redraws every n-gram's repeat count from a Poisson
+  with that count as its mean (`resampling: poisson`), which is another
+  same-sized sample of books: with the `none` weighting a count-1 n-gram
+  survives with probability 1 − 1/e. Two seeds on the same replicate
+  isolate the fit's share. The crossed design is a two-way random-effects
+  model, and its arithmetic gives the error of any measurement made the
+  same way on these models. The per-replicate models are the product and
+  nothing is aligned: a scalar computed inside one model is unaffected by
+  the arbitrary rotation between fits, so replicates are averaged, and
+  their spread used, as they are.
+- **What is written.** `models/<name>/train.json` records the cell, the
+  years with data, the design and the ensemble seed (every replicate's
+  resampling and training seeds derive from it and its coordinates, so the
+  ensemble is reproducible from the manifest alone). Each year's models land
+  in `y<year>/` as `c<corpus>_s<seed>.npz` (words, vectors and counts,
+  readable with numpy), with a `year.json` of the corpus and model facts.
+- **The noise profile.** `year.json` also carries a general-purpose
+  measurement of the year's noise, with no research question assumed: the
+  valence lexicon's words projected onto each model's own
+  pleasant–unpleasant axis (the `tune` yardstick) and decomposed across the
+  replicates into *corpus variance* (across resamples), *seed variance*
+  (across seeds within a resample), the *standard error of the ensemble
+  mean* per word (√(corpus/C + seed/(C·S))) and the *noise share*, that
+  error's square against the spread of the ensemble means across words.
+  The Inspect tab and `lexichron inspect models/<name>` show these per
+  year; the same arithmetic on your own axis and words is the measurement
+  error of your series.
+- **Scale.** The default 20 × 2 is 40 models a year; 40 × 2 for a tight
+  error estimate. Fifty years of 80 eight-minute models is about 140
+  node-hours, so a run spans jobs: `mode: resume` trains only the models
+  not on disk, and *Jobs* on the Submit tab splits the years over a job
+  array exactly as for `tune` (round-robin, each task its own years, the
+  per-year records written by the task that trained the year). Corpus
+  resamples are written ahead of training by `corpus_writers` processes
+  and deleted as their models finish; `temp_dir: $TMPDIR` keeps them on
+  node-local disk.
 
 ## Provenance
 

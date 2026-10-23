@@ -796,3 +796,73 @@ def test_restart_submitted_as_a_job_array_deletes_before_the_tasks_start(tmp_pat
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_train_form_summary_tuned_cell_and_inspect(tmp_path):
+    """The train stage: its settings form with the ensemble summary, the
+    button that copies a search's suggested cell into the six fields, and
+    the Inspect tab's per-year table of an ensemble."""
+    import json
+    from textual.widgets import DataTable, Input, Static
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    search = corpus / "tuning" / "t1"
+    search.mkdir(parents=True)
+    (search / "search.json").write_text(json.dumps({"grid": {"vector_size": [100, 300]}, "sample_years": [1990, 1991],
+                                                     "seeds": 2, "split_half": True}))
+    cells = [{"cell": "vs300_w5_mc10_e20_sg0_wbdoc_freq", "vector_size": 300, "window": 5, "min_count": 10,
+              "epochs": 20, "approach": "cbow", "weight_by": "doc_freq", "years": 2, "coverage": 0.9,
+              "seed_overlap": 0.8}]
+    (search / "summary.json").write_text(json.dumps({"cells": cells, "best_cell": cells[0]["cell"],
+                                                      "best_rule": "the most stable"}))
+    ens = corpus / "models" / "e1"
+    (ens / "y1990").mkdir(parents=True)
+    (ens / "y1991").mkdir()
+    (ens / "train.json").write_text(json.dumps({"cell_stem": "vs100_w2_mc5_e10_sg1_wbnone", "years": [1990, 1991],
+                                                 "years_with_data": [1990, 1991], "corpus_replicates": 2,
+                                                 "seeds_per_corpus": 2, "resampling": "poisson", "noise_seed": 0}))
+    for i in range(4):
+        (ens / "y1990" / f"c{i // 2:02d}_s{i % 2}.npz").write_bytes(b"x")
+    (ens / "y1990" / "year.json").write_text(json.dumps({
+        "year": 1990, "models_on_disk": 4, "vocab_size": 12000, "train_seconds": 480, "axis_words": 3000,
+        "axis_var_seed": 0.0004, "axis_var_corpus": 0.0012, "axis_var_replicate": None, "axis_se_mean": 0.026,
+        "axis_var_words": 0.02, "axis_noise_share": 0.034}))
+    (ens / "y1991" / "c00_s0.npz").write_bytes(b"x")
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "train:\n  name: e1\n  years: [1990, 1991]\n  corpus_replicates: 2\n  seeds_per_corpus: 2\n"
+                    "slurm:\n  cpus: 32\n  jobs: 2\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "train")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.query_one("#inspect-ensemble").display and not app.query_one("#inspect-generic").display
+            summary = str(app.query_one("#train-summary", Static).content)
+            assert "2 years (1990-1991) x 2 corpus x 2 seed replicates = 4 models per year, 8 in all" in summary
+            assert "8 at a time x 4 threads on 32 CPUs" in summary and "Split over 2 jobs" in summary
+            # the tuned cell lands in the form
+            assert app.query_one("#f-train-vector_size", Input).value == "100"
+            app._tuned_cell_pressed()
+            await pilot.pause()
+            assert app.query_one("#f-train-vector_size", Input).value == "300"
+            assert app.query_one("#f-train-window", Input).value == "5"
+            assert app.query_one("#f-train-epochs", Input).value == "20"
+            assert app.query_one("#f-train-approach").value == "cbow"
+            assert app.query_one("#f-train-weight_by").value == "doc_freq"
+            assert app.config["train"]["vector_size"] == 300 and app.config["train"]["weight_by"] == "doc_freq"
+            # the Inspect tab shows the ensemble's years
+            tiles = [str(t.content) for t in app.query("#ensemble-meters .meter")]
+            assert any("1/2" in t and "complete" in t for t in tiles) and any("5/8" in t for t in tiles)
+            table = app.query_one("#ensemble-table", DataTable)
+            assert table.row_count == 2
+            cols = [str(c.label) for c in table.columns.values()]
+            assert cols[:3] == ["Year", "Models", "Vocab"] and "SE of mean" in cols and "Replicate var" not in cols
+            first = [str(c) for c in table.get_row_at(0)]
+            assert first[0].strip() == "1990" and first[1].strip() == "4/4" and "12,000" in first[2]
+            second = [str(c) for c in table.get_row_at(1)]
+            assert second[1].strip() == "1/4 (training)"
+        _assert_clean(app)
+
+    asyncio.run(scenario())
