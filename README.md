@@ -332,7 +332,9 @@ lexichron filter lexichron.yaml                        # filter the ingested dat
 lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
 lexichron filter lexichron.yaml --dry-run              # show the call, don't run it
 lexichron tune lexichron.yaml                          # hyperparameter search
+lexichron train lexichron.yaml                         # the final models, as replicate ensembles
 lexichron inspect 5grams_pivoted.db --prefix "[2011] nuclear"   # look at a database
+lexichron inspect models/eng-us-final                  # an ensemble's years and noise profile
 ```
 
 `lexichron inspect` opens a database read-only (any size, any node) and
@@ -346,7 +348,8 @@ corpus's as `[fic][2000] text`. A vocabulary file is shown by rank.
 Misspelled or missing settings are reported before anything runs. So is
 work about to be thrown away: when the settings make a stage delete its
 earlier output first (`acquire.overwrite_db`, `filter.mode: restart`,
-`tune.mode: restart` on a named search), the command says what would go and
+`tune.mode: restart` on a named search, `train.mode: restart` on a named
+ensemble), the command says what would go and
 how much (`filter.mode = restart deletes the pivoted 5-gram database before
 starting: .../5grams_pivoted.db (412 GB in 1,204 files)`) and asks. A batch
 job has nobody to ask, so it needs `--yes` and otherwise stops right there,
@@ -435,10 +438,18 @@ Run and Submit act on.
   (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
   single process that merges their output into RocksDB becomes the limit.
   *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
-  file; *Submit* also submits it and shows the job id. Run, Write batch
-  script and Submit all check first whether the settings would make the
-  stage delete its earlier output (a database, a tuning search); if so, a
-  dialog says what and how much, and *Keep it* cancels. The tab also
+  file; *Submit* also submits it and shows the job id. *Jobs* splits a
+  tune (or train) run over that many jobs: the script becomes a Slurm job
+  array whose tasks each take every N-th year of the run and write into
+  the same output, so a run too long for one job's time limit, or one
+  that should spread over several nodes, is one submission; the grid
+  summary on the Settings tab says how the years would split. Run, Write
+  batch script and Submit all check first whether the settings would make
+  the stage delete its earlier output (a database, a tuning search); if so,
+  a dialog says what and how much, and *Keep it* cancels. A restart
+  submitted as a job array is deleted here, after that dialog, since the
+  tasks cannot do it (each would delete what the others are writing); the
+  tasks then resume into the empty directory. The tab also
   shows a rough memory estimate for the job (workers × per-worker need plus
   the parent process; the script sets the worker count from the CPUs unless
   the stage's `workers` is set), and asks before submitting a job whose
@@ -520,6 +531,9 @@ them:
     {N}grams_processed.db       2-5-grams keyed by n-gram, only when
                                 "Pivot by year" is turned off
     logs/                       one log per filter run
+    tuning/<name>/              a hyperparameter search (tune): models, scores, tables
+    models/<name>/              an ensemble of final models (train): train.json,
+                                y<year>/c<corpus>_s<seed>.npz, y<year>/year.json
     lexichron.yaml              the settings the UI saved
     .lexichron/runs/            progress records of every run
 ```
@@ -588,7 +602,12 @@ settings before any final model is trained.
   for a different axis; nothing in the default assumes a research question.
 - **The tables.** `tuning/<name>/results.tsv` (cell x year), `pairs.tsv`
   (year pairs), `summary.tsv` and `summary.json` (per cell, with the
-  change ratios). The Inspect tab shows the columns in families
+  change ratios). The scores themselves live one per file under
+  `scores/` (a cell-year each) and `pairs/` (a year pair each); the tables
+  are exports rebuilt from the files, and `lexichron inspect` and the
+  Inspect tab read the files, so they are current whoever is still writing
+  (a search from before 0.9 has only its tables; its next run or read
+  imports them). The Inspect tab shows the columns in families
   (benchmarks, neighbourhoods, valence axis, or all) with the ± spreads on
   or off, so the table fits an ordinary window.
 - **The suggestions.** Each family stars its own cell by its own rule, and
@@ -631,6 +650,64 @@ settings before any final model is trained.
 - **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
   resume mode a rerun with more values trains only the new cells, and
   scores already in the tables are kept rather than recomputed.
+- **Splitting a search over jobs.** With *Jobs* above 1 on the Submit tab
+  (or `--set tune.array_task=<i> --set tune.array_count=<N>` on a job you
+  write yourself; a hand-written `#SBATCH --array` script may leave them
+  to Slurm's variables), each task trains and scores every N-th sampled
+  year, counting from its own, so every task gets an even mix of early
+  and late years and they finish together. A year pair is scored by
+  whichever task finds both years' models on disk, so the pairs are
+  complete when the last task is; a task that finishes first reports its
+  best cell as "so far". A task cannot restart a search (`mode: restart`
+  is refused under an array): delete the search first, as the UI does.
+
+## Final models (`train`)
+
+`lexichron train` fits the cell you chose (the search's suggestion, copied
+into the form by *Use its suggested cell*, or any other) for every year of
+the study, as an ensemble per year rather than one model: `corpus_replicates`
+resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
+
+- **Why replicates.** Anything measured on a word2vec model — a word's
+  projection on an axis, say — carries two kinds of noise: the sample of
+  text the model saw, and the fit (random initialisation and negative
+  sampling). One model per year cannot tell either from change over time.
+  A corpus replicate redraws every n-gram's repeat count from a Poisson
+  with that count as its mean (`resampling: poisson`), which is another
+  same-sized sample of books: with the `none` weighting a count-1 n-gram
+  survives with probability 1 − 1/e. Two seeds on the same replicate
+  isolate the fit's share. The crossed design is a two-way random-effects
+  model, and its arithmetic gives the error of any measurement made the
+  same way on these models. The per-replicate models are the product and
+  nothing is aligned: a scalar computed inside one model is unaffected by
+  the arbitrary rotation between fits, so replicates are averaged, and
+  their spread used, as they are.
+- **What is written.** `models/<name>/train.json` records the cell, the
+  years with data, the design and the ensemble seed (every replicate's
+  resampling and training seeds derive from it and its coordinates, so the
+  ensemble is reproducible from the manifest alone). Each year's models land
+  in `y<year>/` as `c<corpus>_s<seed>.npz` (words, vectors and counts,
+  readable with numpy), with a `year.json` of the corpus and model facts.
+- **The noise profile.** `year.json` also carries a general-purpose
+  measurement of the year's noise, with no research question assumed: the
+  valence lexicon's words projected onto each model's own
+  pleasant–unpleasant axis (the `tune` yardstick) and decomposed across the
+  replicates into *corpus variance* (across resamples), *seed variance*
+  (across seeds within a resample), the *standard error of the ensemble
+  mean* per word (√(corpus/C + seed/(C·S))) and the *noise share*, that
+  error's square against the spread of the ensemble means across words.
+  The Inspect tab and `lexichron inspect models/<name>` show these per
+  year; the same arithmetic on your own axis and words is the measurement
+  error of your series.
+- **Scale.** The default 20 × 2 is 40 models a year; 40 × 2 for a tight
+  error estimate. Fifty years of 80 eight-minute models is about 140
+  node-hours, so a run spans jobs: `mode: resume` trains only the models
+  not on disk, and *Jobs* on the Submit tab splits the years over a job
+  array exactly as for `tune` (round-robin, each task its own years, the
+  per-year records written by the task that trained the year). Corpus
+  resamples are written ahead of training by `corpus_writers` processes
+  and deleted as their models finish; `temp_dir: $TMPDIR` keeps them on
+  node-local disk.
 
 ## Provenance
 

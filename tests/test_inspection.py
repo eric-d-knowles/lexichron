@@ -153,7 +153,8 @@ def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
     s = inspection.read_search(str(search))
     assert s["years_sampled"] == [1990, 1991] and s["years_scored"] == [1990] and s["models_on_disk"] == 1
     assert s["best_cell"] == "vs100_w2_mc5_e5_sg1_wbfreq" and len(s["results"]) == 2 and s["pairs"] == []
-    assert s["results"][1]["seed_overlap"] != s["results"][1]["seed_overlap"]       # blank -> NaN
+    blank = next(r for r in s["results"] if r["cell"].startswith("vs100"))
+    assert blank["seed_overlap"] != blank["seed_overlap"]                             # blank -> NaN
     o = inspection.search_overview(s)
     assert o["tiles"][0] == ("Cells", "2", "in the table; from this grid")
     assert o["tiles"][1] == ("Years", "1/2", "complete for this grid")          # both cells have 1990

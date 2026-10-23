@@ -23,7 +23,8 @@ Document::
                                             # whole database incl. earlier runs
       "message": "...",                     # last error, if any
       "db_path": "...", "log_path": "...",  # where the output and log are
-      "slurm_job_id": "12345" | null,       # when run under Slurm
+      "slurm_job_id": "12345" | null,       # when run under Slurm (12345_3 for an array task)
+      "array": {"task": 3, "count": 8} | null,   # a task of a job array: set by the stage
       "hostname": "..."
     }
 """
@@ -40,6 +41,15 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
 __all__ = ["ProgressReporter", "read_progress"]
+
+
+def slurm_job_id() -> Optional[str]:
+    """The job as ``squeue`` names it: ``12345``, or ``12345_3`` for a task
+    of a job array (whose own ``SLURM_JOB_ID`` the queue does not show)."""
+    array_job, task = os.environ.get("SLURM_ARRAY_JOB_ID"), os.environ.get("SLURM_ARRAY_TASK_ID")
+    if array_job and task:
+        return f"{array_job}_{task}"
+    return os.environ.get("SLURM_JOB_ID")
 
 
 def _now() -> str:
@@ -82,7 +92,8 @@ class ProgressReporter:
             "inputs": {k: (str(v) if v is not None else None) for k, v in (inputs or {}).items()},
             "db_path": str(db_path) if db_path else None,
             "log_path": str(log_path) if log_path else None,
-            "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+            "slurm_job_id": slurm_job_id(),
+            "array": None,
             "hostname": socket.gethostname(),
         }
         if self.path:

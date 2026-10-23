@@ -40,6 +40,7 @@ def available_cpus() -> int:
 ACQUIRE_BASE, ACQUIRE_PER_WORKER, ACQUIRE_CHUNK_ENTRIES = 3_000, 600, 200_000
 FILTER_BASE, FILTER_PER_WORKER = 4_000, 250
 TUNE_BASE, TUNE_PER_TRAINER = 3_000, 600
+TRAIN_PER_WRITER = 500          # a corpus writer streams the pivoted database with a small cache
 
 _UNITS = {"": 1, "K": 1 / 1024, "M": 1, "G": 1024, "T": 1024 * 1024}
 
@@ -113,13 +114,15 @@ def memory_estimate(stage: str, kwargs: Dict[str, Any], slurm: Dict[str, Any]) -
         fix = (f"Ask for {fmt_gb(need)}, or set filter.workers to {fit_workers} so the script does not tie "
                f"the worker count to the {cpus} CPUs.")
         return MemoryEstimate(need, have, workers, "worker", FILTER_PER_WORKER, FILTER_BASE, fix)
-    if stage == "tune":
+    if stage in ("tune", "train"):
         total = _int(kwargs.get("workers"), cpus)
         threads = max(1, _int(kwargs.get("workers_per_model"), 4))
         trainers = max(1, total // threads)
-        need = TUNE_BASE + TUNE_PER_TRAINER * trainers
-        fit_threads = max(threads, -(-total // max(1, ((have or 0) - TUNE_BASE) // TUNE_PER_TRAINER))) if have else threads
-        fix = (f"Ask for {fmt_gb(need)}, or raise tune.workers_per_model to {fit_threads} so fewer models "
+        writers = max(1, _int(kwargs.get("corpus_writers"), 2)) if stage == "train" else 1
+        base = TUNE_BASE + TRAIN_PER_WRITER * (writers - 1)        # tune's base already holds one writer
+        need = base + TUNE_PER_TRAINER * trainers
+        fit_threads = max(threads, -(-total // max(1, ((have or 0) - base) // TUNE_PER_TRAINER))) if have else threads
+        fix = (f"Ask for {fmt_gb(need)}, or raise {stage}.workers_per_model to {fit_threads} so fewer models "
                f"train at once.")
-        return MemoryEstimate(need, have, trainers, "training process", TUNE_PER_TRAINER, TUNE_BASE, fix)
+        return MemoryEstimate(need, have, trainers, "training process", TUNE_PER_TRAINER, base, fix)
     return None

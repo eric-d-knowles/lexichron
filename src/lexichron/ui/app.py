@@ -22,6 +22,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -43,17 +44,18 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
-from lexichron.inspection import (FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE, best_in_columns,
+from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE,
+                                  best_in_columns, ensemble_overview, ensemble_table, ensembles, read_ensemble,
                                   suggested_for, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
 from lexichron.resources import MemoryEstimate, memory_estimate
-from lexichron.safeguards import OverwriteRisk, overwrite_risk
+from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
-from lexichron.ui.slurm import write_sbatch
+from lexichron.ui.slurm import ARRAY_STAGES, array_size, write_sbatch
 from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.progress import read_progress
 
@@ -395,6 +397,15 @@ class LexichronApp(App):
     #search-legend { margin: 1 0 0 0; }
     #search-legend Static { height: auto; padding: 0 1; color: $text-muted; }
     #search-name { width: 40; }
+    #ensemble-name { width: 40; }
+    #ensemble-meters { height: auto; }
+    #ensemble-meters .meter-group { display: none; }
+    #ensemble-empty, #ensemble-note { height: auto; padding: 0 1; color: $text-muted; }
+    #ensemble-table { height: auto; max-height: 60%; }
+    #ensemble-legend { margin: 1 0 0 0; }
+    #ensemble-legend Static { height: auto; padding: 0 1; color: $text-muted; }
+    #train-summary { height: auto; padding: 0 1; color: $text-muted; }
+    #tuned-cell { margin: 0 0 0 2; }
     #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
     #inspect-provenance { height: auto; padding: 0 1; }
     #inspect-detail { height: auto; max-height: 12; padding: 0 1; overflow-y: auto; }
@@ -522,6 +533,13 @@ class LexichronApp(App):
                                     yield from self._field_widgets(name, f)
                             if name == "tune":
                                 yield Static("", id="grid-summary", classes="grid-summary")
+                            if name == "train":
+                                with Horizontal(classes="row"):
+                                    yield Label("From search")
+                                    yield Select([], allow_blank=True, id="tuned-search", compact=True,
+                                                 prompt="(searches of this corpus)")
+                                    yield Button("Use its suggested cell", id="tuned-cell", compact=True)
+                                yield Static("", id="train-summary")
                     with Collapsible(title="Advanced", collapsed=True, id="advanced"):
                         for f in self.corpus_section.fields:
                             if f.advanced:
@@ -594,6 +612,19 @@ class LexichronApp(App):
                     yield Static("", id="search-pairs")
                     with Collapsible(title="What the columns mean", collapsed=True, id="search-legend"):
                         yield Static("", id="search-legend-text")
+                # the train stage: an ensemble's years
+                with Vertical(id="inspect-ensemble"):
+                    with Horizontal(classes="row"):
+                        yield Label("Ensemble")
+                        yield Select([], allow_blank=True, id="ensemble-name", compact=True,
+                                     prompt="(ensembles of this corpus)")
+                        yield Button("Reload", id="ensemble-reload", compact=True)
+                    yield Static("", id="ensemble-empty")
+                    yield Meters(id="ensemble-meters")
+                    yield DataTable(id="ensemble-table", zebra_stripes=True)
+                    yield Static("", id="ensemble-note")
+                    with Collapsible(title="What the columns mean", collapsed=True, id="ensemble-legend"):
+                        yield Static(ENSEMBLE_LEGEND, id="ensemble-legend-text")
                 # the other stages: records of a database or vocabulary file
                 with Vertical(id="inspect-generic"):
                     with Horizontal(classes="row"):
@@ -688,9 +719,13 @@ class LexichronApp(App):
             self.query_one(f"#stage-btn-{name}", Button).variant = "primary" if name == stage else "default"
         self.query_one("#stage-desc", Static).update(STAGES[stage][1])
         self.query_one("#inspect-search").display = stage == "tune"
-        self.query_one("#inspect-generic").display = stage != "tune"
+        self.query_one("#inspect-ensemble").display = stage == "train"
+        self.query_one("#inspect-generic").display = stage not in ("tune", "train")
         if stage == "tune":
             self._refresh_searches()
+        if stage == "train":
+            self._refresh_ensembles()
+            self._refresh_tuned_searches()
 
     @on(Button.Pressed, ".stage-button")
     def _stage_button_pressed(self, event: Button.Pressed) -> None:
@@ -778,6 +813,8 @@ class LexichronApp(App):
         self._refresh_memory_line()
         if self.stage == "tune":
             self._refresh_grid_summary(kwargs)
+        if self.stage == "train":
+            self._refresh_train_summary(kwargs)
 
     def _refresh_grid_summary(self, kwargs: Dict[str, Any]) -> None:
         """Under the tune form: what the grid amounts to, and whether the
@@ -800,9 +837,137 @@ class LexichronApp(App):
                     f"{at_once} at a time x {threads} threads on {cpus} CPUs")
             if cpus % threads:
                 text += f"  (CPUs are not a multiple of the threads per model; {cpus - at_once * threads} idle)"
+            text += self._array_note(sorted(set(int(y) for y in years)), len(grid) * per)
         except (ValueError, TypeError) as exc:
             text = f"Grid: {exc}"
         widget.update(text)
+
+    def _refresh_train_summary(self, kwargs: Dict[str, Any]) -> None:
+        """Under the train form: the ensemble's size (every year of the study
+        is assumed to have data), the parallelism, and the split over jobs."""
+        widget = self.query_one("#train-summary", Static)
+        try:
+            first, last = (int(v) for v in kwargs.get("years", (1968, 2019)))
+            years = list(range(first, last + 1))
+            corpora = int(kwargs.get("corpus_replicates", 20)) if kwargs.get("resampling", "poisson") != "none" else 1
+            seeds = int(kwargs.get("seeds_per_corpus", 2))
+            per_year = corpora * seeds
+            cpus = int((self.config.get("slurm") or {}).get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)
+            threads = max(1, int(kwargs.get("workers_per_model", 4)))
+            at_once = max(1, cpus // threads)
+            text = (f"Ensemble: {len(years)} years ({first}-{last}) x {corpora} corpus x {seeds} seed replicates "
+                    f"= {per_year} models per year, {len(years) * per_year} in all; "
+                    f"{at_once} at a time x {threads} threads on {cpus} CPUs")
+            text += self._array_note(years, per_year)
+        except (ValueError, TypeError) as exc:
+            text = f"Ensemble: {exc}"
+        widget.update(text)
+
+    def _refresh_tuned_searches(self) -> None:
+        """The searches a train run can take its cell from."""
+        corpus_dir = self._corpus_dir(self.config)
+        found = searches(str(corpus_dir) if corpus_dir else None)
+        sel = self.query_one("#tuned-search", Select)
+        current = sel.value if sel.value is not Select.NULL else None
+        sel.set_options(found)
+        if found and not any(path == current for _, path in found):
+            sel.value = found[0][1]
+
+    @on(Button.Pressed, "#tuned-cell")
+    def _tuned_cell_pressed(self) -> None:
+        """Copy a search's suggested cell into the train form's six fields."""
+        sel = self.query_one("#tuned-search", Select)
+        if sel.value is Select.NULL:
+            self.notify("No tuning search to take a cell from", severity="warning")
+            return
+        search = read_search(str(sel.value))
+        stem = search.get("best_cell")
+        if not stem:
+            self.notify(f"{search.get('name')}: no suggested cell yet", severity="warning")
+            return
+        from lexichron.training.grid import Cell
+        cell = Cell.from_stem(stem)
+        for key, value in cell.as_dict().items():
+            w = self.query_one(f"#f-train-{key}")
+            if isinstance(w, Select):
+                w.value = str(value)
+            else:
+                w.value = str(value)
+        self.notify(f"Cell {stem} from {search.get('name')} ({search.get('best_rule', '')[:60]}…)")
+        self._refresh_preview()
+
+    # -- Inspect tab, train stage: an ensemble's years -----------------------
+    def _refresh_ensembles(self) -> None:
+        corpus_dir = self._corpus_dir(self.config)
+        found = ensembles(str(corpus_dir) if corpus_dir else None)
+        sel = self.query_one("#ensemble-name", Select)
+        current = sel.value if sel.value is not Select.NULL else None
+        sel.set_options(found)
+        wanted = (self.config.get("train") or {}).get("name")
+        choice = next((path for name, path in found if name == wanted), None) or \
+            (current if any(path == current for _, path in found) else None) or (found[0][1] if found else None)
+        if choice is None:
+            self._show_ensemble(None)
+            return
+        if sel.value != choice:
+            sel.value = choice
+        else:
+            self._load_ensemble(choice)
+
+    @on(Select.Changed, "#ensemble-name")
+    def _ensemble_chosen(self, event: Select.Changed) -> None:
+        if event.value is not Select.NULL:
+            self._load_ensemble(str(event.value))
+
+    @on(Button.Pressed, "#ensemble-reload")
+    def _ensemble_reload_pressed(self) -> None:
+        self._refresh_ensembles()
+
+    @work(thread=True, group="ensemble", exclusive=True)
+    def _load_ensemble(self, path: str) -> None:
+        ens = read_ensemble(path)
+        self.call_from_thread(self._show_ensemble, ens)
+
+    def _show_ensemble(self, ens: Optional[Dict[str, Any]]) -> None:
+        table = self.query_one("#ensemble-table", DataTable)
+        table.clear(columns=True)
+        empty = self.query_one("#ensemble-empty", Static)
+        has = ens is not None and not ens.get("error")
+        for wid in ("#ensemble-meters", "#ensemble-table", "#ensemble-note", "#ensemble-legend"):
+            self.query_one(wid).display = has
+        if not has:
+            empty.update(ens["error"] if ens else
+                         "No model ensemble in this corpus directory yet: run the train stage, and its years "
+                         "appear here as they finish.")
+            empty.display = True
+            return
+        empty.display = False
+        self.query_one("#ensemble-meters", Meters).show([("", ensemble_overview(ens))])
+        headings, rows = ensemble_table(ens)
+        for h in headings:
+            table.add_column(h, key=h)
+        widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headings)]
+        for row in rows:
+            table.add_row(*[Text(_aligned(v, widths[i])) for i, v in enumerate(row)], key=row[0])
+        note = "" if rows else "(no year finished yet)"
+        if ens.get("provenance"):
+            note = (note + "\n" if note else "") + "\n".join(format_provenance(ens["provenance"])[:1])
+        self.query_one("#ensemble-note", Static).update(note)
+
+    def _array_note(self, years: List[int], models_per_year: int) -> str:
+        """How the Submit tab's Jobs setting would split the years."""
+        from lexichron.arrays import ArrayTask, task_share
+        jobs = array_size(self.stage, self.config.get("slurm") or {})
+        if jobs <= 1:
+            return ""
+        shares = [task_share(years, ArrayTask(i, jobs)) for i in range(jobs)]
+        busy = [s for s in shares if s]
+        most = max(len(s) for s in shares)
+        note = (f"\nSplit over {jobs} jobs (Submit: Jobs): each takes every {jobs}th year, "
+                f"up to {most} year{'s' if most != 1 else ''} and {most * models_per_year} models")
+        if len(busy) < jobs:
+            note += f"; only {len(busy)} of the {jobs} would have a year to do (there are {len(years)})"
+        return note
 
     def _friendly(self, message: str) -> str:
         """Replace ``section.key`` names in a config error with the form's labels."""
@@ -966,14 +1131,34 @@ class LexichronApp(App):
             return
         self._guard_overwrite("job", self._write_sbatch)
 
+    def _clear_for_array(self, assume_yes: bool) -> Optional[str]:
+        """A restart submitted as a job array cannot delete in the job (every
+        task would delete what its siblings are writing), so once the user
+        has confirmed the deletion it is done here, now, and the tasks
+        resume into the empty directory. Returns a line saying so, or None
+        when nothing was deleted."""
+        if not assume_yes or array_size(self.stage, self._slurm_cfg()) <= 1:
+            return None
+        try:
+            kwargs = build_call(self.func, {k: v for k, v in self.config.items() if k in ("corpus", self.stage)},
+                                self.stage)
+        except Exception:
+            return None
+        target = overwrite_target(self.stage, kwargs)
+        if target is None or not target.exists():
+            return None
+        shutil.rmtree(target)
+        return f"Deleted {target} now; the array's {array_size(self.stage, self._slurm_cfg())} tasks resume into it."
+
     def _write_sbatch(self, assume_yes: bool) -> None:
         try:
+            cleared = self._clear_for_array(assume_yes)
             path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
         except (ConfigError, OSError) as exc:
             self.query_one("#submit-status", Static).update(f"Could not write script: {exc}")
             return
         self.query_one("#submit-status", Static).update(
-            f"Wrote {path}\nSubmit by hand with:  sbatch {path}")
+            (f"{cleared}\n" if cleared else "") + f"Wrote {path}\nSubmit by hand with:  sbatch {path}")
 
     @on(Button.Pressed, "#submit")
     def _submit_pressed(self) -> None:
@@ -984,16 +1169,19 @@ class LexichronApp(App):
     def _submit(self, assume_yes: bool) -> None:
         status = self.query_one("#submit-status", Static)
         try:
-            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
             if not self.bridge:
                 raise BridgeUnavailable("no host bridge (LEXICHRON_BRIDGE_DIR not set)")
+            cleared = self._clear_for_array(assume_yes)
+            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
             job_id = self.bridge.sbatch(path)
         except (ConfigError, OSError, BridgeUnavailable, RuntimeError, TimeoutError) as exc:
             status.update(f"Submit failed: {exc}")
             self.notify("Submit failed", severity="error")
             return
-        status.update(f"Submitted job {job_id}  ({path})")
-        self.notify(f"Submitted job {job_id}")
+        tasks = array_size(self.stage, self._slurm_cfg())
+        what = f"job array {job_id} ({tasks} tasks)" if tasks > 1 else f"job {job_id}"
+        status.update((f"{cleared}\n" if cleared else "") + f"Submitted {what}  ({path})")
+        self.notify(f"Submitted {what}")
         self.query_one(TabbedContent).active = "tab-jobs"
         self.refresh_jobs()
 
