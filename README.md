@@ -254,75 +254,69 @@ Notes on the container route:
 
 ### Development installation (conda)
 
-For working on lexichron itself. Clone the repository, activate a conda
-environment, and install in editable mode so that changes to the source take
-effect without reinstalling:
+For working on lexichron itself: the package is installed in editable mode,
+so changes to the source take effect without reinstalling. Linux x86_64 only
+(`rocks-shim`, a dependency, ships as a pre-built wheel for that platform;
+on macOS or Windows the install fails at that step, which does not affect
+HPC users).
+
+**1. Clone the repository.**
 
 ```bash
 git clone https://github.com/eric-d-knowles/lexichron.git
 cd lexichron
-conda activate your-environment
-pip install -e .
 ```
 
-`docs/architecture.md` describes how the filter and pivot pipelines are
-structured.
+**2. Make an environment, or use one you have.** Building lexichron compiles
+Cython extensions, so the environment needs a C++ compiler.
 
-#### Additional setup: Enchant library and Hunspell dictionaries
-
-(The container image includes all of this; the steps below are for the conda
-route only.)
-
-Spell-checking relies on the **Enchant C library** and **Hunspell dictionaries**, and
-model alignment requires the NLTK package's **Swadesh list of stable words**. These
-components cannot be installed automatically via `pip`, so one additional
-setup step is required after installing `lexichron`.
-
-Activate the environment where `lexichron` is installed, then run the setup script:
-
-```bash
-bash scripts/setup_nlp_resources.sh
-```
-
-The script will:
-- Ensure the **Enchant C library** is installed in the active Conda environment
-- Download Hunspell dictionaries for all supported languages
-- Install them inside the environment
-- Configure Conda activation hooks so pyenchant can locate the dictionaries and the Enchant shared library
-
-You only need to run this script **once per environment**.
-
-#### Don't have an environment yet?
-
-A reference `environment.yml` is provided with all dependencies pre-configured. To
-create a dedicated conda environment from it:
+*A new environment* (the simple route): `environment.yml` creates one named
+`lexichron` with Python 3.11, the compiler, Cython and Enchant, and installs
+lexichron into it in editable mode as part of the same step, so there is
+nothing more to install afterwards:
 
 ```bash
 conda env create -f environment.yml
 conda activate lexichron
 ```
 
-Then follow the standard installation steps above.
+*An existing environment*: make sure it has a compiler, then install in
+editable mode:
 
-#### Registering a Jupyter kernel (if needed)
+```bash
+conda activate your-environment
+conda install -c conda-forge cxx-compiler
+pip install -e .
+```
 
-If you don't already have a Jupyter kernel registered for your project environment, you
-can register one now:
+**3. Install the Enchant dictionaries and NLTK data, once per environment.**
+Spell-checking uses the Enchant C library with Hunspell dictionaries, and
+model alignment the NLTK Swadesh list; neither comes through `pip`. With the
+environment active:
+
+```bash
+bash scripts/setup_nlp_resources.sh
+```
+
+The script installs the Enchant library into the active environment if it is
+missing, downloads the Hunspell dictionaries for every supported language,
+puts them inside the environment, and adds activation hooks so pyenchant
+finds both. spaCy's models need no step: they are downloaded on first import.
+
+**4. Register a Jupyter kernel (if you want one).** To use the environment
+from notebooks:
 
 ```bash
 python -m ipykernel install --user --name=lexichron --display-name="Python (lexichron)"
 ```
 
-`--name` sets the internal kernel identifier and `--display-name` sets what appears in
-Jupyter's kernel menu. Replace both with something meaningful to your project — for
-example, `--name=gender_semantics --display-name="Python (gender semantics)"`.
+`--name` sets the internal kernel identifier and `--display-name` what
+appears in Jupyter's kernel menu; replace both with something meaningful to
+your project, e.g. `--name=gender_semantics --display-name="Python (gender semantics)"`.
 
-#### Notes on the conda route
-
-- **C++ compiler**: Building lexichron requires a C++ compiler (`g++`). This is included automatically if you create the environment from `environment.yml`. If installing into an existing environment, ensure one is available with `conda install -c conda-forge gxx`.
-- **spaCy models** are downloaded automatically on first import.
-- **Hunspell dictionaries** are handled by the setup script above and are not downloaded automatically.
-- **`rocks-shim`** (a dependency of lexichron) is distributed as a pre-built Linux x86_64 wheel. If you are on macOS or Windows, installation will fail at this step. HPC cluster users on Linux are unaffected.
+`docs/architecture.md` describes how the filter and pivot pipelines are
+structured. (The container image includes all of the above, so none of these
+steps apply to it.)
 
 ## Command line
 
