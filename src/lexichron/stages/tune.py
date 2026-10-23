@@ -310,6 +310,7 @@ def tune_models(
     scored_cells: set = set()                                     # (cell stem, year) with a row this run
     paired_now: set = set()                                       # pairs scored in this run
     written: List[str] = []                                       # score files this run wrote
+    written_pairs: List[str] = []
 
     def export() -> Dict[str, Any]:
         """The tables, from every score file on disk (a sibling task's too):
@@ -318,8 +319,9 @@ def tune_models(
         leaves them untouched)."""
         fresh_rows, fresh_pairs = store.load_rows(sampled), store.load_pairs(sampled)
         summary = summarize_results(fresh_rows, list(fresh_pairs.values()), cells)
-        missing = not all((out_dir / f).exists() for f in (RESULTS_FILE, PAIRS_FILE))
-        store.export(fresh_rows, fresh_pairs, summary, tables=bool(written) or missing)
+        store.export(fresh_rows, fresh_pairs, summary,
+                     rows_table=bool(written) or not (out_dir / RESULTS_FILE).exists(),
+                     pairs_table=bool(written_pairs) or not (out_dir / PAIRS_FILE).exists())
         return summary
 
     def score_cell(cell: Cell, year: int) -> None:
@@ -367,7 +369,7 @@ def tune_models(
             if row is not None:
                 pairs[pk] = row
                 paired_now.add(pk)
-                written.append(str(store.put_pair(row)))
+                written_pairs.append(str(store.put_pair(row)))
                 logger.info("scored %s %s pair y%s-y%s: overlap %.4f", cell.stem, kind, a, b, row["overlap"])
 
     summary: Dict[str, Any] = {}
@@ -435,7 +437,7 @@ def tune_models(
         if task is not None:
             for cell in cells:
                 score_pairs(cell)
-            if paired_now:
+            if written_pairs:
                 export()
         if not keep_models:
             if task is None:
@@ -595,14 +597,13 @@ def _score_year(cell: Cell, year: int, models: Dict[str, Vectors], seeds: int, s
 
 def _lacks_axis(record: Dict[str, Any], yard: Optional[axis.Axis]) -> bool:
     """Whether a row or pair from an earlier run predates the axis scores
-    this run would add (a resume then rescores it from the models on disk)."""
+    this run would add (a resume then rescores it from the models on disk).
+    A score file is self-describing: the key is there when the axis was
+    scored, even when the score itself was NaN (too few of the lexicon's
+    words in a small corpus), so a NaN is not rescored on every resume."""
     if yard is None:
         return False
-    # a blank cell reads back as NaN, as a never-computed one would in a table
-    # that gained the column later; coverage is a number whenever the row was
-    # scored with a yardstick, so it tells the two apart
-    v = record.get("axis_coverage" if "year" in record else "axis")
-    return not isinstance(v, (int, float)) or v != v
+    return ("axis_coverage" if "year" in record else "axis") not in record
 
 
 def year_pairs_of(sampled: Sequence[int]) -> List[Tuple[int, int, str]]:

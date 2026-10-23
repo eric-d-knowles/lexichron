@@ -114,12 +114,14 @@ class ScoreStore:
 
     # -- exports ---------------------------------------------------------------
     def export(self, rows: Dict[RowKey, Dict[str, Any]], pairs: Dict[PairKey, Dict[str, Any]],
-               summary: Dict[str, Any], tables: bool = True) -> None:
+               summary: Dict[str, Any], rows_table: bool = True, pairs_table: bool = True) -> None:
         """Write the tables from what the caller derived (usually from a
         fresh ``load_rows`` / ``load_pairs``, so a sibling task's additions
-        are in them); with ``tables`` false only the summary."""
-        if tables:
+        are in them): the summary always, the two row tables as asked (a
+        run that changed nothing in one leaves it untouched)."""
+        if rows_table:
             write_tsv(self.dir / RESULTS_FILE, [rows[k] for k in sorted(rows, key=lambda k: (k[1], k[0]))])
+        if pairs_table:
             write_tsv(self.dir / PAIRS_FILE, [pairs[k] for k in sorted(pairs, key=lambda k: (k[1], k[2], k[0]))])
         write_tsv(self.dir / SUMMARY_FILE, summary.get("cells") or [])
         _write_json(self.dir / SUMMARY_JSON, summary)
