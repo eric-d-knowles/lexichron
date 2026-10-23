@@ -441,10 +441,18 @@ Run and Submit act on.
   (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
   single process that merges their output into RocksDB becomes the limit.
   *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
-  file; *Submit* also submits it and shows the job id. Run, Write batch
-  script and Submit all check first whether the settings would make the
-  stage delete its earlier output (a database, a tuning search); if so, a
-  dialog says what and how much, and *Keep it* cancels. The tab also
+  file; *Submit* also submits it and shows the job id. *Jobs* splits a
+  tune (or train) run over that many jobs: the script becomes a Slurm job
+  array whose tasks each take every N-th year of the run and write into
+  the same output, so a run too long for one job's time limit, or one
+  that should spread over several nodes, is one submission; the grid
+  summary on the Settings tab says how the years would split. Run, Write
+  batch script and Submit all check first whether the settings would make
+  the stage delete its earlier output (a database, a tuning search); if so,
+  a dialog says what and how much, and *Keep it* cancels. A restart
+  submitted as a job array is deleted here, after that dialog, since the
+  tasks cannot do it (each would delete what the others are writing); the
+  tasks then resume into the empty directory. The tab also
   shows a rough memory estimate for the job (workers × per-worker need plus
   the parent process; the script sets the worker count from the CPUs unless
   the stage's `workers` is set), and asks before submitting a job whose
@@ -594,7 +602,12 @@ settings before any final model is trained.
   for a different axis; nothing in the default assumes a research question.
 - **The tables.** `tuning/<name>/results.tsv` (cell x year), `pairs.tsv`
   (year pairs), `summary.tsv` and `summary.json` (per cell, with the
-  change ratios). The Inspect tab shows the columns in families
+  change ratios). The scores themselves live one per file under
+  `scores/` (a cell-year each) and `pairs/` (a year pair each); the tables
+  are exports rebuilt from the files, and `lexichron inspect` and the
+  Inspect tab read the files, so they are current whoever is still writing
+  (a search from before 0.9 has only its tables; its next run or read
+  imports them). The Inspect tab shows the columns in families
   (benchmarks, neighbourhoods, valence axis, or all) with the ± spreads on
   or off, so the table fits an ordinary window.
 - **The suggestions.** Each family stars its own cell by its own rule, and
@@ -637,6 +650,16 @@ settings before any final model is trained.
 - **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
   resume mode a rerun with more values trains only the new cells, and
   scores already in the tables are kept rather than recomputed.
+- **Splitting a search over jobs.** With *Jobs* above 1 on the Submit tab
+  (or `--set tune.array_task=<i> --set tune.array_count=<N>` on a job you
+  write yourself; a hand-written `#SBATCH --array` script may leave them
+  to Slurm's variables), each task trains and scores every N-th sampled
+  year, counting from its own, so every task gets an even mix of early
+  and late years and they finish together. A year pair is scored by
+  whichever task finds both years' models on disk, so the pairs are
+  complete when the last task is; a task that finishes first reports its
+  best cell as "so far". A task cannot restart a search (`mode: restart`
+  is refused under an array): delete the search first, as the UI does.
 
 ## Provenance
 
