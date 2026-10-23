@@ -113,11 +113,16 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
 
     where = doc.get("hostname") or ""
     job = doc.get("slurm_job_id")
+    array = doc.get("array") or {}
+    task_txt = f"task {int(array['task']) + 1} of {array['count']}" if array.get("count") else ""
     where_txt = ""
     if job:
-        where_txt = f"job {job}" + (f" on {where}" if where else "")
+        where_txt = f"job {job}" + (f" ({task_txt})" if task_txt else "") + (f" on {where}" if where else "")
     elif where:
-        where_txt = f"on {where}"
+        where_txt = (f"{task_txt} " if task_txt else "") + f"on {where}"
+    if task_txt and array.get("years"):
+        ys = [int(y) for y in array["years"]]
+        where_txt += f"; years {', '.join(str(y) for y in ys)}" if len(ys) <= 8 else f"; {len(ys)} years"
 
     phase = doc.get("phase") or "ingesting"
     phase_started = _parse(doc.get("phase_started"))

@@ -750,3 +750,49 @@ def test_submit_warns_when_memory_is_too_small_for_the_workers(tmp_path, monkeyp
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_restart_submitted_as_a_job_array_deletes_before_the_tasks_start(tmp_path, monkeypatch):
+    """A tune restart with Jobs above 1: the dialog asks as usual; confirming
+    deletes the search here (the tasks cannot: each would delete the
+    others' work) and the script sends the tasks in resume mode. The grid
+    summary says how the years split."""
+    from textual.widgets import Static
+    from lexichron.ui.app import ConfirmOverwrite
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    search = corpus / "tuning" / "t"
+    search.mkdir(parents=True)
+    (search / "search.json").write_text("{}"); (search / "models").mkdir()
+    (search / "models" / "a.npz").write_bytes(b"x" * 1000)
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "tune:\n  vector_size: [100, 300]\n  name: t\n  mode: restart\n"
+                    "slurm:\n  account: acct\n  cpus: 40\n  mem: 64G\n  jobs: 4\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "tune")
+        async with app.run_test(size=(150, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            summary = str(app.query_one("#grid-summary", Static).content)
+            assert "Split over 4 jobs" in summary and "every 4th year" in summary and "2 years and 16 models" in summary
+            app._write_sbatch_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmOverwrite)
+            await pilot.click("#confirm-keep")
+            await pilot.pause()
+            assert search.exists()
+            app._write_sbatch_pressed()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.click("#confirm-go")
+            await pilot.pause()
+            status = str(app.query_one("#submit-status", Static).content)
+            assert not search.exists() and "Deleted" in status and "4 tasks resume" in status
+            script = (corpus / "lexichron.tune.sbatch").read_text()
+            assert "#SBATCH --array=0-3" in script and "--set tune.mode=resume" in script
+            assert "--set tune.array_task=$SLURM_ARRAY_TASK_ID" in script
+        _assert_clean(app)
+
+    asyncio.run(scenario())

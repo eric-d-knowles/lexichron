@@ -22,6 +22,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -49,11 +50,11 @@ from lexichron.inspection import (FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COL
                                   search_table, searches, year_series)
 from lexichron.provenance import format_provenance
 from lexichron.resources import MemoryEstimate, memory_estimate
-from lexichron.safeguards import OverwriteRisk, overwrite_risk
+from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
-from lexichron.ui.slurm import write_sbatch
+from lexichron.ui.slurm import ARRAY_STAGES, array_size, write_sbatch
 from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.progress import read_progress
 
@@ -800,9 +801,25 @@ class LexichronApp(App):
                     f"{at_once} at a time x {threads} threads on {cpus} CPUs")
             if cpus % threads:
                 text += f"  (CPUs are not a multiple of the threads per model; {cpus - at_once * threads} idle)"
+            text += self._array_note(sorted(set(int(y) for y in years)), len(grid) * per)
         except (ValueError, TypeError) as exc:
             text = f"Grid: {exc}"
         widget.update(text)
+
+    def _array_note(self, years: List[int], models_per_year: int) -> str:
+        """How the Submit tab's Jobs setting would split the years."""
+        from lexichron.arrays import ArrayTask, task_share
+        jobs = array_size(self.stage, self.config.get("slurm") or {})
+        if jobs <= 1:
+            return ""
+        shares = [task_share(years, ArrayTask(i, jobs)) for i in range(jobs)]
+        busy = [s for s in shares if s]
+        most = max(len(s) for s in shares)
+        note = (f"\nSplit over {jobs} jobs (Submit: Jobs): each takes every {jobs}th year, "
+                f"up to {most} year{'s' if most != 1 else ''} and {most * models_per_year} models")
+        if len(busy) < jobs:
+            note += f"; only {len(busy)} of the {jobs} would have a year to do (there are {len(years)})"
+        return note
 
     def _friendly(self, message: str) -> str:
         """Replace ``section.key`` names in a config error with the form's labels."""
@@ -966,14 +983,34 @@ class LexichronApp(App):
             return
         self._guard_overwrite("job", self._write_sbatch)
 
+    def _clear_for_array(self, assume_yes: bool) -> Optional[str]:
+        """A restart submitted as a job array cannot delete in the job (every
+        task would delete what its siblings are writing), so once the user
+        has confirmed the deletion it is done here, now, and the tasks
+        resume into the empty directory. Returns a line saying so, or None
+        when nothing was deleted."""
+        if not assume_yes or array_size(self.stage, self._slurm_cfg()) <= 1:
+            return None
+        try:
+            kwargs = build_call(self.func, {k: v for k, v in self.config.items() if k in ("corpus", self.stage)},
+                                self.stage)
+        except Exception:
+            return None
+        target = overwrite_target(self.stage, kwargs)
+        if target is None or not target.exists():
+            return None
+        shutil.rmtree(target)
+        return f"Deleted {target} now; the array's {array_size(self.stage, self._slurm_cfg())} tasks resume into it."
+
     def _write_sbatch(self, assume_yes: bool) -> None:
         try:
+            cleared = self._clear_for_array(assume_yes)
             path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
         except (ConfigError, OSError) as exc:
             self.query_one("#submit-status", Static).update(f"Could not write script: {exc}")
             return
         self.query_one("#submit-status", Static).update(
-            f"Wrote {path}\nSubmit by hand with:  sbatch {path}")
+            (f"{cleared}\n" if cleared else "") + f"Wrote {path}\nSubmit by hand with:  sbatch {path}")
 
     @on(Button.Pressed, "#submit")
     def _submit_pressed(self) -> None:
@@ -984,16 +1021,19 @@ class LexichronApp(App):
     def _submit(self, assume_yes: bool) -> None:
         status = self.query_one("#submit-status", Static)
         try:
-            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
             if not self.bridge:
                 raise BridgeUnavailable("no host bridge (LEXICHRON_BRIDGE_DIR not set)")
+            cleared = self._clear_for_array(assume_yes)
+            path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
             job_id = self.bridge.sbatch(path)
         except (ConfigError, OSError, BridgeUnavailable, RuntimeError, TimeoutError) as exc:
             status.update(f"Submit failed: {exc}")
             self.notify("Submit failed", severity="error")
             return
-        status.update(f"Submitted job {job_id}  ({path})")
-        self.notify(f"Submitted job {job_id}")
+        tasks = array_size(self.stage, self._slurm_cfg())
+        what = f"job array {job_id} ({tasks} tasks)" if tasks > 1 else f"job {job_id}"
+        status.update((f"{cleared}\n" if cleared else "") + f"Submitted {what}  ({path})")
+        self.notify(f"Submitted {what}")
         self.query_one(TabbedContent).active = "tab-jobs"
         self.refresh_jobs()
 

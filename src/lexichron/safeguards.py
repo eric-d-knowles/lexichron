@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-__all__ = ["OverwriteRisk", "overwrite_risk", "dir_size", "format_bytes"]
+__all__ = ["OverwriteRisk", "overwrite_risk", "overwrite_target", "dir_size", "format_bytes"]
 
 
 @dataclass
@@ -112,6 +112,14 @@ def _target(stage: str, kwargs: Dict[str, Any]) -> Optional[tuple[Path, str, str
         return Path(paths["pivoted_db"]).parent / "tuning" / str(kwargs["name"]), \
             f"the tuning search '{kwargs['name']}' (its models and scores)", "tune.mode = restart"
     return None
+
+
+def overwrite_target(stage: str, kwargs: Dict[str, Any]) -> Optional[Path]:
+    """The path the stage would delete first with these (resolved)
+    arguments, whether or not it exists; None when its settings delete
+    nothing. Cheap: nothing is walked."""
+    target = _target(stage, kwargs)
+    return target[0] if target else None
 
 
 def overwrite_risk(stage: str, kwargs: Dict[str, Any]) -> Optional[OverwriteRisk]:
