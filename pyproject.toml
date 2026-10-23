@@ -29,6 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 ui = ["textual>=0.80"]
+dev = ["pytest", "textual>=0.80"]   # the test suite, including the UI tests
 
 [project.scripts]
 lexichron = "lexichron.cli:main"

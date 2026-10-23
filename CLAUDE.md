@@ -44,14 +44,14 @@ section for whatever you are touching before changing it.
 ## Tests
 
 ```bash
-pip install -e .          # builds the Cython extensions the tests import
+pip install -e '.[dev]'   # builds the Cython extensions the tests import; adds pytest and textual
 python -m pytest -q tests
 ```
 
-The UI tests need `textual` (`pip install -e '.[ui]'`). CI runs the whole
-suite inside the freshly built image on every version tag and on manual
-builds (`gh workflow run container.yml --ref <branch> -f tag=<name>`), which
-is the reliable way to run the suite when a local environment is incomplete.
+CI runs the whole suite inside the freshly built image on every version tag
+and on manual builds (`gh workflow run container.yml --ref <branch> -f
+tag=<name>`), which is the reliable way to run the suite when a local
+environment is incomplete.
 The bundled datasets the tune stage expects (SimLex, WordSim, questions-words,
 the VADER lexicon) come from `$LEXICHRON_DATA_DIR` or `/opt/lexichron/data`
 in the image; tests create their own.

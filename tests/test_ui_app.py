@@ -12,8 +12,11 @@ from lexichron.ui.app import FixedValue, LexichronApp  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _isolated_state(tmp_path, monkeypatch):
-    """Keep the 'last settings file' memory out of the real home directory."""
+    """Keep the 'last settings file' memory out of the real home directory,
+    and the app off this machine's Slurm (a login node has sbatch on its
+    PATH, and the tests' made-up job ids are not in its queue)."""
     monkeypatch.setenv("LEXICHRON_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setattr("lexichron.ui.app.slurm_backend", lambda: None)
 
 
 def _assert_clean(app):
@@ -866,3 +869,53 @@ def test_train_form_summary_tuned_cell_and_inspect(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_slurm_backend_chosen_at_startup(tmp_path, monkeypatch):
+    """Outside the container with sbatch on the PATH the UI runs Slurm commands
+    itself; the 'no Slurm' note appears only when there is no bridge and no
+    sbatch either."""
+    import os
+    from textual.widgets import DataTable, Static
+    from lexichron import bridge
+    from lexichron.bridge import LocalSlurm
+    monkeypatch.setattr("lexichron.ui.app.slurm_backend", bridge.slurm_backend)   # the real chooser
+    proj = tmp_path / "project.yaml"
+    proj.write_text(
+        "corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 2\n  db_path_stub: /data/\n"
+        "acquire:\n  ngram_type: tagged\n  workers: 4\n"
+    )
+    fake = tmp_path / "bin"; fake.mkdir()
+    (fake / "sbatch").write_text('#!/bin/sh\necho "4242;torch"\n')
+    (fake / "squeue").write_text('#!/bin/sh\necho "4242|lexichron-acquire|RUNNING|00:01:00|12:00:00|1|cs604"\n')
+    for f in fake.iterdir():
+        f.chmod(0o755)
+    monkeypatch.delenv("LEXICHRON_BRIDGE_DIR", raising=False)
+
+    async def with_sbatch_on_path():
+        app = LexichronApp(proj)
+        assert isinstance(app.bridge, LocalSlurm)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "No Slurm here" not in str(app.query_one("#submit-status", Static).content)
+            jobs = app.query_one("#jobs", DataTable)
+            assert [str(jobs.get_row_at(i)[0]) for i in range(jobs.row_count)] == ["4242"]
+        _assert_clean(app)
+
+    async def with_nothing():
+        app = LexichronApp(proj)
+        assert app.bridge is None
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert "No Slurm here" in str(app.query_one("#submit-status", Static).content)
+        _assert_clean(app)
+
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    asyncio.run(with_sbatch_on_path())
+    empty = tmp_path / "empty"; empty.mkdir()
+    monkeypatch.setenv("PATH", str(empty))
+    asyncio.run(with_nothing())

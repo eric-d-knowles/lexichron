@@ -11,8 +11,8 @@ Layout: a tab per concern.
              rarely-used settings under a collapsed "Advanced" heading, and the
              resolved call exactly as --dry-run prints it under another)
   Run      — run the stage here (login node test, or inside an allocation)
-  Submit   — Slurm resources; writes the batch script and submits it through
-             the host bridge when one is running
+  Submit   — Slurm resources; writes the batch script and submits it (sbatch
+             on this machine, or through the host bridge from inside the container)
   Progress — the latest runs (from each run's progress.json) with a progress
              bar, rate, time left and the tail of the run's log; plus squeue
              for your Slurm jobs
@@ -41,7 +41,7 @@ from textual.widgets import (
 )
 
 from lexichron import __version__
-from lexichron.bridge import BridgeUnavailable, HostBridge, default_bridge_dir
+from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
 from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE,
@@ -462,8 +462,7 @@ class LexichronApp(App):
         if self.explicit_project and self.explicit_project.exists():
             self.config = load_project(self.explicit_project)
         self.loaded_dir: Optional[Path] = self._corpus_dir(self.config)
-        bridge_dir = default_bridge_dir()
-        self.bridge: Optional[HostBridge] = HostBridge(bridge_dir) if bridge_dir else None
+        self.bridge: Optional[SlurmRunner] = slurm_backend()
         self._status: Dict[str, Any] = {"jobs": None, "jobs_error": "", "docs": [], "selected": None, "log_lines": []}
         self._gathering = False
         self._squeue_at = float("-inf")
@@ -761,8 +760,8 @@ class LexichronApp(App):
         self.set_interval(5, self.refresh_jobs)
         if not self.bridge or not self.bridge.available():
             self.query_one("#submit-status", Static).update(
-                "No host helper: 'Submit' and the job table need the UI started with the "
-                "lexichron-ui command (not from inside the image). 'Write batch script' still works.")
+                "No Slurm here: 'Submit' and the job table need sbatch on this machine, or the UI started "
+                "with the lexichron-ui command (not from inside the image). 'Write batch script' still works.")
 
     # -- form -> config -----------------------------------------------------------
     def _collect(self) -> Dict[str, Any]:
@@ -1170,7 +1169,7 @@ class LexichronApp(App):
         status = self.query_one("#submit-status", Static)
         try:
             if not self.bridge:
-                raise BridgeUnavailable("no host bridge (LEXICHRON_BRIDGE_DIR not set)")
+                raise BridgeUnavailable("no way to run sbatch here (LEXICHRON_BRIDGE_DIR not set and sbatch not on PATH)")
             cleared = self._clear_for_array(assume_yes)
             path = write_sbatch(self.project_path, self.stage, self._slurm_cfg(), assume_yes=assume_yes)
             job_id = self.bridge.sbatch(path)

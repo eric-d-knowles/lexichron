@@ -272,8 +272,8 @@ Cython extensions, so the environment needs a C++ compiler.
 
 *A new environment* (the simple route): `environment.yml` creates one named
 `lexichron` with Python 3.11, the compiler, Cython and Enchant, and installs
-lexichron into it in editable mode as part of the same step, so there is
-nothing more to install afterwards:
+lexichron into it in editable mode (with the test tools, pytest and textual)
+as part of the same step, so there is nothing more to install afterwards:
 
 ```bash
 conda env create -f environment.yml
@@ -281,12 +281,12 @@ conda activate lexichron
 ```
 
 *An existing environment*: make sure it has a compiler, then install in
-editable mode:
+editable mode; the `dev` extra adds pytest and textual for the test suite:
 
 ```bash
 conda activate your-environment
 conda install -c conda-forge cxx-compiler
-pip install -e .
+pip install -e '.[dev]'
 ```
 
 **3. Install the Enchant dictionaries and NLTK data, once per environment.**
