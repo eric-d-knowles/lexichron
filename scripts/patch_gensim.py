@@ -15,7 +15,9 @@ three or four cores however many threads it is given.
 This script edits the installed gensim's ``word2vec_corpusfile.pxd``/``.pyx``
 (the wheel ships them), declaring the reader's methods ``noexcept`` (the C++
 reader only throws on allocation failure, which Cython then reports as an
-unraisable error rather than propagate). It then recompiles, in place, the
+unraisable error rather than propagate), and ``word2vec_inner.pxd``, whose
+BLAS dot pointers otherwise take a dot product of exactly -1 for an error
+and print "Exception ignored in our_dot_float". It then recompiles, in place, the
 six extension modules of the word2vec/doc2vec/fastText family: they share
 C-level symbols whose signatures are checked at import, and those signature
 strings differ between Cython releases, so the family must be compiled by
@@ -50,19 +52,31 @@ EDITS = (
     ("cdef cvocab_t* get_vocab_ptr(self) except * nogil",
      "cdef cvocab_t* get_vocab_ptr(self) noexcept nogil"),
 )
+# gensim declares the BLAS dot pointers with ``except -1``, so a dot product
+# of exactly -1 is taken for an error signal: the value is still returned and
+# used, but Cython reports "Exception ignored in our_dot_float" for each one.
+# Declaring the pointers noexcept, as the other BLAS pointers are, ends that.
+INNER_EDITS = (
+    ("ctypedef float (*sdot_ptr) (const int *N, const float *X, const int *incX, const float *Y, const int *incY) except -1 nogil",
+     "ctypedef float (*sdot_ptr) (const int *N, const float *X, const int *incX, const float *Y, const int *incY) noexcept nogil"),
+    ("ctypedef double (*dsdot_ptr) (const int *N, const float *X, const int *incX, const float *Y, const int *incY) except -1 nogil",
+     "ctypedef double (*dsdot_ptr) (const int *N, const float *X, const int *incX, const float *Y, const int *incY) noexcept nogil"),
+)
 # module -> language; every module that cimports gensim.models.word2vec_inner, plus itself
 MODULES = {"word2vec_inner": "c", "word2vec_corpusfile": "c++", "doc2vec_inner": "c++",
            "doc2vec_corpusfile": "c++", "fasttext_inner": "c", "fasttext_corpusfile": "c++"}
 
 
 def edit_sources(root: Path) -> None:
-    """Apply EDITS to the reader's pxd and pyx under ``root`` (the directory
-    holding ``gensim/``). Fails loudly on an unexpected gensim."""
-    for rel, suffix in (("gensim/models/word2vec_corpusfile.pxd", ""),
-                        ("gensim/models/word2vec_corpusfile.pyx", ":")):
+    """Apply EDITS to the reader's pxd and pyx, and INNER_EDITS to the BLAS
+    declarations, under ``root`` (the directory holding ``gensim/``). Fails
+    loudly on an unexpected gensim."""
+    for rel, suffix, edits in (("gensim/models/word2vec_corpusfile.pxd", "", EDITS),
+                               ("gensim/models/word2vec_corpusfile.pyx", ":", EDITS),
+                               ("gensim/models/word2vec_inner.pxd", "", INNER_EDITS)):
         path = root / rel
         text = path.read_text()
-        for old, new in EDITS:
+        for old, new in edits:
             n = text.count(old + suffix)
             if n != 1:
                 sys.exit(f"{path}: expected one occurrence of {old + suffix!r}, found {n}; "

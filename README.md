@@ -303,7 +303,27 @@ missing, downloads the Hunspell dictionaries for every supported language,
 puts them inside the environment, and adds activation hooks so pyenchant
 finds both. spaCy's models need no step: they are downloaded on first import.
 
-**4. Register a Jupyter kernel (if you want one).** To use the environment
+**4. Rebuild gensim's corpus reader without the GIL, once per environment.**
+The stock gensim wheel re-takes the GIL for every line it reads, which on
+n-gram corpora (five tokens a line) caps a model at three or four cores
+however many threads it is given. The image rebuilds the reader at build
+time; a development environment needs the same step, with the Cython
+gensim 4.4 was generated with, used for this step only:
+
+```bash
+pip install --target /tmp/cython-for-gensim "Cython==3.1.3"
+PYTHONPATH=/tmp/cython-for-gensim python scripts/patch_gensim.py
+rm -rf /tmp/cython-for-gensim
+```
+
+The script edits the installed gensim in place and recompiles its
+word2vec, doc2vec and fastText extensions; `pip install --force-reinstall
+gensim` undoes it. When you run a stage from the environment yourself, set
+`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` first: the batch scripts and the
+image do, and without it OpenBLAS's own threads fight gensim's and halve
+the training speed.
+
+**5. Register a Jupyter kernel (if you want one).** To use the environment
 from notebooks:
 
 ```bash

@@ -94,6 +94,9 @@ in the image; tests create their own.
   if two real tokens remain).
 - The image rebuilds gensim's `corpus_file` reader without the GIL
   (`scripts/patch_gensim.py`); without it a model is capped at a few cores.
+  A development environment needs the same step (README, development
+  installation, step 4), and `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`
+  when a stage runs outside a batch script or the image.
 
 ## Running on NYU Torch (Eric's setup)
 

@@ -159,10 +159,16 @@ def test_patch_gensim_edits_the_corpus_file_reader(tmp_path):
     pyx = "".join(line + ":\n    pass\n" for line in pxd.splitlines() if line.startswith("    "))
     (models / "word2vec_corpusfile.pxd").write_text(pxd)
     (models / "word2vec_corpusfile.pyx").write_text(pyx)
+    inner = ("ctypedef float (*sdot_ptr) (const int *N, const float *X, const int *incX, const float *Y, const int *incY) except -1 nogil\n"
+             "ctypedef double (*dsdot_ptr) (const int *N, const float *X, const int *incX, const float *Y, const int *incY) except -1 nogil\n"
+             "ctypedef void (*sscal_ptr) (const int *N, const float *alpha, const float *X, const int *incX) noexcept nogil\n")
+    (models / "word2vec_inner.pxd").write_text(inner)
     script = Path(__file__).parent.parent / "scripts" / "patch_gensim.py"
     subprocess.run([sys.executable, str(script), "--edit", str(tmp_path)], check=True, capture_output=True)
     out_pxd, out_pyx = (models / "word2vec_corpusfile.pxd").read_text(), (models / "word2vec_corpusfile.pyx").read_text()
     assert "except *" not in out_pxd and "except *" not in out_pyx
+    out_inner = (models / "word2vec_inner.pxd").read_text()
+    assert "except -1" not in out_inner and out_inner.count("noexcept nogil") == 3   # the dot pointers, like sscal
     for line in out_pxd.splitlines():
         if "nogil" in line:
             assert "noexcept nogil" in line, line                 # every reader method is now noexcept
