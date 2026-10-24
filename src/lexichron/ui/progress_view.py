@@ -169,6 +169,9 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     elif doc.get("stage") == "tune":
         phase_labels = (("queued", "waiting"), ("parsing", "training"),
                         ("parsed", "trained, waiting to score"), ("ingesting", "scoring"))
+    elif doc.get("stage") == "train":
+        phase_labels = (("queued", "waiting"), ("parsing", "training"),
+                        ("parsed", "trained, year not yet complete"), ("ingesting", "writing the year's record"))
     else:
         phase_labels = (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
                         ("parsed", "parsed, waiting to ingest"), ("ingesting", "ingesting"))
@@ -264,7 +267,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
                                 (f"{failed} failed" if failed else ""),
                                 (f"{doc['files_skipped']} already done" if doc.get("files_skipped") else "")] if x)),
         (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—", "models")
-         if stage == "tune" else
+         if stage in ("tune", "train") else
          ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries")),
         ("Elapsed", fmt_duration(info["elapsed_s"]), ""),
         ("Remaining", fmt_duration(info["eta_s"]) if info["eta_s"] is not None else "—", "estimate"),
@@ -290,6 +293,9 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         elif stage == "tune":
             labels = (("queued", "Waiting"), ("parsing", "Training"),
                       ("parsed", "Trained, waiting to score"), ("ingesting", "Scoring"))
+        elif stage == "train":
+            labels = (("queued", "Waiting"), ("parsing", "Training"),
+                      ("parsed", "Trained, year not yet complete"), ("ingesting", "Writing the year's record"))
         else:
             labels = (("queued", "Waiting for a worker"), ("parsing", "Downloading & parsing"),
                       ("parsed", "Parsed, waiting to ingest"), ("ingesting", "Ingesting"))
@@ -301,6 +307,14 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             ("Training time", fmt_duration(float(counters.get("train_seconds", 0))), "summed over models"),
             ("N-grams used", f"{int(counters.get('ngrams_used', 0)):,}", "after the <UNK> policy"),
             ("Corpus lines", f"{int(counters.get('corpus_lines', 0)):,}", "weighted repeats"),
+        ]))
+    elif stage == "train":
+        years, years_done = int(counters.get("years", 0)), int(counters.get("years_done", 0))
+        groups.append(("Ensemble", [
+            ("Models trained", f"{int(counters.get('models', 0)):,}", "this run"),
+            ("Years complete", f"{years_done:,}" + (f"/{years:,}" if years else ""), "records written"),
+            ("Training time", fmt_duration(float(counters.get("train_seconds", 0))), "summed over models"),
+            ("Corpus lines", f"{int(counters.get('corpus_lines', 0)):,}", "weighted repeats, all resamples"),
         ]))
     elif stage == "filter":
         scanned = int(counters.get("scanned", 0))

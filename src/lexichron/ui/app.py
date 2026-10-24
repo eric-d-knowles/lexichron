@@ -1419,11 +1419,17 @@ class LexichronApp(App):
             # Records: what the compacted database holds once the run is done
             # (marked *), the records kept so far while it runs
             db = p.get("database") or {}
-            if info["state"] == "done" and db.get("records") is not None:
-                records = f"{int(db['records']):,}" + ("*" if db.get("compacted") else " (est.)")
+            if p.get("stage") in ("tune", "train"):
+                # models, not records: the rate is models per hour and there is no database count
+                records = "–"
+                rate = f"{info['done'] / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "–"
             else:
-                records = f"{int(p.get('entries_written', 0)):,}"
-            rows.append((str(d), (d.name, info["state_label"], files, records, f"{fmt_count(info['rate'])}/s",
+                if info["state"] == "done" and db.get("records") is not None:
+                    records = f"{int(db['records']):,}" + ("*" if db.get("compacted") else " (est.)")
+                else:
+                    records = f"{int(p.get('entries_written', 0)):,}"
+                rate = f"{fmt_count(info['rate'])}/s"
+            rows.append((str(d), (d.name, info["state_label"], files, records, rate,
                                   fmt_duration(info["elapsed_s"]), p.get("slurm_job_id") or "-")))
         keys = [k for k, _ in rows]
         if [k.value for k in runs.rows] == keys:

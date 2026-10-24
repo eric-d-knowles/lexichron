@@ -98,6 +98,10 @@ def test_train_writes_an_ensemble_per_year_with_its_noise_profile(rocks, tmp_pat
     assert year["vocab_size"] > 10 and year["train_seconds"] is not None
     assert year["axis_words"] > 5 and year["axis_var_seed"] >= 0 and year["axis_var_corpus"] >= 0
     assert year["axis_se_mean"] > 0 and 0 <= year["axis_noise_share"]
+    # the progress document counts models and years, which the UI's Progress tab shows for a train run
+    prog = json.loads(progress.read_text())
+    assert prog["unit_label"] == "models" and prog["files_done"] == 18
+    assert prog["counters"]["models"] == 18 and prog["counters"]["years"] == 3 and prog["counters"]["years_done"] == 3
     doc = read_progress(progress)
     assert doc["state"] == "done" and doc["files_total"] == 18 and doc["files_done"] == 18
     assert doc["counters"]["models"] == 18 and doc["counters"]["years"] == 3 and "3 of 3 years" in doc["message"]

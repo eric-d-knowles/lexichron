@@ -222,6 +222,7 @@ def train_models(
         (out_dir / f"y{y}").mkdir(exist_ok=True)
     existing = {t.stem for t in tasks if (out_dir / f"{t.stem}.npz").exists()}
     progress.set_totals(len(tasks), files_skipped=len(existing))
+    progress.doc["counters"]["years"] = len(mine)
     share = f" ({task.label}: {len(mine)} years)" if task else ""
     print(f"Ensemble '{name}': {cell.stem}; years {first}-{last} ({len(all_years)} with data"
           f"{f', {skipped} without' if skipped else ''}){share}; {corpora} corpus x {seeds} seed replicates "
@@ -282,6 +283,7 @@ def train_models(
         progress.file_ingesting(f"y{year}")
         record = _year_record(out_dir, year, cell, corpora, seeds, corpus_stats, model_facts, yard)
         write_json(out_dir / f"y{year}" / YEAR_FILE, record)
+        progress.doc["counters"]["years_done"] = progress.doc["counters"].get("years_done", 0) + 1
         logger.info("year %s: %s", year, {k: v for k, v in record.items() if k.startswith("axis_") or k == "models_on_disk"})
 
     years_done: List[int] = []
@@ -306,7 +308,6 @@ def train_models(
                                    on_trained=on_trained, on_corpus_done=on_corpus_done, on_year_done=year_done,
                                    progress=progress, train_fn=train_fn, pool_factory=_pool, inline=inline,
                                    corpus_ahead=max(2, int(corpus_writers) + 1))
-        progress.doc["counters"]["years"] = len(mine)
         done_all = sorted(int(p.parent.name[1:]) for p in out_dir.glob("y*/" + YEAR_FILE))
         partial = task is not None and len(done_all) < len(all_years)
         note = (f"{len(done_all)} of {len(all_years)} years complete" + (" so far" if partial else ""))

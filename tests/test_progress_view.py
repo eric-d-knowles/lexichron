@@ -290,3 +290,30 @@ def test_in_flight_meters_follow_the_stage():
                                                  ("Scanned, waiting to ingest", "0", ""), ("Ingesting", "0", "")]
     doc.update(stage="acquire", unit_label="files")
     assert [l for l, _, _ in dict(meters(doc, summarize(doc, now=now, job_gone=False)))["In flight: 3 files"]][1] == "Downloading & parsing"
+
+
+def test_train_runs_read_as_ensembles_not_acquisitions():
+    """A train run counts models and years; nothing about it is a download,
+    a parsed byte or a database record."""
+    from lexichron.ui.progress_view import meters, summarize
+    import datetime
+    now = datetime.datetime.fromisoformat("2026-10-12T01:00:00+00:00")
+    doc = {"stage": "train", "state": "running", "unit_label": "models", "files_total": 320,
+           "files_done": 16, "entries_written": 16 * 30000, "started": "2026-10-12T00:00:00+00:00",
+           "updated": "2026-10-12T01:00:00+00:00", "current": ["y1972/c08_s0", "y1972/c08_s1", "y1972/c09_s0"],
+           "phases": {"queued": 1, "parsing": 2, "parsed": 0, "ingesting": 0},
+           "counters": {"models": 16, "train_seconds": 7200, "corpus_lines": 900, "years": 4, "years_done": 0},
+           "array": {"task": 4, "count": 13, "years": [1972, 1985, 1998, 2011]}}
+    info = summarize(doc, now=now, job_gone=False)
+    assert "3 models in flight: 1 waiting · 2 training" in info["current_text"]
+    assert "16/320 models" in info["headline"] and "years 1972, 1985, 1998, 2011" in info["headline"]
+    groups = meters(doc, info)
+    assert [title for title, _ in groups] == ["Progress", "In flight: 3 models", "Ensemble"]
+    tiles = dict(groups)
+    assert tiles["Progress"][1] == ("Rate", "16.0/h", "models")
+    assert tiles["In flight: 3 models"][1] == ("Training", "2", "")
+    assert tiles["Ensemble"][:3] == [("Models trained", "16", "this run"), ("Years complete", "0/4", "records written"),
+                                     ("Training time", "2h00m", "summed over models")]
+    text = repr(groups)
+    for word in ("Download", "Parsed", "Inserted", "In database", "entries"):
+        assert word not in text, word
