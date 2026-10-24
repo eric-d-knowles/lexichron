@@ -104,12 +104,23 @@ done
 # ---------------------------------------------------------------------------
 # 5. PATH
 # ---------------------------------------------------------------------------
-PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
+# The line only prepends when the directory is not on PATH yet. An
+# unconditional prepend moves ~/.local/bin ahead of an activated conda
+# environment every time a new shell reads ~/.bashrc (a job shell started
+# with srun from an activated login shell, say), and then `lexichron`
+# silently means the image launcher rather than the environment's command.
+PATH_LINE="case \":\$PATH:\" in *\":$BIN_DIR:\"*) ;; *) export PATH=\"$BIN_DIR:\$PATH\" ;; esac"
+OLD_PATH_LINE="export PATH=\"$BIN_DIR:\$PATH\""
 case ":$PATH:" in
     *":$BIN_DIR:"*) on_path=1 ;;
     *) on_path=0 ;;
 esac
-if [ "$on_path" = 0 ] && [ -w "$HOME/.bashrc" ] && ! grep -qF "$BIN_DIR" "$HOME/.bashrc" 2>/dev/null; then
+if [ -w "$HOME/.bashrc" ] && grep -qxF "$OLD_PATH_LINE" "$HOME/.bashrc" 2>/dev/null; then
+    # an earlier install wrote the unconditional form: replace it in place
+    awk -v old="$OLD_PATH_LINE" -v new="$PATH_LINE" '$0 == old { print new; next } { print }' \
+        "$HOME/.bashrc" > "$HOME/.bashrc.lexichron-tmp" && mv "$HOME/.bashrc.lexichron-tmp" "$HOME/.bashrc"
+    say "Updated the PATH line in ~/.bashrc so an activated environment stays ahead of $BIN_DIR"
+elif [ "$on_path" = 0 ] && [ -w "$HOME/.bashrc" ] && ! grep -qF "$BIN_DIR" "$HOME/.bashrc" 2>/dev/null; then
     printf '\n# added by lexichron install\n%s\n' "$PATH_LINE" >> "$HOME/.bashrc"
     say "Added $BIN_DIR to your PATH in ~/.bashrc"
 fi

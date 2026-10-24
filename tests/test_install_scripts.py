@@ -137,8 +137,29 @@ def test_install_sh_end_to_end(env):
     assert "--app install" in calls and "--ref ghcr.io/eric-d-knowles/lexichron:0.1.0" in calls
     bin_dir = env["home"] / ".local" / "bin"
     assert (bin_dir / "lexichron").exists() and (bin_dir / "lexichron-ui").exists()
-    assert str(bin_dir) in (env["home"] / ".bashrc").read_text()      # PATH added
+    rc = (env["home"] / ".bashrc").read_text()
+    assert str(bin_dir) in rc and rc.count("export PATH=") == 1        # PATH added
+    assert rc.strip().endswith("esac")                                  # the guarded form
     assert "lexichron 0.1.0 is installed" in r.stdout
+
+
+def test_install_sh_path_line_does_not_shadow_an_activated_environment(env):
+    """Reading ~/.bashrc again (a job shell started from an activated login
+    shell) must not move ~/.local/bin ahead of the environment; and an
+    earlier install's unconditional line is replaced, not duplicated."""
+    bin_dir = env["home"] / ".local" / "bin"
+    rc = env["home"] / ".bashrc"
+    rc.write_text(f'# rc\nexport PATH="{bin_dir}:$PATH"\n')
+    r = subprocess.run(["bash", str(INSTALL_SH)], env=env["env"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr + r.stdout
+    text = rc.read_text()
+    assert text.count("export PATH=") == 1 and text.count("esac") == 1
+    assert "Updated the PATH line" in r.stdout
+    envdir = env["tmp"] / "env" / "bin"; envdir.mkdir(parents=True)
+    probe = subprocess.run(
+        ["bash", "-c", f'export PATH="{envdir}:$PATH"; . "{rc}"; . "{rc}"; echo "$PATH"'],
+        env={**env["env"], "PATH": f"{bin_dir}:{env['base_path']}"}, capture_output=True, text=True)
+    assert probe.stdout.strip().split(":")[0] == str(envdir), probe.stdout
 
 
 def test_install_sh_works_with_singularity_instead_of_apptainer(env):

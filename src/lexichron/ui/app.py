@@ -779,9 +779,20 @@ class LexichronApp(App):
         self.refresh_jobs()
         self.set_interval(5, self.refresh_jobs)
         if not self.bridge or not self.bridge.available():
-            self.query_one("#submit-status", Static).update(
-                "No Slurm here: 'Submit' and the job table need sbatch on this machine, or the UI started "
-                "with the lexichron-ui command (not from inside the image). 'Write batch script' still works.")
+            self.query_one("#submit-status", Static).update(self._no_slurm_note())
+
+    def _no_slurm_note(self) -> str:
+        """Why 'Submit' is unavailable, so the fix is clear from the note alone."""
+        if os.environ.get("APPTAINER_CONTAINER") or os.environ.get("SINGULARITY_CONTAINER"):
+            why = ("this UI is running inside the image without the host helper. Start it with the "
+                   "lexichron-ui command; if you meant a development install, 'which lexichron' is "
+                   "naming the image launcher instead of your environment's command")
+        elif self.bridge is None:
+            why = "sbatch is not on this machine's PATH and LEXICHRON_BRIDGE_DIR is not set"
+        else:
+            why = f"the host helper in {getattr(self.bridge, 'dir', '?')} is not running"
+        return (f"No Slurm here: {why}. 'Submit' and the job table need it; "
+                "'Write batch script' still works.")
 
     # -- form -> config -----------------------------------------------------------
     def _collect(self) -> Dict[str, Any]:

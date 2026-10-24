@@ -904,21 +904,28 @@ def test_slurm_backend_chosen_at_startup(tmp_path, monkeypatch):
             assert [str(jobs.get_row_at(i)[0]) for i in range(jobs.row_count)] == ["4242"]
         _assert_clean(app)
 
-    async def with_nothing():
+    async def with_nothing(expect: str):
         app = LexichronApp(proj)
         assert app.bridge is None
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "No Slurm here" in str(app.query_one("#submit-status", Static).content)
+            note = str(app.query_one("#submit-status", Static).content)
+            assert "No Slurm here" in note and expect in note, note
         _assert_clean(app)
 
     monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
     asyncio.run(with_sbatch_on_path())
     empty = tmp_path / "empty"; empty.mkdir()
     monkeypatch.setenv("PATH", str(empty))
-    asyncio.run(with_nothing())
+    monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)      # CI runs the suite inside the image
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
+    asyncio.run(with_nothing("sbatch is not on this machine's PATH"))
+    # inside the image without the helper (the plain launcher, or a shell where
+    # ~/.local/bin shadows the environment's command), the note says to use lexichron-ui
+    monkeypatch.setenv("APPTAINER_CONTAINER", "/images/lexichron.sif")
+    asyncio.run(with_nothing("inside the image without the host helper"))
 
 
 def test_save_asks_before_replacing_a_file_this_session_did_not_open(tmp_path):

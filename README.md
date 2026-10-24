@@ -289,6 +289,14 @@ conda install -c conda-forge cxx-compiler
 pip install -e '.[dev]'
 ```
 
+If the container commands are installed as well, `which lexichron` should
+name the environment's command while the environment is active, not
+`~/.local/bin/lexichron`: that one runs the image, and a UI started from it
+has no Slurm access unless it was started with `lexichron-ui`. The installer
+adds `~/.local/bin` to `PATH` only when it is not there already, so an
+activated environment stays in front even in a job shell started from it;
+an older install's unconditional line is replaced by rerunning `install.sh`.
+
 **3. Install the Enchant dictionaries and NLTK data, once per environment.**
 Spell-checking uses the Enchant C library with Hunspell dictionaries, and
 model alignment the NLTK Swadesh list; neither comes through `pip`. With the
