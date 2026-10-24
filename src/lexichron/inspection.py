@@ -324,7 +324,10 @@ def read_search_summary(search_dir: Path) -> Optional[Dict[str, Any]]:
 
 
 def candidates(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
-    """Databases and vocabulary files in a corpus directory, as (label, path)."""
+    """Databases and vocabulary files in a corpus directory, as (label, path).
+
+    A search's exported tables are not listed: the Tune and Train stages have
+    their own Inspect views, and this list serves the database stages."""
     if not corpus_dir:
         return []
     d = Path(corpus_dir).expanduser()
@@ -337,12 +340,6 @@ def candidates(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
             wl = entry / "whitelist.txt"
             if wl.is_file():
                 out.append((f"{entry.name}/whitelist.txt", str(wl)))
-    tuning = d / "tuning"
-    if tuning.is_dir():
-        for search in sorted(tuning.iterdir()):
-            for name in ("summary.tsv", "results.tsv", "pairs.tsv"):
-                if (search / name).is_file():
-                    out.append((f"tuning/{search.name}/{name}", str(search / name)))
     return out
 
 

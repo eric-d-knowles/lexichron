@@ -533,8 +533,8 @@ Tabs:
   `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
-- **Inspect** — look inside a database: pick one of the corpus's databases
-  or vocabulary files (or type any path), and show the first rows, the rows
+- **Inspect** — look inside a database: pick which of the corpus's databases
+  or vocabulary files to open (or type any path), and show the first rows, the rows
   from a key, or the rows with a prefix, decoded for the database's layout
   (`lexichron inspect` on the command line does the same); selecting a row
   of an n-gram-keyed database shows its full year series, and *How it was

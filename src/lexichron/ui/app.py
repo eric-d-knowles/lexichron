@@ -763,12 +763,14 @@ class LexichronApp(App):
                     yield Static("", id="ensemble-note")
                     with Collapsible(title="What the columns mean", collapsed=True, id="ensemble-legend"):
                         yield Static(ENSEMBLE_LEGEND, id="ensemble-legend-text")
-                # the other stages: records of a database or vocabulary file
+                # the other stages: records of a database or vocabulary file.
+                # The corpus is chosen in the bar above; this picks which of
+                # its databases or files to open.
                 with Vertical(id="inspect-generic"):
                     with Horizontal(classes="row"):
                         yield Label("Database")
                         yield Select([], allow_blank=True, id="inspect-db", compact=True,
-                                     prompt="(databases of this corpus)")
+                                     prompt="(which database or file)")
                     with Horizontal(classes="row"):
                         yield Label("Path")
                         yield Input("", id="inspect-path", compact=True,

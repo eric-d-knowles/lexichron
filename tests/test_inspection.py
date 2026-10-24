@@ -126,7 +126,7 @@ def test_tables_are_read_with_their_columns(tmp_path):
     layout, rows = inspection.rows(str(search / "summary.tsv"), "head", n=10)
     assert layout == "table" and rows[0] == ("cell\tvector_size\tseed_overlap", "") and rows[1] == ("vs100_w2", "100\t0.8100")
     assert inspection.rows(str(search / "summary.tsv"), "prefix", "vs300", 10)[1][1:] == [("vs300_w2", "300\t0.7500")]
-    assert inspection.candidates(str(tmp_path)) == [("tuning/s1/summary.tsv", str(search / "summary.tsv"))]
+    assert inspection.candidates(str(tmp_path)) == []       # tables belong to the Tune view, not the database list
 
 
 def test_search_results_are_read_formatted_and_printed(tmp_path, monkeypatch):
