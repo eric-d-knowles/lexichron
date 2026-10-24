@@ -34,6 +34,22 @@ def bundled_dataset(name: str) -> Optional[str]:
         return None
 
 
+def similarity_sets(given: Optional[str] = None) -> Dict[str, str]:
+    """The similarity datasets to score, by label: the file given (a copy of
+    a known dataset keeps its label, so its scores land in the SimLex /
+    WordSim columns), else WordSim-353 and SimLex-999 where bundled."""
+    if given:
+        stem = Path(given).stem.lower()
+        label = "simlex" if stem.startswith("simlex") else "wordsim" if stem.startswith("wordsim") else stem
+        return {label: given}
+    sets: Dict[str, str] = {}
+    for label, fname in (("wordsim", "wordsim353.tsv"), ("simlex", "simlex999.txt")):
+        p = bundled_dataset(fname)
+        if p:
+            sets[label] = p
+    return sets
+
+
 def similarity_score(vectors: Vectors, dataset: str) -> Tuple[float, float]:
     """Spearman correlation between the model's cosine similarities and the
     dataset's scores over the pairs the model covers, and the fraction of

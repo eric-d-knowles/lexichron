@@ -828,7 +828,9 @@ def test_train_form_summary_tuned_cell_and_inspect(tmp_path):
     (ens / "y1990" / "year.json").write_text(json.dumps({
         "year": 1990, "models_on_disk": 4, "vocab_size": 12000, "train_seconds": 480, "axis_words": 3000,
         "axis_var_seed": 0.0004, "axis_var_corpus": 0.0012, "axis_var_replicate": None, "axis_se_mean": 0.026,
-        "axis_var_words": 0.02, "axis_noise_share": 0.034}))
+        "axis_var_words": 0.02, "axis_noise_share": 0.034,
+        "neigh_seed_overlap": 0.61, "neigh_corpus_overlap": 0.44, "neigh_probes": 900,
+        "simlex_rho": 0.35, "simlex_se_mean": 0.004, "wordsim_rho": 0.66, "wordsim_se_mean": 0.006}))
     (ens / "y1991" / "c00_s0.npz").write_bytes(b"x")
     proj = corpus / "lexichron.yaml"
     proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
@@ -866,6 +868,18 @@ def test_train_form_summary_tuned_cell_and_inspect(tmp_path):
             assert first[0].strip() == "1990" and first[1].strip() == "4/4" and "12,000" in first[2]
             second = [str(c) for c in table.get_row_at(1)]
             assert second[1].strip() == "1/4 (training)"
+            # the profile of the years complete so far, in all three families
+            tiles = [str(t.content) for t in app.query("#ensemble-meters .meter")]
+            assert any("Axis SE of mean" in t and "2.60e-02" in t for t in tiles)
+            assert any("Seed overlap" in t and "0.610" in t for t in tiles)
+            assert any("SimLex ρ" in t and "0.350 ±0.004" in t for t in tiles)
+            # the Columns selector narrows the table to one family
+            app.query_one("#ensemble-view", Select).value = "neighbourhoods"
+            await pilot.pause()
+            cols = [str(c.label) for c in app.query_one("#ensemble-table", DataTable).columns.values()]
+            assert cols == ["Year", "Models", "Seed overlap", "Corpus overlap", "Probes"]
+            tiles = [str(t.content) for t in app.query("#ensemble-meters .meter")]
+            assert any("Seed overlap" in t for t in tiles) and not any("SimLex" in t for t in tiles)
         _assert_clean(app)
 
     asyncio.run(scenario())

@@ -30,10 +30,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Hashable, List, Optional, Sequence, Tuple
 
+import numpy as np
+
 from lexichron.arrays import task_share
 from lexichron.arrays import array_task as _array_task
 from lexichron.resources import available_cpus
-from lexichron.training import axis, benchmarks
+from lexichron.training import axis, benchmarks, stability
 from lexichron.training.corpus import UNK_MODES, CorpusStats, write_corpus, years_with_data
 from lexichron.training.ensemble import (RESAMPLINGS, ReplicaTask, plan_replicas, projection_cube,
                                          resample_seed, variance_components)
@@ -71,6 +73,9 @@ def train_models(
     unk_mode: str = "strip",
     axis_lexicon: Optional[str] = None,
     axis_poles: Optional[str] = None,
+    neighbours: int = 10,
+    probes_per_decile: int = 100,
+    similarity_dataset: Optional[str] = None,
     name: Optional[str] = None,
     mode: str = "resume",
     workers: Optional[int] = None,
@@ -116,6 +121,13 @@ def train_models(
             skips it)
         axis_poles: Two lines of pole words, pleasant then unpleasant
             (default: the implicit-association lists)
+        neighbours: Nearest neighbours per probe word compared between
+            replicates, for the neighbourhood noise profile (0 skips it)
+        probes_per_decile: Probe words sampled from each frequency decile
+            of the year's common vocabulary
+        similarity_dataset: A word-pair similarity file scored on every
+            replicate, for the benchmark profile (default: WordSim-353 and
+            SimLex-999 where bundled; none found skips it)
         name: Name of this ensemble; its directory is <corpus>/models/<name>/
             (default: a timestamp)
         mode: "resume" keeps models already trained; "restart" deletes the
@@ -190,7 +202,17 @@ def train_models(
         raise FileNotFoundError(f"axis poles file not found: {axis_poles}")
     yard = axis.load_axis(lexicon, axis_poles)
     if yard is None:
-        logger.warning("no valence lexicon (axis_lexicon unset and none bundled): the noise profile is skipped")
+        logger.warning("no valence lexicon (axis_lexicon unset and none bundled): the axis profile is skipped")
+    sim_sets = benchmarks.similarity_sets(similarity_dataset)
+    for label, path in list(sim_sets.items()):
+        if not Path(path).is_file():
+            if similarity_dataset:
+                raise FileNotFoundError(f"similarity dataset not found: {path}")
+            sim_sets.pop(label)
+    if not sim_sets:
+        logger.warning("no similarity dataset (none given and none bundled): the benchmark profile is skipped")
+    profile = {"neighbours": max(0, int(neighbours)), "probes_per_decile": max(0, int(probes_per_decile)),
+               "sim_sets": sim_sets}
 
     log_dir = out_dir / "logs"
     log_dir.mkdir(exist_ok=True)
@@ -200,6 +222,8 @@ def train_models(
     if yard is not None:
         inputs["axis_lexicon"] = yard.lexicon_path
         inputs["axis_poles"] = yard.poles_path or "built-in pleasant/unpleasant lists"
+    for label, path in sim_sets.items():
+        inputs[f"{label}_dataset"] = path
     progress = ProgressReporter(progress_path, stage="train", db_path=out_dir, log_path=log_file,
                                 unit_label="models", inputs=inputs)
 
@@ -223,6 +247,15 @@ def train_models(
     existing = {t.stem for t in tasks if (out_dir / f"{t.stem}.npz").exists()}
     progress.set_totals(len(tasks), files_skipped=len(existing))
     progress.doc["counters"]["years"] = len(mine)
+    # The ensemble as the Progress tab shows it: the design, how many of each
+    # year's models exist so far ("in_hand", earlier runs' models included),
+    # and the noise profile of every year completed (from its record).
+    ensemble: Dict[str, Any] = {"corpora": corpora, "seeds": seeds, "per_year": corpora * seeds,
+                                "in_hand": {}, "years": {}}
+    for t in tasks:
+        if t.stem in existing:
+            ensemble["in_hand"][str(t.year)] = ensemble["in_hand"].get(str(t.year), 0) + 1
+    progress.doc["ensemble"] = ensemble
     share = f" ({task.label}: {len(mine)} years)" if task else ""
     print(f"Ensemble '{name}': {cell.stem}; years {first}-{last} ({len(all_years)} with data"
           f"{f', {skipped} without' if skipped else ''}){share}; {corpora} corpus x {seeds} seed replicates "
@@ -271,6 +304,7 @@ def train_models(
     def on_trained(t: ReplicaTask, secs: float, n: int) -> None:
         model_facts[t.stem] = {"model": t.name, "corpus": t.corpus, "seed": t.seed_index, "vocab_size": n,
                                "seconds": round(secs, 1)}
+        ensemble["in_hand"][str(t.year)] = ensemble["in_hand"].get(str(t.year), 0) + 1
         progress.file_done(t.stem, entries=n, chunks=0, uncompressed_bytes=0, counters={"models": 1})
 
     def on_corpus_done(key: Tuple[int, int]) -> None:
@@ -281,9 +315,11 @@ def train_models(
         """A year's models are all in: its record, with the noise profile
         measured across them."""
         progress.file_ingesting(f"y{year}")
-        record = _year_record(out_dir, year, cell, corpora, seeds, corpus_stats, model_facts, yard)
+        record = _year_record(out_dir, year, cell, corpora, seeds, corpus_stats, model_facts, yard, profile)
         write_json(out_dir / f"y{year}" / YEAR_FILE, record)
         progress.doc["counters"]["years_done"] = progress.doc["counters"].get("years_done", 0) + 1
+        ensemble["in_hand"].pop(str(year), None)
+        ensemble["years"][str(year)] = {k: record.get(k) for k in PROFILE_KEYS}
         logger.info("year %s: %s", year, {k: v for k, v in record.items() if k.startswith("axis_") or k == "models_on_disk"})
 
     years_done: List[int] = []
@@ -293,8 +329,8 @@ def train_models(
         for t in todo:
             progress.file_started(t.stem)
         for year in mine:
-            if not any(t.year == year for t in todo) and not (out_dir / f"y{year}" / YEAR_FILE).exists():
-                finish_year(year)                     # complete from an earlier run, its record missing
+            if not any(t.year == year for t in todo) and _record_stale(out_dir / f"y{year}" / YEAR_FILE, yard, profile):
+                finish_year(year)     # complete from an earlier run: its record missing, or short of a profile
 
         def year_done(year: int) -> None:
             finish_year(year)
@@ -324,12 +360,44 @@ def train_models(
 
 
 # ---------------------------------------------------------------- per year
+# The part of a year's record the Progress tab shows while the run is going.
+PROFILE_KEYS = ("models_on_disk", "vocab_size", "axis_words", "axis_var_corpus", "axis_var_seed",
+                "axis_var_replicate", "axis_se_mean", "axis_noise_share", "axis_note",
+                "neigh_seed_overlap", "neigh_corpus_overlap", "neigh_probes",
+                "simlex_rho", "simlex_se_mean", "wordsim_rho", "wordsim_se_mean")
+
+
+def _record_stale(path: Path, yard: Optional[axis.Axis], profile: Dict[str, Any]) -> bool:
+    """Whether a year's record is missing, or was written before a profile
+    this run measures existed (a resume then rewrites it from the models on
+    disk, which is cheap next to training them)."""
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return True
+    if yard is not None and "axis_words" not in record and "axis_note" not in record:
+        return True
+    if profile.get("neighbours") and profile.get("probes_per_decile") and "neigh_probes" not in record:
+        return True
+    return any(f"{label}_rho" not in record for label in (profile.get("sim_sets") or {}))
+
+
 def _year_record(out_dir: Path, year: int, cell: Cell, corpora: int, seeds: int,
                  corpus_stats: Dict[Tuple[int, int], CorpusStats], model_facts: Dict[str, Dict[str, Any]],
-                 yard: Optional[axis.Axis]) -> Dict[str, Any]:
-    """The year's ``year.json``: what was trained and the noise profile. The
-    models are loaded one at a time from disk (a resume's earlier models
-    included) and dropped."""
+                 yard: Optional[axis.Axis], profile: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """The year's ``year.json``: what was trained and the noise profile in
+    three families, each a scalar measured inside every replicate and
+    decomposed across them (``variance_components``): the valence axis
+    (a word's projection, per word), the neighbourhoods (nearest-neighbour
+    overlap between replicates, probe words within the year's common
+    vocabulary) and the benchmarks (a similarity correlation per
+    replicate). The models are loaded one at a time from disk (a resume's
+    earlier models included) and dropped; a first pass over their word
+    lists finds the common vocabulary the probes are drawn from."""
+    profile = profile or {}
+    k = int(profile.get("neighbours") or 0)
+    per_decile = int(profile.get("probes_per_decile") or 0)
+    sim_sets: Dict[str, str] = dict(profile.get("sim_sets") or {})
     year_dir = out_dir / f"y{year}"
     models = sorted(year_dir.glob("c*_s*.npz"))
     # facts of the models: this run's, else the earlier record's, else from the model itself
@@ -338,19 +406,50 @@ def _year_record(out_dir: Path, year: int, cell: Cell, corpora: int, seeds: int,
         earlier = {m["model"]: m for m in json.loads((year_dir / YEAR_FILE).read_text()).get("models", [])}
     except (OSError, ValueError, TypeError, KeyError):
         pass
+
+    def coords(p: Path) -> Tuple[int, int]:
+        return int(p.stem[1:3]), int(p.stem.split("_s")[1])
+
+    in_design = [p for p in models if coords(p)[0] < corpora and coords(p)[1] < seeds]
+    # pass 1: the vocabulary every replicate has, in the first replicate's frequency order
+    probes: List[str] = []
+    within: List[str] = []
+    if k > 0 and per_decile > 0 and in_design:
+        common: Optional[set] = None
+        order: List[str] = []
+        for p in in_design:
+            v = load_vectors(str(p))
+            if not order:
+                order = list(v.words)
+            common = set(v.words) if common is None else common & set(v.words)
+            del v
+        within = [w for w in order if w in (common or set())]
+        probes = stability.probe_sample(within, per_decile=per_decile, seed=year)
+    # pass 2: the facts and the three families' per-replicate measurements
     facts: List[Dict[str, Any]] = []
     proj: Dict[Tuple[int, int], Dict[str, float]] = {}
+    nsets: Dict[Tuple[int, int], Dict[str, frozenset]] = {}
+    rhos: Dict[str, Dict[Tuple[int, int], float]] = {label: {} for label in sim_sets}
+    coverage: Dict[str, float] = {}
+    need_vectors = yard is not None or probes or sim_sets
     for p in models:
-        c, s = int(p.stem[1:3]), int(p.stem.split("_s")[1])
+        c, s_ = coords(p)
         fact = dict(model_facts.get(f"y{year}/{p.stem}") or earlier.get(p.stem)
-                    or {"model": p.stem, "corpus": c, "seed": s})
-        if yard is not None or "vocab_size" not in fact:
+                    or {"model": p.stem, "corpus": c, "seed": s_})
+        if need_vectors or "vocab_size" not in fact:
             v = load_vectors(str(p))
             fact.setdefault("vocab_size", len(v))
-            if yard is not None and c < corpora and s < seeds:          # not a model of a larger earlier design
-                ax = axis.axis_vector(v, yard.pleasant, yard.unpleasant)
-                if ax is not None:
-                    proj[(c, s)] = axis.projections(v, ax, yard.targets)
+            if c < corpora and s_ < seeds:                                  # not a model of a larger earlier design
+                if yard is not None:
+                    ax = axis.axis_vector(v, yard.pleasant, yard.unpleasant)
+                    if ax is not None:
+                        proj[(c, s_)] = axis.projections(v, ax, yard.targets)
+                if probes:
+                    nsets[(c, s_)] = stability.neighbour_sets(v, probes, k, within=within)
+                for label, path in sim_sets.items():
+                    rho, cov = benchmarks.similarity_score(v, path)
+                    rhos[label][(c, s_)] = rho
+                    coverage.setdefault(label, cov)
             del v
         facts.append(fact)
     corpora_now = [st.as_dict() for (y, _), st in sorted(corpus_stats.items()) if y == year]
@@ -365,12 +464,42 @@ def _year_record(out_dir: Path, year: int, cell: Cell, corpora: int, seeds: int,
     secs = [f["seconds"] for f in facts if f.get("seconds") is not None]
     record["vocab_size"] = round(statistics.fmean(vocab)) if vocab else None
     record["train_seconds"] = round(sum(secs)) if secs else None
-    if yard is not None and models:
+    if not models:
+        return record
+    nan = float("nan")
+    # the valence axis: a projection per word, decomposed across the design
+    if yard is not None:
         if len(proj) == corpora * seeds:
             words, cube = projection_cube(proj, corpora, seeds)
-            record.update(variance_components(cube).as_dict())
+            record.update(variance_components(cube).as_dict("axis_"))
         else:
             record["axis_note"] = f"{len(proj)} of {corpora * seeds} models could build the axis"
+    # the neighbourhoods: overlap between seeds of one resample (the fit) and
+    # between consecutive resamples (the text and the fit together), as in tune
+    if probes:
+        def mean_overlap(pairs: List[Tuple[Tuple[int, int], Tuple[int, int]]]) -> float:
+            vals = [stability.set_overlaps(nsets[a], nsets[b]) for a, b in pairs if a in nsets and b in nsets]
+            vals = [x.mean() for x in vals if x.size]
+            return float(statistics.fmean(vals)) if vals else nan
+        seed_pairs = [((c, a), (c, b)) for c in range(corpora) for a in range(seeds) for b in range(a + 1, seeds)]
+        corpus_pairs = [((c, 0), (c + 1, 0)) for c in range(corpora - 1)]
+        record["neigh_probes"] = len(probes)
+        record["neigh_neighbours"] = k
+        record["neigh_seed_overlap"] = mean_overlap(seed_pairs)
+        record["neigh_corpus_overlap"] = mean_overlap(corpus_pairs)
+    # the benchmarks: one correlation per replicate, decomposed the same way
+    for label in sim_sets:
+        got = rhos[label]
+        cube = np.full((corpora, seeds, 1), nan)
+        for (c, s_), rho in got.items():
+            cube[c, s_, 0] = rho
+        vals = [r for r in got.values() if r == r]
+        record[f"{label}_rho"] = float(statistics.fmean(vals)) if vals else nan
+        record[f"{label}_coverage"] = coverage.get(label, nan)
+        if len(got) == corpora * seeds and vals and len(vals) == len(got):
+            vc = variance_components(cube).as_dict(f"{label}_")
+            record.update({key: vc[key] for key in (f"{label}_var_seed", f"{label}_var_corpus",
+                                                      f"{label}_var_replicate", f"{label}_se_mean")})
     return record
 
 

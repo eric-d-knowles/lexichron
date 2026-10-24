@@ -724,16 +724,30 @@ resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
   in `y<year>/` as `c<corpus>_s<seed>.npz` (words, vectors and counts,
   readable with numpy), with a `year.json` of the corpus and model facts.
 - **The noise profile.** `year.json` also carries a general-purpose
-  measurement of the year's noise, with no research question assumed: the
+  measurement of the year's noise, with no research question assumed, in
+  the three families the search scores. Each measures a scalar inside
+  every replicate and decomposes its spread across the crossed design into
+  *corpus variance* (across resamples), *seed variance* (across seeds
+  within a resample), the *standard error of the ensemble mean*
+  (√(corpus/C + seed/(C·S))) and, where it applies, the *noise share*, that
+  error's square against the spread across words. *Valence axis*: the
   valence lexicon's words projected onto each model's own
-  pleasant–unpleasant axis (the `tune` yardstick) and decomposed across the
-  replicates into *corpus variance* (across resamples), *seed variance*
-  (across seeds within a resample), the *standard error of the ensemble
-  mean* per word (√(corpus/C + seed/(C·S))) and the *noise share*, that
-  error's square against the spread of the ensemble means across words.
-  The Inspect tab and `lexichron inspect models/<name>` show these per
-  year; the same arithmetic on your own axis and words is the measurement
-  error of your series.
+  pleasant–unpleasant axis (the `tune` yardstick), per word.
+  *Neighbourhoods*: the overlap of probe words' nearest neighbours between
+  the two seeds of one resample (the fit alone) and between consecutive
+  resamples (text and fit together), within the year's common vocabulary,
+  on the same footing as the search's seed and split-half overlap.
+  *Benchmarks*: SimLex-999 and WordSim-353 correlations per replicate, as
+  an ensemble mean with its standard error. The Inspect tab shows the
+  years in a table with a *Columns* selector per family, and above it the
+  profile of the years complete so far, averaged with the latest year's
+  own figure, which says after the first year rather than the last whether
+  the design is tight enough; it follows a running job. `lexichron inspect
+  models/<name>` prints the same. The Progress tab shows how many of the
+  current year's replicates exist. An ensemble trained before a family
+  existed gains it from a run in resume mode, which rewrites the records
+  from the models on disk without retraining. The same arithmetic on your
+  own axis and words is the measurement error of your series.
 - **Scale.** The default 20 × 2 is 40 models a year; 40 × 2 for a tight
   error estimate. Fifty years of 80 eight-minute models is about 140
   node-hours, so a run spans jobs: `mode: resume` trains only the models

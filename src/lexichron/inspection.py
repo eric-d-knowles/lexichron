@@ -447,20 +447,42 @@ def ensembles(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
 
 ENSEMBLE_COLUMNS = (
     ("year", "Year", "plain"), ("models_on_disk", "Models", "int"), ("vocab_size", "Vocab", "int"),
-    ("train_seconds", "Seconds", "int"), ("axis_words", "Axis words", "int"),
+    ("train_seconds", "Seconds", "int"),
+    # the valence axis
+    ("axis_words", "Axis words", "int"),
     ("axis_var_corpus", "Corpus var", "sci"), ("axis_var_seed", "Seed var", "sci"),
     ("axis_var_replicate", "Replicate var", "sci"), ("axis_se_mean", "SE of mean", "sci"),
     ("axis_noise_share", "Noise share", "num"),
+    # the neighbourhoods
+    ("neigh_seed_overlap", "Seed overlap", "num"), ("neigh_corpus_overlap", "Corpus overlap", "num"),
+    ("neigh_probes", "Probes", "int"),
+    # the benchmarks
+    ("simlex_rho", "SimLex ρ", "num"), ("simlex_se_mean", "SimLex SE", "num"),
+    ("wordsim_rho", "WordSim ρ", "num"), ("wordsim_se_mean", "WordSim SE", "num"),
 )
+# The columns each family shows (the Inspect tab's Columns selector).
+ENSEMBLE_VIEWS: Dict[str, Tuple[str, ...]] = {
+    "all": tuple(k for k, _, _ in ENSEMBLE_COLUMNS),
+    "axis": ("year", "models_on_disk", "axis_words", "axis_var_corpus", "axis_var_seed", "axis_var_replicate",
+             "axis_se_mean", "axis_noise_share"),
+    "neighbourhoods": ("year", "models_on_disk", "neigh_seed_overlap", "neigh_corpus_overlap", "neigh_probes"),
+    "benchmarks": ("year", "models_on_disk", "vocab_size", "simlex_rho", "simlex_se_mean", "wordsim_rho",
+                   "wordsim_se_mean"),
+}
 ENSEMBLE_LEGEND = (
     "Each year's models are a crossed design: corpus replicates (Poisson resamples of the year's n-gram counts) x "
-    "seeds. The noise profile projects the valence lexicon's words onto each model's own pleasant-unpleasant axis "
-    "and decomposes the spread across models: Corpus var is the variance across resamples (the sample of text), "
-    "Seed var the variance across seeds within a resample (the fit), both averaged over words; Replicate var stands "
-    "in for both when the design has one level of either. SE of mean is the standard error of a word's ensemble "
-    "mean (sqrt of corpus var / C + seed var / (C x S)); Noise share compares its square with the variance of the "
-    "ensemble means across words (how much of the between-word spread is noise). The same arithmetic applied to "
-    "your own axis and words gives the measurement error of your series."
+    "seeds. The noise profile measures a scalar inside every replicate and decomposes its spread across them, in "
+    "three families. Valence axis: the valence lexicon's words projected onto each model's own pleasant-unpleasant "
+    "axis. Corpus var is the variance across resamples (the sample of text), Seed var the variance across seeds "
+    "within a resample (the fit), both averaged over words; Replicate var stands in for both when the design has "
+    "one level of either. SE of mean is the standard error of a word's ensemble mean (sqrt of corpus var / C + "
+    "seed var / (C x S)); Noise share compares its square with the variance of the ensemble means across words "
+    "(how much of the between-word spread is noise). Neighbourhoods: mean overlap of the nearest neighbours of "
+    "probe words, within the year's common vocabulary, between the two seeds of one resample (Seed overlap: the "
+    "fit alone) and between consecutive resamples (Corpus overlap: text and fit together); comparable with the "
+    "tune search's seed and split-half overlap. Benchmarks: SimLex-999 and WordSim-353 correlations per "
+    "replicate, as the ensemble mean and the standard error of that mean. The same arithmetic applied to your "
+    "own axis and words gives the measurement error of your series."
 )
 
 
@@ -507,14 +529,17 @@ def read_ensemble(ens_dir: str) -> Dict[str, Any]:
     return out
 
 
-def ensemble_table(ens: Dict[str, Any]) -> Tuple[List[str], List[List[str]]]:
+def ensemble_table(ens: Dict[str, Any], view: str = "all") -> Tuple[List[str], List[List[str]]]:
     """(headings, rows) of the per-year records, one row per year that has
-    begun; columns with no value anywhere are left out."""
+    begun, with the columns of ``view`` (an ENSEMBLE_VIEWS name); columns
+    with no value anywhere are left out."""
     years = ens.get("years") or []
+    keys = ENSEMBLE_VIEWS.get(view, ENSEMBLE_VIEWS["all"])
 
     def has_value(k: str) -> bool:
         return any(isinstance(r.get(k), (int, float)) and r.get(k) == r.get(k) for r in years)
-    shown = [(k, h, kind) for k, h, kind in ENSEMBLE_COLUMNS if k in ("year", "models_on_disk") or has_value(k)]
+    shown = [(k, h, kind) for k, h, kind in ENSEMBLE_COLUMNS
+             if k in keys and (k in ("year", "models_on_disk") or has_value(k))]
     headings = [h for _, h, _ in shown]
     rows = []
     for r in years:
@@ -544,10 +569,68 @@ def ensemble_overview(ens: Dict[str, Any]) -> List[Tuple[str, str, str]]:
             ("Resampling", str(m.get("resampling") or "-"), f"ensemble seed {m.get('noise_seed', '?')}")]
 
 
+def _pct(v: Optional[float]) -> str:
+    return "–" if v is None or v != v else f"{100.0 * float(v):.1f}%"
+
+
+def ensemble_profile(ens: Dict[str, Any], view: str = "all") -> Tuple[str, List[Tuple[str, str, str]]]:
+    """A group of tiles, (title, [(label, value, note)]): the noise profile
+    of the years complete so far, averaged over them, with the latest year's
+    own figure as the note, in the families of ``view``. This is what says,
+    after the first year rather than the last, how reliable the design is."""
+    done = [r for r in (ens.get("years") or []) if r.get("done")]
+    n = len(done)
+    title = f"Noise profile · {n} year{'s' if n != 1 else ''} complete"
+    if not done:
+        return title, [("Valence axis", "–", "after the first year completes"), ("Neighbourhoods", "–", ""),
+                       ("Benchmarks", "–", "")]
+    latest = max(done, key=lambda r: int(r.get("year", 0)))
+
+    def ok(v: Any) -> bool:
+        return isinstance(v, (int, float)) and v == v
+
+    def mean(key: str) -> Optional[float]:
+        vals = [float(r[key]) for r in done if ok(r.get(key))]
+        return sum(vals) / len(vals) if vals else None
+
+    def note(what: str, key: str, fmt) -> str:
+        v = latest.get(key)
+        return what + (f"; {latest.get('year')}: {fmt(v)}" if n > 1 and ok(v) else "")
+
+    sci = lambda v: _fmt_cell(v, "sci")
+    num = lambda v: _fmt_cell(v, "num")
+    tiles: List[Tuple[str, str, str]] = []
+    if view in ("all", "axis") and mean("axis_se_mean") is not None:
+        tiles.append(("Axis SE of mean", sci(mean("axis_se_mean")), note("per word, mean over years", "axis_se_mean", sci)))
+        tiles.append(("Axis noise share", _pct(mean("axis_noise_share")),
+                      note("of the spread across words", "axis_noise_share", _pct)))
+        vc, vs = mean("axis_var_corpus"), mean("axis_var_seed")
+        if vc is not None and vs is not None and vc + vs > 0:
+            tiles.append(("Fit's share of axis noise", f"{100.0 * vs / (vc + vs):.0f}%", "seed var over seed + corpus var"))
+    if view in ("all", "neighbourhoods") and mean("neigh_seed_overlap") is not None:
+        tiles.append(("Seed overlap", num(mean("neigh_seed_overlap")),
+                      note("neighbours shared by two seeds of a resample", "neigh_seed_overlap", num)))
+        tiles.append(("Corpus overlap", num(mean("neigh_corpus_overlap")),
+                      note("by consecutive resamples", "neigh_corpus_overlap", num)))
+    if view in ("all", "benchmarks"):
+        for label, name in (("simlex", "SimLex ρ"), ("wordsim", "WordSim ρ")):
+            rho = mean(f"{label}_rho")
+            if rho is None:
+                continue
+            se = mean(f"{label}_se_mean")
+            tiles.append((name, num(rho) + (f" ±{num(se)}" if se is not None else ""),
+                          note("ensemble mean ± its standard error", f"{label}_rho", num)))
+    if not tiles:
+        tiles = [("No profile of this kind", "–", "the records predate it; a run in resume mode adds it")]
+    return title, tiles
+
+
 def format_ensemble(ens: Dict[str, Any]) -> List[str]:
     if ens.get("error"):
         return [ens["error"]]
     lines = [f"ensemble {ens['name']}: " + "; ".join(f"{l} {v} ({n})" for l, v, n in ensemble_overview(ens))]
+    title, tiles = ensemble_profile(ens)
+    lines.append(f"{title}: " + "; ".join(f"{l} {v}" + (f" ({n})" if n else "") for l, v, n in tiles))
     headings, rows = ensemble_table(ens)
     if rows:
         widths = [max(len(headings[i]), *(len(r[i]) for r in rows)) for i in range(len(headings))]

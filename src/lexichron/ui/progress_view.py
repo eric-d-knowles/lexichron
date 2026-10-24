@@ -316,6 +316,8 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             ("Training time", fmt_duration(float(counters.get("train_seconds", 0))), "summed over models"),
             ("Corpus lines", f"{int(counters.get('corpus_lines', 0)):,}", "weighted repeats, all resamples"),
         ]))
+        groups += ensemble_groups(doc.get("ensemble") or {})
+        groups += ensemble_groups(doc.get("ensemble") or {})
     elif stage == "filter":
         scanned = int(counters.get("scanned", 0))
         kept = int(counters.get("kept", 0))
@@ -363,3 +365,18 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             tiles.append(("Unsized", f"{unsized:,}", "files done before sizes were recorded"))
         groups.append(("Records \u2013 entire corpus", tiles))
     return groups
+
+
+def ensemble_groups(ens: Dict[str, Any]) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
+    """For a train run: the years whose replicates are still coming in, each
+    with how many of the design's models exist so far. The noise profile of
+    the finished years is a result, and lives on the Inspect tab."""
+    in_hand = {int(y): int(n) for y, n in (ens.get("in_hand") or {}).items()}
+    if not in_hand:
+        return []
+    per_year = int(ens.get("per_year") or 0)
+    design = f"{ens.get('corpora', '?')} resamples × {ens.get('seeds', '?')} seeds"
+    tiles = [(str(y), f"{n:,}/{per_year:,}" if per_year else f"{n:,}", f"{100.0 * n / per_year:.0f}%" if per_year else "")
+             for y, n in sorted(in_hand.items())[:6]]
+    more = len(in_hand) - len(tiles)
+    return [(f"Replicates in hand ({design})" + (f", {more} more years" if more > 0 else ""), tiles)]

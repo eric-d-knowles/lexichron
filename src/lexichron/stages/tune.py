@@ -835,18 +835,7 @@ def _read_vocabulary(path) -> List[str]:
 
 
 def _similarity_sets(given: Optional[str]) -> Dict[str, str]:
-    if given:
-        stem = Path(given).stem.lower()
-        # a user's copy of a known dataset keeps its name, so its scores land
-        # in the summary's SimLex / WordSim columns
-        label = "simlex" if stem.startswith("simlex") else "wordsim" if stem.startswith("wordsim") else stem
-        return {label: given}
-    sets = {}
-    for label, fname in (("wordsim", "wordsim353.tsv"), ("simlex", "simlex999.txt")):
-        p = benchmarks.bundled_dataset(fname)
-        if p:
-            sets[label] = p
-    return sets
+    return benchmarks.similarity_sets(given)
 
 
 def _setup_log(path: Path) -> None:

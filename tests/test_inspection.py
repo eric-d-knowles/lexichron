@@ -264,3 +264,28 @@ def test_each_view_stars_its_own_family_pick():
     _, rows, _ = inspection.search_table(s, view="neighbourhoods")
     assert [r[0] for r in rows] == ["★", ""]
     assert inspection.suggestions_line(s) == "benchmarks: b  ·  neighbourhoods: a"
+
+
+def test_ensemble_profile_summarises_the_years_complete_by_family():
+    from lexichron.inspection import ensemble_profile, ensemble_table
+    y1 = {"year": 1990, "done": True, "models_on_disk": 4, "axis_se_mean": 0.02, "axis_noise_share": 0.03,
+          "axis_var_corpus": 0.001, "axis_var_seed": 0.003, "neigh_seed_overlap": 0.6, "neigh_corpus_overlap": 0.4,
+          "neigh_probes": 900, "simlex_rho": 0.3, "simlex_se_mean": 0.01}
+    y2 = {"year": 1991, "done": True, "models_on_disk": 4, "axis_se_mean": 0.04, "axis_noise_share": 0.05,
+          "axis_var_corpus": 0.003, "axis_var_seed": 0.001, "neigh_seed_overlap": 0.5, "neigh_corpus_overlap": 0.3,
+          "neigh_probes": 900, "simlex_rho": 0.4, "simlex_se_mean": 0.02}
+    ens = {"manifest": {"corpus_replicates": 2, "seeds_per_corpus": 2}, "years": [y1, y2, {"year": 1992, "done": False}]}
+    title, tiles = ensemble_profile(ens)
+    assert title == "Noise profile · 2 years complete"
+    assert tiles[0] == ("Axis SE of mean", "3.00e-02", "per word, mean over years; 1991: 4.00e-02")
+    assert tiles[1] == ("Axis noise share", "4.0%", "of the spread across words; 1991: 5.0%")
+    assert tiles[2] == ("Fit's share of axis noise", "50%", "seed var over seed + corpus var")
+    assert tiles[3][:2] == ("Seed overlap", "0.550") and tiles[4][:2] == ("Corpus overlap", "0.350")
+    assert tiles[5] == ("SimLex ρ", "0.350 ±0.015", "ensemble mean ± its standard error; 1991: 0.400")
+    assert [t[0] for t in ensemble_profile(ens, "benchmarks")[1]] == ["SimLex ρ"]
+    assert ensemble_profile({"years": []})[1][0][2] == "after the first year completes"
+    assert ensemble_profile({"years": [{"year": 1990, "done": True}]}, "axis")[1][0][0] == "No profile of this kind"
+    headings, rows = ensemble_table(ens, "axis")
+    assert headings == ["Year", "Models", "Corpus var", "Seed var", "SE of mean", "Noise share"]
+    assert rows[2][1] == "0/4 (training)"
+    assert ensemble_table(ens, "benchmarks")[0] == ["Year", "Models", "SimLex ρ", "SimLex SE"]

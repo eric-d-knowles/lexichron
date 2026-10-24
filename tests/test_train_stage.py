@@ -62,10 +62,10 @@ def test_variance_components_separate_the_corpus_and_the_seed():
     assert words == ["a", "b"] and cube.tolist() == [[[1.0, 2.0], [0.0, 3.0]]]
 
 
-def test_train_writes_an_ensemble_per_year_with_its_noise_profile(rocks, tmp_path):
+def test_train_writes_an_ensemble_per_year_with_its_noise_profile(rocks, tmp_path, monkeypatch):
     stub = tmp_path / "corpora"
     paths = _corpus(stub, [1990, 1991, 1992])
-    d = _datasets(tmp_path)
+    d = _datasets(tmp_path, monkeypatch)          # SimLex and WordSim become the bundled datasets
     progress = tmp_path / "p.json"
     written = []
     import lexichron.stages.train as train_mod
@@ -98,15 +98,28 @@ def test_train_writes_an_ensemble_per_year_with_its_noise_profile(rocks, tmp_pat
     assert year["vocab_size"] > 10 and year["train_seconds"] is not None
     assert year["axis_words"] > 5 and year["axis_var_seed"] >= 0 and year["axis_var_corpus"] >= 0
     assert year["axis_se_mean"] > 0 and 0 <= year["axis_noise_share"]
+    # the other two families: neighbour overlap between replicates, and a benchmark correlation per replicate
+    assert year["neigh_probes"] > 0 and year["neigh_neighbours"] == 10
+    assert 0 <= year["neigh_seed_overlap"] <= 1 and 0 <= year["neigh_corpus_overlap"] <= 1
+    for label in ("simlex", "wordsim"):
+        assert -1 <= year[f"{label}_rho"] <= 1 and year[f"{label}_coverage"] > 0
+        assert year[f"{label}_se_mean"] >= 0 and year[f"{label}_var_seed"] >= 0 and year[f"{label}_var_corpus"] >= 0
     # the progress document counts models and years, which the UI's Progress tab shows for a train run
     prog = json.loads(progress.read_text())
     assert prog["unit_label"] == "models" and prog["files_done"] == 18
     assert prog["counters"]["models"] == 18 and prog["counters"]["years"] == 3 and prog["counters"]["years_done"] == 3
+    ens = prog["ensemble"]
+    assert ens["per_year"] == 6 and ens["in_hand"] == {} and sorted(ens["years"]) == ["1990", "1991", "1992"]
+    assert ens["years"]["1990"]["axis_se_mean"] == year["axis_se_mean"] and ens["years"]["1990"]["models_on_disk"] == 6
     doc = read_progress(progress)
     assert doc["state"] == "done" and doc["files_total"] == 18 and doc["files_done"] == 18
     assert doc["counters"]["models"] == 18 and doc["counters"]["years"] == 3 and "3 of 3 years" in doc["message"]
-    # resume: nothing retrained; a year whose record is missing gets it back from the models on disk
+    # resume: nothing retrained; a year whose record is missing gets it back from the models on disk,
+    # and one written before a family existed is refreshed, so a rerun adds the family to an older ensemble
     (out / "y1991" / "year.json").unlink()
+    old_1992 = json.loads((out / "y1992" / "year.json").read_text())
+    (out / "y1992" / "year.json").write_text(json.dumps({k: v for k, v in old_1992.items() if not k.startswith("neigh_")}))
+    kept_1990 = (out / "y1990" / "year.json").stat().st_mtime_ns
     trained = []
     train.train_models(5, "20200217", "eng", str(stub), years=(1989, 1993), vector_size=8, window=2, min_count=2,
                        epochs=1, approach="skip-gram", weight_by="none", corpus_replicates=3, seeds_per_corpus=2,
@@ -118,6 +131,9 @@ def test_train_writes_an_ensemble_per_year_with_its_noise_profile(rocks, tmp_pat
     assert again["models_on_disk"] == 6 and again["axis_words"] == year["axis_words"]
     assert again["models"][0]["vocab_size"] == year["models"][0]["vocab_size"]      # read from the model itself
     assert again["train_seconds"] is None                                            # not known to this run
+    refreshed = json.loads((out / "y1992" / "year.json").read_text())
+    assert refreshed["neigh_seed_overlap"] == old_1992["neigh_seed_overlap"]        # the family is back, same figure
+    assert (out / "y1990" / "year.json").stat().st_mtime_ns == kept_1990             # a current record is left alone
 
 
 def test_resampling_none_is_a_seed_only_ensemble(rocks, tmp_path):

@@ -102,10 +102,12 @@ class VarianceComponents:
     var_words: float                  # across words, of the ensemble means (the signal)
     noise_share: float                # mean se_mean^2 / var_words: the part of the spread across words that is noise
 
-    def as_dict(self) -> Dict[str, float]:
-        return {"axis_words": self.words, "axis_var_seed": self.var_seed, "axis_var_corpus": self.var_corpus,
-                "axis_var_replicate": self.var_replicate, "axis_se_mean": self.se_mean,
-                "axis_var_words": self.var_words, "axis_noise_share": self.noise_share}
+    def as_dict(self, prefix: str = "axis_") -> Dict[str, float]:
+        """The components under ``prefix`` (the family's column names)."""
+        return {f"{prefix}words": self.words, f"{prefix}var_seed": self.var_seed,
+                f"{prefix}var_corpus": self.var_corpus, f"{prefix}var_replicate": self.var_replicate,
+                f"{prefix}se_mean": self.se_mean, f"{prefix}var_words": self.var_words,
+                f"{prefix}noise_share": self.noise_share}
 
 
 def variance_components(values: np.ndarray) -> VarianceComponents:

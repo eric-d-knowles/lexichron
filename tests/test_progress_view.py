@@ -317,3 +317,10 @@ def test_train_runs_read_as_ensembles_not_acquisitions():
     text = repr(groups)
     for word in ("Download", "Parsed", "Inserted", "In database", "entries"):
         assert word not in text, word
+    # the years whose replicates are coming in; the noise profile itself is the Inspect tab's
+    doc["ensemble"] = {"corpora": 40, "seeds": 2, "per_year": 80, "in_hand": {"1972": 16, "1985": 2},
+                       "years": {"1968": {"axis_se_mean": 0.002}}}
+    groups = dict(meters(doc, summarize(doc, now=now, job_gone=False)))
+    assert groups["Replicates in hand (40 resamples × 2 seeds)"] == [("1972", "16/80", "20%"), ("1985", "2/80", "2%")]
+    assert not any("profile" in title.lower() for title in groups)
+

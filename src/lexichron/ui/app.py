@@ -25,6 +25,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -45,7 +46,8 @@ from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
 from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE,
-                                  best_in_columns, ensemble_overview, ensemble_table, ensembles, read_ensemble,
+                                  best_in_columns, ensemble_overview, ensemble_profile, ensemble_table, ensembles,
+                                  read_ensemble,
                                   suggested_for, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
@@ -638,6 +640,10 @@ class LexichronApp(App):
                         yield Select([], allow_blank=True, id="ensemble-name", compact=True,
                                      prompt="(ensembles of this corpus)")
                         yield Button("Reload", id="ensemble-reload", compact=True)
+                        yield Label("Columns", classes="search-opt")
+                        yield Select([("All", "all"), ("Benchmarks", "benchmarks"),
+                                      ("Neighbourhoods", "neighbourhoods"), ("Valence axis", "axis")],
+                                     value="all", allow_blank=False, id="ensemble-view", compact=True)
                     yield Static("", id="ensemble-empty")
                     yield Meters(id="ensemble-meters")
                     yield DataTable(id="ensemble-table", zebra_stripes=True)
@@ -775,6 +781,8 @@ class LexichronApp(App):
         self.query_one("#search-years", DataTable).cursor_type = "none"
         self._inspect_dir: Optional[Path] = None
         self._search: Optional[Dict[str, Any]] = None
+        self._ensemble: Optional[Dict[str, Any]] = None
+        self._ensemble_at = 0.0
         self._search_sort: Tuple[Optional[str], bool] = (None, False)
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
@@ -958,12 +966,30 @@ class LexichronApp(App):
     def _ensemble_reload_pressed(self) -> None:
         self._refresh_ensembles()
 
+    @on(Select.Changed, "#ensemble-view")
+    def _ensemble_view_changed(self) -> None:
+        if self._ensemble is not None:
+            self._show_ensemble(self._ensemble)
+
     @work(thread=True, group="ensemble", exclusive=True)
     def _load_ensemble(self, path: str) -> None:
+        self._ensemble_at = time.monotonic()
         ens = read_ensemble(path)
         self.call_from_thread(self._show_ensemble, ens)
 
+    ENSEMBLE_EVERY_S = 30.0      # while a train run is going, its year records are reread this often
+
+    def _follow_running_ensemble(self, docs: List[tuple]) -> None:
+        """A train run rewrites year records as years complete: reread the
+        shown ensemble now and then while one is running."""
+        if self.stage != "train" or not self._ensemble or self._ensemble.get("error"):
+            return
+        running = any(doc and doc.get("stage") == "train" and doc.get("state") == "running" for _, doc in docs)
+        if running and time.monotonic() - self._ensemble_at >= self.ENSEMBLE_EVERY_S:
+            self._load_ensemble(self._ensemble["path"])
+
     def _show_ensemble(self, ens: Optional[Dict[str, Any]]) -> None:
+        self._ensemble = ens
         table = self.query_one("#ensemble-table", DataTable)
         table.clear(columns=True)
         empty = self.query_one("#ensemble-empty", Static)
@@ -977,8 +1003,10 @@ class LexichronApp(App):
             empty.display = True
             return
         empty.display = False
-        self.query_one("#ensemble-meters", Meters).show([("", ensemble_overview(ens))])
-        headings, rows = ensemble_table(ens)
+        view = self.query_one("#ensemble-view", Select).value
+        view = str(view) if view is not Select.NULL else "all"
+        self.query_one("#ensemble-meters", Meters).show([("", ensemble_overview(ens)), ensemble_profile(ens, view)])
+        headings, rows = ensemble_table(ens, view)
         for h in headings:
             table.add_column(h, key=h)
         widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headings)]
@@ -1351,6 +1379,7 @@ class LexichronApp(App):
                 pass
             return
         self._status = snap
+        self._follow_running_ensemble(snap["docs"])
         table = self.query_one("#jobs", DataTable)
         table.clear()
         # Job ids of queued/running jobs, or None when Slurm cannot be asked.

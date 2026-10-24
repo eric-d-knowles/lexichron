@@ -185,3 +185,25 @@ def test_cell_stem_round_trips_a_value_with_an_underscore():
     assert grid.Cell.from_stem("vs300_w2_mc5_e5_sg0_wbnone").approach == "cbow"
     with pytest.raises(ValueError):
         grid.Cell.from_stem("y1990_vs100_w5_mc1_e10_sg1_wbnone_s0")
+
+
+def test_neighbour_sets_reproduce_the_pairwise_overlap():
+    """Scoring a year's replicates one model at a time: neighbour sets taken
+    within the models' common vocabulary overlap exactly as the two-model
+    comparison does."""
+    from lexichron.training import stability
+    rng = np.random.default_rng(3)
+    words = [f"w{i:03d}" for i in range(300)]
+    a = trainer.Vectors(words=words, matrix=rng.normal(size=(300, 16)).astype(np.float32))
+    b = trainer.Vectors(words=words[:280] + [f"x{i}" for i in range(20)],
+                        matrix=rng.normal(size=(300, 16)).astype(np.float32))
+    probes = stability.probe_words([a, b], per_decile=5, seed=1)
+    assert len(probes) == 50
+    common = [w for w in a.words if w in b]
+    sa = stability.neighbour_sets(a, probes, 10, within=common)
+    sb = stability.neighbour_sets(b, probes, 10, within=common)
+    direct = stability.neighbour_overlaps(a, b, probes, 10)
+    via_sets = stability.set_overlaps(sa, sb)
+    assert via_sets.shape == direct.shape and np.allclose(via_sets, direct)
+    assert all(len(v) == 10 and w not in v for w, v in sa.items())
+    assert stability.neighbour_sets(a, probes, 10, within=words[:5]) == {}      # too few words to rank
