@@ -16,7 +16,9 @@ section for whatever you are touching before changing it.
   `trainer`, `grid`, `scheduler`, `scores`, `ensemble`, `axis`, `stability`,
   `benchmarks`), `ui/` (`app.py`, `schema.py` which derives each stage's form
   from its function signature, `slurm.py` which writes batch scripts),
-  `arrays.py` (Slurm job-array slicing), `safeguards.py`, `resources.py`,
+  `arrays.py` (Slurm job-array slicing), `corpora.py` (the corpora under a
+  directory and their state, for the UI's corpus bar), `slurm_settings.py`
+  (where a job's Slurm settings come from), `safeguards.py`, `resources.py`,
   `provenance.py`, `inspection.py`.
 - `src/ngramprep/` — acquisition, filtering and pivoting of n-gram databases
   (RocksDB through `rocks-shim`), with Cython kernels.

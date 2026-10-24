@@ -7,7 +7,7 @@ textual = pytest.importorskip("textual")
 
 from textual.widgets import Collapsible, Select  # noqa: E402
 
-from lexichron.ui.app import FixedValue, LexichronApp  # noqa: E402
+from lexichron.ui.app import NewCorpus, FixedValue, LexichronApp  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -291,6 +291,8 @@ def test_stage_selector_switches_form_and_keeps_other_sections(tmp_path):
     proj = tmp_path / "lexichron.yaml"
     proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
                     "acquire:\n  workers: 4\nfilter:\n  min_len: 4\n")
+    db = tmp_path / "20200217" / "eng" / "1gram_files" / "1grams.db"       # acquired: Filter's button is live
+    db.mkdir(parents=True); (db / "CURRENT").write_text("x")
 
     async def scenario():
         from textual.widgets import Select
@@ -1089,6 +1091,101 @@ def test_submit_tab_resolves_slurm_settings_per_stage_and_saves_them_in_layers(t
             app.action_save()
             await pilot.pause()
             assert "account" not in yaml.safe_load(proj.read_text())["slurm"]
+        _assert_clean(app)
+
+    asyncio.run(scenario())
+
+
+def _corpus_dir(root, lang, n, *, db=False, pivoted=False, settings=None):
+    d = root / "20200217" / lang / f"{n}gram_files"
+    d.mkdir(parents=True, exist_ok=True)
+    for name, make in ((f"{n}grams.db", db), (f"{n}grams_pivoted.db", pivoted)):
+        if make:
+            (d / name).mkdir(); (d / name / "CURRENT").write_text("x")
+    if settings is not None:
+        (d / "lexichron.yaml").write_text(settings)
+    return d
+
+
+def test_corpus_bar_lists_the_root_and_opens_a_corpus_with_its_settings(tmp_path):
+    """Choosing a corpus opens its settings file (or a fresh form with its
+    identity), lights the stages its state allows, and the form follows."""
+    from textual.widgets import Button, Input, Select, Static
+    root = tmp_path / "corpora"
+    one = _corpus_dir(root, "eng", 1, db=True, settings=(
+        f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {root}\n"
+        "filter:\n  min_len: 9\nslurm:\n  account: proj_x\n"))
+    five = _corpus_dir(root, "eng-us", 5, db=True, pivoted=True)
+
+    async def scenario():
+        app = LexichronApp(None)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            assert "No corpus chosen" in str(app.query_one("#corpus-state", Static).content)
+            assert not app.query_one("#stage-btn-filter", Button).disabled      # nothing chosen: nothing greyed
+            app.query_one("#corpus-root", Input).value = str(root)
+            await pilot.pause()
+            sel = app.query_one("#corpus-select", Select)
+            assert [label for label, _ in sel._options if label] == ["eng · 20200217 · 1-grams", "eng-us · 20200217 · 5-grams"]
+            sel.value = str(one)
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.project_path == one / "lexichron.yaml" and one / "lexichron.yaml" in app._known_settings
+            assert app.query_one("#f-filter-min_len", Input).value == "9"         # the file's settings are on the form
+            assert app.query_one("#f-corpus-language").value == "eng"
+            assert app.query_one("#f-slurm-account", Input).value == "proj_x"
+            state = str(app.query_one("#corpus-state", Static).content)
+            assert state.startswith("eng · 20200217 · 1-grams: acquired · not filtered") and "settings" in state
+            assert "Corpus: eng · 20200217 · 1-grams" in str(app.query_one("#corpus-line", Static).content)
+            assert not app.query_one("#stage-btn-filter", Button).disabled
+            assert app.query_one("#stage-btn-tune", Button).disabled and "Filter first" in app.query_one("#stage-btn-tune", Button).tooltip
+            # the other corpus has no settings file: a fresh form with its identity, every stage live
+            sel.value = str(five)
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.project_path == five / "lexichron.yaml" and not (five / "lexichron.yaml").exists()
+            assert app.query_one("#f-corpus-language").value == "eng-us" and app.query_one("#f-corpus-ngram_size").value == "5"
+            assert app.query_one("#f-filter-min_len", Input).value == "3"          # back to the default: nothing carried over
+            assert not app.query_one("#stage-btn-tune", Button).disabled and not app.query_one("#stage-btn-train", Button).disabled
+            assert "acquired · filtered" in str(app.query_one("#corpus-state", Static).content)
+        _assert_clean(app)
+
+    asyncio.run(scenario())
+
+
+def test_new_corpus_dialog_starts_at_acquire(tmp_path):
+    from textual.widgets import Button, Input, Select, Static
+    root = tmp_path / "corpora"
+    root.mkdir()
+
+    async def scenario():
+        app = LexichronApp(None, "tune")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            app.query_one("#corpus-root", Input).value = str(root)
+            await pilot.pause()
+            app._corpus_new_pressed()
+            await pilot.pause()
+            assert isinstance(app.screen, NewCorpus)
+            await pilot.click("#new-create")                                      # nothing filled in: stays open
+            await pilot.pause()
+            assert isinstance(app.screen, NewCorpus) and "Fill in" in str(app.screen.query_one("#new-error", Static).content)
+            app.screen.query_one("#new-language", Select).value = "ger"
+            app.screen.query_one("#new-size", Select).value = "3"
+            await pilot.pause()
+            await pilot.click("#new-create")
+            await pilot.pause()
+            assert not isinstance(app.screen, NewCorpus)
+            assert app.stage == "acquire"                                         # the stage that creates it
+            assert app.config["corpus"] == {"db_path_stub": str(root), "release": "20200217", "language": "ger", "ngram_size": 3}
+            assert app.project_path == root / "20200217" / "ger" / "3gram_files" / "lexichron.yaml"
+            assert app.query_one("#stage-btn-filter", Button).disabled and app.query_one("#stage-btn-train", Button).disabled
+            assert "new: nothing acquired yet" in str(app.query_one("#corpus-state", Static).content)
+            # it is in the list as the current corpus, though nothing is on disk yet
+            assert app.query_one("#corpus-select", Select).value == str(root / "20200217" / "ger" / "3gram_files")
         _assert_clean(app)
 
     asyncio.run(scenario())

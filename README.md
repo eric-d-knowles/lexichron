@@ -442,15 +442,27 @@ submitted and watched from inside the container. (`lexichron-ui
 environment created with `new-project` also has its own `.venv/lexichron-ui`
 that uses that environment.)
 
+Above the tabs, two bars:
+
+- **Corpus** — the corpus everything below acts on. Type the directory that
+  holds your corpora (the one `<release>/<language>/<N>gram_files` folders
+  live under) and pick one of those found; the line beneath says how far it
+  has got (acquired, filtered, how many searches and ensembles) and where its
+  settings file is. Choosing a corpus opens that file, so the form always
+  describes the corpus you are looking at. *New corpus* asks for the
+  directory, language and n-gram size of one that does not exist yet and
+  takes you to Acquire, the stage that creates it. The UI remembers the
+  directory and the last settings file between sessions.
+- **Stage** — *Acquire*, *Filter*, *Tune* and *Train* choose the stage that
+  Settings, Run and Submit act on. A stage whose prerequisite is missing is
+  greyed out, with the reason as its tooltip: Filter needs the database
+  Acquire makes, Tune and Train the pivoted database Filter makes.
+
 Tabs:
 
-*Acquire* and *Filter* buttons above the tabs choose the stage that Settings,
-Run and Submit act on.
-
 - **Settings** — a form for
-  that stage's settings: the corpus section shared by every stage (directory,
-  release, language, n-gram size) and the stage's own, with rarely-used
-  settings under *Advanced*. Hover a `?` (or press F1) for help on a setting. Missing or
+  that stage's settings, with rarely-used settings under *Advanced*; the
+  corpus itself is named at the top of the form and chosen on the bar. Hover a `?` (or press F1) for help on a setting. Missing or
   invalid settings are reported at the top as you type. *Save* writes the
   settings file beside the database it describes,
   `<corpus directory>/<release>/<language>/<n>gram_files/lexichron.yaml`, so

@@ -45,6 +45,7 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
+from lexichron.corpora import CorpusInfo, corpus_info, scan_corpora, stage_prerequisites
 from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE,
                                   best_in_columns, ensemble_overview, ensemble_profile, ensemble_table, ensembles,
                                   read_ensemble,
@@ -56,7 +57,7 @@ from lexichron.resources import MemoryEstimate, memory_estimate
 from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
-from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
+from lexichron.ui.schema import CHOICES, Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, read_user_defaults,
                                       resolve as resolve_slurm, seed_user_defaults, stage_override,
                                       state_dir as _state_dir, write_user_defaults)
@@ -76,6 +77,25 @@ def remember_settings_path(path: Path) -> None:
         (d / "last_settings").write_text(str(path) + "\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def remember_root(path: Path) -> None:
+    try:
+        d = _state_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "last_root").write_text(str(path) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def last_root() -> Optional[Path]:
+    """The corpus directory the corpus bar showed last time, if it still exists."""
+    try:
+        text = (_state_dir() / "last_root").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    p = Path(text) if text else None
+    return p if p and p.is_dir() else None
 
 
 def last_settings_path() -> Optional[Path]:
@@ -363,6 +383,67 @@ class ConfirmReplaceSettings(Confirm):
         self.path = path
 
 
+class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
+    """Where a corpus that does not exist yet will live: Acquire creates it
+    there. Dismisses with the corpus identity, or None."""
+
+    DEFAULT_CSS = """
+    NewCorpus { align: center middle; }
+    NewCorpus > Vertical { width: 84; height: auto; border: thick $accent; background: $surface; padding: 1 2; }
+    NewCorpus #new-title { text-style: bold; color: $accent; }
+    NewCorpus #new-note, NewCorpus #new-error { color: $text-muted; margin: 1 0; height: auto; }
+    NewCorpus #new-error { color: $warning; }
+    NewCorpus .row { height: auto; margin-bottom: 1; }
+    NewCorpus .row Label { width: 18; }
+    NewCorpus .row Input, NewCorpus .row Select { width: 1fr; }
+    NewCorpus #new-buttons { height: auto; align-horizontal: right; }
+    NewCorpus Button { margin-left: 1; }
+    """
+    BINDINGS = [("escape", "cancel", "Back")]
+
+    def __init__(self, root: str) -> None:
+        super().__init__()
+        self.root = root
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("New corpus", id="new-title")
+            yield Static("Acquire creates it: the Google Books n-gram files for this language and size are "
+                         "downloaded into <corpus directory>/<release>/<language>/<N>gram_files, and the other "
+                         "stages open up as it is built.", id="new-note")
+            with Horizontal(classes="row"):
+                yield Label("Corpus directory")
+                yield Input(value=self.root, id="new-root", compact=True, placeholder="/scratch/<you>/NLP_corpora/Google_Books")
+            with Horizontal(classes="row"):
+                yield Label("Release")
+                yield Static(CHOICES["release"][0], id="new-release")
+            with Horizontal(classes="row"):
+                yield Label("Language")
+                yield Select([(c, c) for c in CHOICES["language"]], allow_blank=True, id="new-language", compact=True)
+            with Horizontal(classes="row"):
+                yield Label("N-gram size")
+                yield Select([(c, c) for c in CHOICES["ngram_size"]], allow_blank=True, id="new-size", compact=True)
+            yield Static("", id="new-error")
+            with Horizontal(id="new-buttons"):
+                yield Button("Cancel", id="new-cancel")
+                yield Button("Create", id="new-create", variant="primary")
+
+    @on(Button.Pressed, "#new-cancel")
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#new-create")
+    def _create(self) -> None:
+        root = self.query_one("#new-root", Input).value.strip()
+        lang = self.query_one("#new-language", Select).value
+        size = self.query_one("#new-size", Select).value
+        if not root or lang is Select.NULL or size is Select.NULL:
+            self.query_one("#new-error", Static).update("Fill in the corpus directory, language and n-gram size.")
+            return
+        self.dismiss({"db_path_stub": root, "release": CHOICES["release"][0], "language": str(lang),
+                      "ngram_size": int(str(size))})
+
+
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
@@ -372,6 +453,13 @@ class LexichronApp(App):
     .show-help .field-help { display: block; }
     .row { height: auto; }
     .row Label { width: 22; }
+    #corpus-bar { height: 3; padding: 0 1; background: $panel; }
+    #corpus-bar Label { width: auto; height: 3; content-align: left middle; padding-right: 2; }
+    #corpus-bar #corpus-root { width: 2fr; }
+    #corpus-bar #corpus-select { width: 1fr; margin-left: 1; }
+    #corpus-bar #corpus-new { margin-left: 1; }
+    #corpus-state { height: 1; padding: 0 2; color: $text-muted; background: $panel; }
+    #corpus-fields { display: none; }
     #stage-bar { height: 3; padding: 0 1; background: $panel; }
     #stage-bar Label { width: auto; height: 3; content-align: left middle; padding-right: 2; }
     #stage-bar .stage-button { min-width: 14; margin-right: 1; }
@@ -481,6 +569,13 @@ class LexichronApp(App):
             self.config = load_project(self.explicit_project)
             self._known_settings.add(self.explicit_project.resolve())
         self.loaded_dir: Optional[Path] = self._corpus_dir(self.config)
+        stub = (self.config.get("corpus") or {}).get("db_path_stub")
+        self._root_initial = str(stub) if stub else str(last_root() or "")
+        self._corpus_infos: Dict[str, CorpusInfo] = {}
+        self._listed_dir: Optional[Path] = None
+        self._selecting = False
+        self._populating = False
+        self._bar_ready = False
         # The slurm section as saved (self.config follows the form as it is
         # typed): the Submit tab's sources line is read against this.
         self._saved_slurm: Dict[str, Any] = dict(self.config.get("slurm") or {})
@@ -528,6 +623,18 @@ class LexichronApp(App):
     # -- layout -----------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
+        # The corpus is chosen first, above everything: its settings file,
+        # runs, searches and ensembles are what the tabs show, and the stage
+        # buttons light up as the corpus is built. Acquire creates a corpus
+        # (New corpus); the identity fields themselves stay on the form,
+        # hidden, so that saving and validation read them as before.
+        with Horizontal(id="corpus-bar"):
+            yield Label("Corpus")
+            yield Input(value=self._root_initial, id="corpus-root", compact=True,
+                        placeholder="corpus directory, e.g. /scratch/<you>/NLP_corpora/Google_Books")
+            yield Select([], allow_blank=True, id="corpus-select", compact=True, prompt="(corpora found there)")
+            yield Button("New corpus", id="corpus-new", compact=True)
+        yield Static("", id="corpus-state")
         # The stage is chosen once, above the tabs: Settings, Run and Submit
         # act on it, and it stays in view whichever tab is open.
         with Horizontal(id="stage-bar"):
@@ -542,10 +649,11 @@ class LexichronApp(App):
                 yield Static("", id="dest")
                 yield Static("", id="status")
                 with VerticalScroll(id="form"):
-                    yield Static("Corpus", classes="section")
-                    for f in self.corpus_section.fields:
-                        if not f.advanced:
-                            yield from self._field_widgets("corpus", f)
+                    yield Static("Corpus", id="corpus-line", classes="section")
+                    with Vertical(id="corpus-fields"):
+                        for f in self.corpus_section.fields:
+                            if not f.advanced:
+                                yield from self._field_widgets("corpus", f)
                     for name, sec in self.stage_sections.items():
                         with Vertical(id=f"stage-{name}", classes="stage-box"):
                             yield Static(name.capitalize(), classes="section")
@@ -794,6 +902,8 @@ class LexichronApp(App):
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
         self.queued_jobs: Optional[set] = None
+        self._bar_ready = True
+        self._refresh_corpus_list()
         self._refresh_preview()
         self.refresh_jobs()
         self.set_interval(5, self.refresh_jobs)
@@ -870,6 +980,10 @@ class LexichronApp(App):
             status.update(str(exc))
             return
         self._refresh_inspect_candidates()
+        if self._bar_ready:
+            if self._corpus_dir(cfg) != self._listed_dir:
+                self._refresh_corpus_list()
+            self._refresh_corpus_state()
         dest = self.project_path
         self.query_one("#dest", Static).update(
             f"Settings file: {dest if dest else '(fill in the corpus directory, language and n-gram size)'}"
@@ -1075,7 +1189,167 @@ class LexichronApp(App):
     @on(Switch.Changed)
     @on(ToggleRow.Changed)
     def _on_any_change(self, _event) -> None:
+        if not self._populating:
+            self._refresh_preview()
+
+    # -- the corpus bar -------------------------------------------------------------
+    def _current_info(self) -> Optional[CorpusInfo]:
+        c = self.config.get("corpus") or {}
+        n = c.get("ngram_size") or (self.config.get(self.stage) or {}).get("ngram_size")
+        if not (c.get("db_path_stub") and c.get("release") and c.get("language") and n):
+            return None
+        try:
+            return corpus_info(str(c["db_path_stub"]), str(c["release"]), str(c["language"]), int(n))
+        except (OSError, ValueError):
+            return None
+
+    def _refresh_corpus_list(self) -> None:
+        """The corpora under the root on the bar, the current one selected."""
+        root_text = self.query_one("#corpus-root", Input).value.strip()
+        infos = scan_corpora(root_text) if root_text else []
+        self._corpus_infos = {str(i.dir): i for i in infos}
+        options = [(i.label, str(i.dir)) for i in infos]
+        current = self._corpus_dir(self.config)
+        if current and str(current) not in self._corpus_infos:
+            c = self.config.get("corpus") or {}
+            n = c.get("ngram_size") or (self.config.get(self.stage) or {}).get("ngram_size")
+            options.insert(0, (f"{c.get('language')} · {c.get('release')} · {n}-grams", str(current)))
+        sel = self.query_one("#corpus-select", Select)
+        self._selecting = True
+        try:
+            sel.set_options(options)
+            if current and any(v == str(current) for _, v in options):
+                sel.value = str(current)
+        finally:
+            self._selecting = False
+        self._listed_dir = current
+        if root_text and Path(root_text).expanduser().is_dir():
+            remember_root(Path(root_text).expanduser())
+
+    def _refresh_corpus_state(self) -> None:
+        """The line under the bar, the corpus line on the form, and which
+        stage buttons are live: a stage needs what the one before it made."""
+        info = self._current_info()
+        if info is None:
+            state = "No corpus chosen: pick one above, or New corpus to acquire one."
+            line = "Corpus: none chosen (use the corpus bar above)"
+        else:
+            where = f"settings {info.settings}" if info.settings else "no settings file yet (Save writes one)"
+            state = f"{info.label}: {info.state} · {where}"
+            line = f"Corpus: {info.label}  ({info.dir})"
+        self.query_one("#corpus-state", Static).update(state)
+        self.query_one("#corpus-line", Static).update(line)
+        pre = stage_prerequisites(info)
+        for name, (_, desc) in STAGES.items():
+            btn = self.query_one(f"#stage-btn-{name}", Button)
+            btn.disabled = bool(pre.get(name))
+            btn.tooltip = pre.get(name) or desc
+
+    @on(Input.Changed, "#corpus-root")
+    def _corpus_root_changed(self) -> None:
+        if self._bar_ready:
+            self._refresh_corpus_list()
+
+    @on(Select.Changed, "#corpus-select")
+    def _corpus_chosen(self, event: Select.Changed) -> None:
+        if self._selecting or event.value is Select.NULL:
+            return
+        chosen = str(event.value)
+        current = self._corpus_dir(self.config)
+        if current and chosen == str(current):
+            return
+        info = self._corpus_infos.get(chosen)
+        if info is not None:
+            self._open_corpus(info)
+
+    @on(Button.Pressed, "#corpus-new")
+    def _corpus_new_pressed(self) -> None:
+        root = self.query_one("#corpus-root", Input).value.strip()
+        self.push_screen(NewCorpus(root), lambda d: self._start_new_corpus(d) if d else None)
+
+    def _start_new_corpus(self, ident: Dict[str, Any]) -> None:
+        info = corpus_info(ident["db_path_stub"], ident["release"], ident["language"], ident["ngram_size"])
+        root_input = self.query_one("#corpus-root", Input)
+        if root_input.value.strip() != ident["db_path_stub"]:
+            root_input.value = ident["db_path_stub"]
+        existing = info.settings or info.database or info.pivoted
+        self._open_corpus(info, stage=None if existing else "acquire")
+        if existing:
+            self.notify(f"{info.label} exists there already; opened it")
+        else:
+            self.notify(f"New corpus {info.label}: fill in the Acquire settings, then Run or Submit")
+
+    def _open_corpus(self, info: CorpusInfo, stage: Optional[str] = None) -> None:
+        """Make ``info`` the corpus everything acts on: its settings file
+        opened if it has one, else a fresh form with its identity filled in."""
+        if info.settings:
+            try:
+                cfg = load_project(info.settings)
+            except ConfigError as exc:
+                self.notify(f"{info.settings}: {exc}", severity="error")
+                return
+            self.explicit_project = info.settings.resolve()
+            self._known_settings.add(self.explicit_project)
+            remember_settings_path(info.settings)
+        else:
+            cfg = {"corpus": {"db_path_stub": str(info.root), "release": info.release,
+                              "language": info.language, "ngram_size": info.ngram_size}}
+            self.explicit_project = None
+        self.reopened = False
+        self.config = cfg
+        self.loaded_dir = info.dir
+        self._saved_slurm = dict(cfg.get("slurm") or {})
+        self._populate_form(cfg)
+        pre = stage_prerequisites(info)
+        wanted = stage or self.stage
+        if pre.get(wanted):
+            wanted = next(name for name in STAGES if not pre.get(name))
+        self._show_stage(wanted)
         self._refresh_preview()
+
+    def _populate_form(self, cfg: Dict[str, Any]) -> None:
+        """Every field widget from ``cfg`` (the Submit tab from the stage's
+        resolved Slurm settings)."""
+        self._populating = True
+        try:
+            for sec in self.sections:
+                if sec.name == "slurm":
+                    continue
+                vals = cfg.get(sec.name) or {}
+                for f in sec.fields:
+                    self._set_field_widget(sec.name, f, vals.get(f.name, f.default))
+        finally:
+            self._populating = False
+        if getattr(self, "_submit_ready", False):
+            self._populate_slurm()
+
+    def _set_field_widget(self, section: str, f: Field, value: Any) -> None:
+        wid = f"#f-{section}-{f.name}"
+        w = self.query_one(wid)
+        if isinstance(w, FixedValue):
+            return
+        if f.kind == "bool":
+            w.value = bool(value)
+        elif f.kind == "optbool":
+            w.value = Select.NULL if value is None else ("yes" if value else "no")
+        elif f.kind == "grid":
+            chosen = list(value) if isinstance(value, (list, tuple)) else ([value] if value is not None else [])
+            w.set_value(chosen or list(f.default or []))
+        elif f.kind == "choice" and f.choices:
+            val = str(value) if value is not None else Select.NULL
+            opts = [(c, c) for c in f.choices]
+            if val is not Select.NULL and val not in f.choices:
+                opts.append((val, val))
+            w.set_options(opts)
+            w.value = val
+        elif f.kind == "range":
+            lo, hi = ("", "")
+            if isinstance(value, (list, tuple)) and len(value) == 2:
+                lo, hi = str(value[0]), str(value[1])
+            w.value = lo
+            self.query_one(f"{wid}-end").value = hi
+        else:
+            w.value = _to_widget_text(value)
 
     # -- actions ------------------------------------------------------------------
     def action_save(self) -> None:
