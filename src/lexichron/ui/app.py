@@ -453,14 +453,16 @@ class LexichronApp(App):
     .show-help .field-help { display: block; }
     .row { height: auto; }
     .row Label { width: 22; }
-    #corpus-bar { height: 3; padding: 0 1; background: $panel; }
-    #corpus-bar Label { width: auto; height: 3; content-align: left middle; padding-right: 2; }
+    /* The corpus sits in its own titled box; a blank line separates it from
+       the stage bar, which keeps the panel colour of the tabs below. */
+    #corpus-block { height: auto; margin: 0 1; padding: 0 1; border: round $primary; background: $boost; }
+    #corpus-bar { height: 1; }
     #corpus-bar #corpus-root { width: 2fr; }
     #corpus-bar #corpus-select { width: 1fr; margin-left: 1; }
     #corpus-bar #corpus-new { margin-left: 1; }
-    #corpus-state { height: 1; padding: 0 2; color: $text-muted; background: $panel; }
+    #corpus-state { height: 1; color: $text-muted; }
     #corpus-fields { display: none; }
-    #stage-bar { height: 3; padding: 0 1; background: $panel; }
+    #stage-bar { height: 3; padding: 0 1; margin-top: 1; background: $panel; }
     #stage-bar Label { width: auto; height: 3; content-align: left middle; padding-right: 2; }
     #stage-bar .stage-button { min-width: 14; margin-right: 1; }
     #stage-bar .stage-desc { width: 1fr; height: 3; content-align: left middle; color: $text-muted; padding-left: 1; }
@@ -628,13 +630,13 @@ class LexichronApp(App):
         # buttons light up as the corpus is built. Acquire creates a corpus
         # (New corpus); the identity fields themselves stay on the form,
         # hidden, so that saving and validation read them as before.
-        with Horizontal(id="corpus-bar"):
-            yield Label("Corpus")
-            yield Input(value=self._root_initial, id="corpus-root", compact=True,
-                        placeholder="corpus directory, e.g. /scratch/<you>/NLP_corpora/Google_Books")
-            yield Select([], allow_blank=True, id="corpus-select", compact=True, prompt="(corpora found there)")
-            yield Button("New corpus", id="corpus-new", compact=True)
-        yield Static("", id="corpus-state")
+        with Vertical(id="corpus-block"):
+            with Horizontal(id="corpus-bar"):
+                yield Input(value=self._root_initial, id="corpus-root", compact=True,
+                            placeholder="corpus directory, e.g. /scratch/<you>/NLP_corpora/Google_Books")
+                yield Select([], allow_blank=True, id="corpus-select", compact=True, prompt="(corpora found there)")
+                yield Button("New corpus", id="corpus-new", compact=True)
+            yield Static("", id="corpus-state")
         # The stage is chosen once, above the tabs: Settings, Run and Submit
         # act on it, and it stays in view whichever tab is open.
         with Horizontal(id="stage-bar"):
@@ -882,6 +884,7 @@ class LexichronApp(App):
         self._refresh_preview()
 
     def on_mount(self) -> None:
+        self.query_one("#corpus-block").border_title = "Corpus"
         self._show_stage(self.stage)
         self.query_one(f"#stage-btn-{self.stage}", Button).focus()   # initial focus on the lit button
         jobs = self.query_one("#jobs", DataTable)
