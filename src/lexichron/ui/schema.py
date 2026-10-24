@@ -77,6 +77,8 @@ ORDER_BY_STAGE = {
 }
 
 # Plain-language labels for the form (settings-file keys stay as they are).
+# A stage-qualified key (``train.name``) wins over the plain one, as in HELP,
+# for a parameter two stages share under one name but mean differently.
 LABELS: Dict[str, str] = {
     "release": "Release",
     "language": "Language",
@@ -127,6 +129,7 @@ LABELS: Dict[str, str] = {
     "split_half": "Split halves",
     "unk_mode": "<UNK> tokens",
     "name": "Search name",
+    "train.name": "Ensemble name",
     "workers_per_model": "Threads per model",
     "neighbours": "Neighbours compared",
     "probes_per_decile": "Probe words per decile",
@@ -349,7 +352,8 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
         f = Field(key, kind, default, required,
                   choices, HELP.get(f"{stage}.{key}") or HELP.get(key) or docs.get(pname, ""),
                   api_name=pname if key != pname else None,
-                  label=LABELS.get(key), advanced=key in ADVANCED)
+                  label=LABELS.get(f"{stage}.{key}") or LABELS.get(key),
+                  advanced=key in ADVANCED)
         (corpus if pname in api_to_corpus else stage_sec).fields.append(f)
     order = ORDER_BY_STAGE.get(stage, ORDER)
     for sec in (corpus, stage_sec):

@@ -100,3 +100,15 @@ def test_array_settings_are_hidden_from_the_form():
     names = {f.name for f in stage.fields}
     assert "array_task" not in names and "array_count" not in names
     assert next(f for f in SLURM_FIELDS.fields if f.name == "jobs").default == 1
+
+
+def test_labels_can_differ_by_stage():
+    # tune and train both take ``name``, but one names a search and the other an ensemble
+    from lexichron.stages.tune import tune_models
+    from lexichron.stages.train import train_models
+    _, tune_stage = stage_sections(tune_models, "tune")
+    _, train_stage = stage_sections(train_models, "train")
+    assert next(f for f in tune_stage.fields if f.name == "name").title == "Search name"
+    train_name = next(f for f in train_stage.fields if f.name == "name")
+    assert train_name.title == "Ensemble name"
+    assert "models/<name>" in train_name.help
