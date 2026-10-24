@@ -1176,7 +1176,8 @@ def test_new_corpus_dialog_starts_at_acquire(tmp_path):
             app.screen.query_one("#new-language", Select).value = "ger"
             app.screen.query_one("#new-size", Select).value = "3"
             await pilot.pause()
-            await pilot.click("#new-create")
+            app.screen._create()                 # the Create button's handler (a click can race the relayout)
+            await pilot.pause()
             await pilot.pause()
             assert not isinstance(app.screen, NewCorpus)
             assert app.stage == "acquire"                                         # the stage that creates it
