@@ -57,6 +57,9 @@ from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
 from lexichron.ui.schema import Field, SLURM_FIELDS, Section, stage_sections
+from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, read_user_defaults,
+                                      resolve as resolve_slurm, seed_user_defaults, stage_override,
+                                      state_dir as _state_dir, write_user_defaults)
 from lexichron.ui.slurm import ARRAY_STAGES, array_size, stage_command, write_sbatch
 from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.progress import read_progress
@@ -64,11 +67,6 @@ from ngramprep.ngram_acquire.progress import read_progress
 __all__ = ["LexichronApp", "main", "SETTINGS_FILENAME"]
 
 SETTINGS_FILENAME = "lexichron.yaml"
-
-
-def _state_dir() -> Path:
-    """Per-user state (the last settings file opened); ~/.lexichron by default."""
-    return Path(os.environ.get("LEXICHRON_STATE_DIR") or Path.home() / ".lexichron")
 
 
 def remember_settings_path(path: Path) -> None:
@@ -483,6 +481,9 @@ class LexichronApp(App):
             self.config = load_project(self.explicit_project)
             self._known_settings.add(self.explicit_project.resolve())
         self.loaded_dir: Optional[Path] = self._corpus_dir(self.config)
+        # The slurm section as saved (self.config follows the form as it is
+        # typed): the Submit tab's sources line is read against this.
+        self._saved_slurm: Dict[str, Any] = dict(self.config.get("slurm") or {})
         self.bridge: Optional[SlurmRunner] = slurm_backend()
         self._status: Dict[str, Any] = {"jobs": None, "jobs_error": "", "docs": [], "selected": None, "log_lines": []}
         self._gathering = False
@@ -585,9 +586,11 @@ class LexichronApp(App):
                     yield Static("Slurm resources", classes="section")
                     for f in SLURM_FIELDS.fields:
                         yield from self._field_widgets("slurm", f)
+                    yield Static("", id="submit-sources", classes="muted")
                     with Horizontal(classes="actions"):
                         yield Button("Write batch script", id="write-sbatch")
                         yield Button("Submit to Slurm", id="submit", variant="primary")
+                        yield Button("Use account as my default", id="slurm-defaults")
                     yield Static("", id="submit-command", classes="muted")
                     yield Static("", id="submit-memory", classes="muted")
                     yield Static("", id="submit-status")
@@ -736,7 +739,9 @@ class LexichronApp(App):
 
     def _show_stage(self, stage: str) -> None:
         """Make ``stage`` the one the form, Run and Submit act on: its button
-        lit, its settings shown."""
+        lit, its settings shown, its Slurm resources on the Submit tab."""
+        if getattr(self, "_submit_ready", False) and stage != self.stage:
+            self._stash_slurm()
         self.stage = stage
         for name in self.stage_sections:
             self.query_one(f"#stage-{name}").display = name == stage
@@ -747,6 +752,8 @@ class LexichronApp(App):
         # Jobs (a job array) only means something for the stages that split their years
         for wid in ("#row-slurm-jobs", "#help-slurm-jobs"):
             self.query_one(wid).display = stage in ARRAY_STAGES
+        self._submit_ready = True
+        self._populate_slurm()
         self.query_one("#inspect-search").display = stage == "tune"
         self.query_one("#inspect-ensemble").display = stage == "train"
         self.query_one("#inspect-generic").display = stage not in ("tune", "train")
@@ -807,10 +814,34 @@ class LexichronApp(App):
                 "'Write batch script' still works.")
 
     # -- form -> config -----------------------------------------------------------
+    def _slurm_form(self) -> Dict[str, Any]:
+        """The Submit tab's values as typed (invalid ones raise ConfigError)."""
+        vals: Dict[str, Any] = {}
+        for f in SLURM_FIELDS.fields:
+            try:
+                v = _from_widget(f, self.query_one(f"#f-slurm-{f.name}").value)
+            except ValueError:
+                raise ConfigError(f"{f.title}: not a valid {f.kind}")
+            if v is not None:
+                vals[f.name] = v
+        return vals
+
+    def _slurm_resolved(self) -> Dict[str, Any]:
+        """The Slurm settings a job of the current stage would get, from the
+        saved settings and the user's defaults (not the form)."""
+        return resolve_slurm(self.stage, self.config.get("slurm"))[0]
+
     def _collect(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {}
         for sec in self.sections:
             vals: Dict[str, Any] = {}
+            if sec.name == "slurm":
+                # the Submit tab's values become the stage's own block; the
+                # account and partition stay out while they match the user's defaults
+                layered = stage_override(self.config.get("slurm"), self.stage, self._slurm_form())
+                if layered:
+                    cfg["slurm"] = layered
+                continue
             for f in sec.fields:
                 w = self.query_one(f"#f-{sec.name}-{f.name}")
                 try:
@@ -870,7 +901,7 @@ class LexichronApp(App):
                                                                  int(kwargs.get("year_pairs", 4)))
             per = int(kwargs.get("seeds", 2)) + (2 if kwargs.get("split_half", True) else 0)
             models = len(grid) * len(years) * per
-            cpus = int((self.config.get("slurm") or {}).get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)
+            cpus = int(self._slurm_resolved().get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)
             threads = max(1, int(kwargs.get("workers_per_model", 4)))
             at_once = max(1, cpus // threads)
             text = (f"Grid: {grid.describe()}\n"
@@ -895,7 +926,7 @@ class LexichronApp(App):
             corpora = int(kwargs.get("corpus_replicates", 20)) if kwargs.get("resampling", "poisson") != "none" else 1
             seeds = int(kwargs.get("seeds_per_corpus", 2))
             per_year = corpora * seeds
-            cpus = int((self.config.get("slurm") or {}).get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)
+            cpus = int(self._slurm_resolved().get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)
             threads = max(1, int(kwargs.get("workers_per_model", 4)))
             at_once = max(1, cpus // threads)
             text = (f"Ensemble: {len(years)} years ({first}-{last}) x {corpora} corpus x {seeds} seed replicates "
@@ -1020,7 +1051,7 @@ class LexichronApp(App):
     def _array_note(self, years: List[int], models_per_year: int) -> str:
         """How the Submit tab's Jobs setting would split the years."""
         from lexichron.arrays import ArrayTask, task_share
-        jobs = array_size(self.stage, self.config.get("slurm") or {})
+        jobs = array_size(self.stage, self._slurm_resolved())
         if jobs <= 1:
             return ""
         shares = [task_share(years, ArrayTask(i, jobs)) for i in range(jobs)]
@@ -1057,6 +1088,8 @@ class LexichronApp(App):
         user agrees to replace a file this session did not open. Invalid
         settings are reported and nothing runs."""
         try:
+            if seed_user_defaults(self._slurm_form()):
+                self.notify(f"Your Slurm account is now the default for every corpus ({_state_dir() / 'slurm.yaml'})")
             cfg = self._collect()
             self.config = cfg
             path = self._require_project_path()
@@ -1083,8 +1116,11 @@ class LexichronApp(App):
         self._known_settings.add(path.resolve())
         self.explicit_project = path
         self.loaded_dir = self._corpus_dir(cfg)
+        self._saved_slurm = dict(cfg.get("slurm") or {})
         remember_settings_path(path)
         self.notify(f"Saved {path}")
+        if getattr(self, "_submit_ready", False):
+            self._refresh_sources_line()
 
     @on(Button.Pressed, "#save")
     def _save_pressed(self) -> None:
@@ -1143,7 +1179,7 @@ class LexichronApp(App):
         try:
             kwargs = build_call(self.func, {k: v for k, v in self.config.items() if k in ("corpus", self.stage)},
                                 self.stage)
-            return memory_estimate(self.stage, kwargs, self.config.get("slurm") or {})
+            return memory_estimate(self.stage, kwargs, self._slurm_resolved())
         except Exception:
             return None
 
@@ -1212,7 +1248,83 @@ class LexichronApp(App):
             self.notify("Sent SIGTERM to the running stage", severity="warning")
 
     def _slurm_cfg(self) -> Dict[str, Any]:
-        return self._collect().get("slurm", {})
+        """What a job of this stage gets, with the Submit tab's values as typed."""
+        return resolve_slurm(self.stage, self._collect().get("slurm"))[0]
+
+    def _populate_slurm(self) -> None:
+        """Show the stage's resolved Slurm settings on the Submit tab."""
+        values = self._slurm_resolved()
+        for f in SLURM_FIELDS.fields:
+            w = self.query_one(f"#f-slurm-{f.name}", Input)
+            text = _to_widget_text(values.get(f.name))
+            if w.value != text:
+                w.value = text
+        self._refresh_sources_line()
+
+    def _stash_slurm(self) -> None:
+        """Keep the Submit tab's values for the stage being left, so coming
+        back shows them again (they are saved with the next Save)."""
+        try:
+            layered = stage_override(self.config.get("slurm"), self.stage, self._slurm_form())
+        except ConfigError:
+            return
+        if layered:
+            self.config["slurm"] = layered
+        else:
+            self.config.pop("slurm", None)
+
+    def _refresh_sources_line(self) -> None:
+        """Where each Slurm value comes from, as saved; a value typed since
+        is marked as such (it becomes the stage's own on Save)."""
+        try:
+            form = self._slurm_form()
+        except ConfigError as exc:
+            self.query_one("#submit-sources", Static).update(str(exc))
+            return
+        values, sources = resolve_slurm(self.stage, self._saved_slurm)
+        for key, typed in form.items():
+            if key == "jobs" and self.stage not in ARRAY_STAGES:
+                continue
+            if str(typed) != str(values.get(key, "")):
+                values[key] = typed
+                sources[key] = f"typed here; saved for {self.stage} on Save"
+        for key in [k for k in values if k not in form and k in STAGE_KEYS + USER_KEYS]:
+            if key == "jobs" and self.stage not in ARRAY_STAGES:
+                continue
+            values.pop(key)                        # cleared on the form
+            sources.pop(key, None)
+        self.query_one("#submit-sources", Static).update(describe_sources(values, sources))
+
+    @on(Input.Changed, "#f-slurm-account, #f-slurm-partition, #f-slurm-cpus, #f-slurm-mem, #f-slurm-time, "
+                       "#f-slurm-jobs, #f-slurm-job_name")
+    def _slurm_field_changed(self) -> None:
+        if getattr(self, "_submit_ready", False):
+            self._refresh_sources_line()
+
+    @on(Button.Pressed, "#slurm-defaults")
+    def _slurm_defaults_pressed(self) -> None:
+        """Make the account and partition on the form the user's defaults for
+        every corpus; this corpus's file then no longer needs its own copy."""
+        try:
+            form = self._slurm_form()
+        except ConfigError as exc:
+            self.notify(str(exc), severity="error")
+            return
+        if not form.get("account"):
+            self.notify("Fill in the account first", severity="warning")
+            return
+        path = write_user_defaults(form)
+        for key in USER_KEYS:
+            self._saved_slurm.pop(key, None)
+        section = dict(self.config.get("slurm") or {})
+        for key in USER_KEYS:
+            section.pop(key, None)
+        if section:
+            self.config["slurm"] = section
+        else:
+            self.config.pop("slurm", None)
+        self._refresh_sources_line()
+        self.notify(f"Saved your Slurm defaults to {path}")
 
     @on(Button.Pressed, "#write-sbatch")
     def _write_sbatch_pressed(self) -> None:

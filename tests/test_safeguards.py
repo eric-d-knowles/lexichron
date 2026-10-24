@@ -131,6 +131,6 @@ def test_sbatch_carries_yes_only_when_confirmed(tmp_path, monkeypatch):
     monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
     monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
     proj = tmp_path / "project.yaml"; proj.write_text("corpus: {}\n")
-    assert "--yes" not in write_sbatch(proj, "filter", {}).read_text()
-    text = write_sbatch(proj, "filter", {}, assume_yes=True).read_text()
+    assert "--yes" not in write_sbatch(proj, "filter", {"account": "a"}).read_text()
+    text = write_sbatch(proj, "filter", {"account": "a"}, assume_yes=True).read_text()
     assert text.rstrip().splitlines()[-1].endswith("--yes")

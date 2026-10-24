@@ -14,8 +14,8 @@ from typing import Any, Dict, List, Optional
 
 __all__ = ["stage_command", "write_sbatch", "ARRAY_STAGES", "array_size"]
 
-# Stages whose years can be split over the tasks of a job array.
-ARRAY_STAGES = ("tune", "train")
+from lexichron.config import ConfigError
+from lexichron.slurm_settings import ARRAY_STAGES  # stages whose years split over a job array (re-exported)
 
 
 def array_size(stage: str, slurm: Dict[str, Any]) -> int:
@@ -72,6 +72,11 @@ def write_sbatch(
     sets it after the user confirmed in its dialog); without it a job whose
     settings would delete something stops at once instead.
     """
+    if not slurm.get("account"):
+        # Slurm would fall back to the user's default account, charging the
+        # job to a project nobody chose; stop here instead.
+        raise ConfigError("no Slurm account: fill in Account on the Submit tab (the first one you save becomes "
+                          "your default for every corpus)")
     project_yaml = Path(project_yaml).resolve()
     out = Path(out_path) if out_path else project_yaml.with_suffix(f".{stage}.sbatch")
     log_dir = project_yaml.parent / ".lexichron" / "slurm"

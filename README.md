@@ -465,9 +465,20 @@ Run and Submit act on.
   the job's progress.
 - **Run** — runs the stage here, streaming its output. For small tests on a
   login node (set a small file range) or inside an interactive allocation.
-- **Submit** — Slurm account, partition, CPUs, memory and time. The defaults
-  (40 CPUs, 28G) are where acquisition stops gaining from more workers: the
-  single process that merges their output into RocksDB becomes the limit.
+- **Submit** — Slurm account, partition, CPUs, memory, time and, for tune
+  and train, the number of jobs. The values come from three layers and a
+  line under the form says where each came from: lexichron's defaults per
+  stage (40 CPUs and 28G for acquire and filter, where acquisition stops
+  gaining from more workers; a 64-CPU, 64G slice for a day or two, split
+  over a job array, for tune and train); your own account and partition,
+  kept in `~/.lexichron/slurm.yaml` for every corpus (the first account you
+  save goes there; *Use account as my default* moves a later change there);
+  and the corpus's settings file, whose `slurm:` section holds a block per
+  stage (`slurm.train`) and, when they differ from your defaults, an
+  account and partition for that corpus alone. Switching stage shows that
+  stage's values. A script is never written without an account: Slurm
+  would otherwise charge the job to your default project without anyone
+  choosing it.
   *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
   file; *Submit* also submits it and shows the job id. A line above the
   buttons says what the script runs the stage with: the image the UI was

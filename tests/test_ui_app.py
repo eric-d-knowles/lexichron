@@ -1035,3 +1035,60 @@ def test_jobs_field_appears_only_for_stages_that_split_over_an_array(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_submit_tab_resolves_slurm_settings_per_stage_and_saves_them_in_layers(tmp_path):
+    """Each stage shows its own resources; the first account saved becomes
+    the user's default and stays out of the corpus file; the resources go
+    into the stage's block; a value typed for one stage survives a visit to
+    another."""
+    import yaml
+    from textual.widgets import Input, Static
+    from lexichron.slurm_settings import read_user_defaults
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
+                    "slurm:\n  mem: 30G\n")                                 # an older file: one block for every stage
+
+    async def scenario():
+        app = LexichronApp(str(proj))
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            cpus, mem, acct = (app.query_one(f"#f-slurm-{k}", Input) for k in ("cpus", "mem", "account"))
+            assert cpus.value == "40" and mem.value == "30G" and acct.value == ""
+            assert "no account" in str(app.query_one("#submit-sources", Static).content)
+            app.select_stage("train")
+            await pilot.pause()
+            assert cpus.value == "64" and mem.value == "30G" and app.query_one("#f-slurm-jobs", Input).value == "13"
+            line = str(app.query_one("#submit-sources", Static).content)
+            assert "memory 30G (this corpus)" in line and "CPUs 64" in line and "lexichron's default for train" in line
+            cpus.value = "96"
+            acct.value = "proj_a"
+            await pilot.pause()
+            app.select_stage("acquire")
+            await pilot.pause()
+            assert cpus.value == "40"                                     # acquire's own figure
+            app.select_stage("train")
+            await pilot.pause()
+            assert cpus.value == "96"                                     # the edit for train survived the trip
+            app.action_save()
+            await pilot.pause()
+            saved = yaml.safe_load(proj.read_text())
+            assert saved["slurm"]["train"] == {"cpus": 96, "mem": "30G", "time": "1-00:00:00", "jobs": 13}
+            assert "account" not in saved["slurm"] and saved["slurm"]["mem"] == "30G"
+            assert read_user_defaults() == {"account": "proj_a"}          # seeded from the first save
+            assert "account proj_a (your defaults)" in str(app.query_one("#submit-sources", Static).content)
+            # another account for this corpus alone goes into the file; the button makes it the default instead
+            acct.value = "proj_b"
+            await pilot.pause()
+            app.action_save()
+            await pilot.pause()
+            assert yaml.safe_load(proj.read_text())["slurm"]["account"] == "proj_b"
+            app._slurm_defaults_pressed()
+            await pilot.pause()
+            assert read_user_defaults() == {"account": "proj_b"}
+            app.action_save()
+            await pilot.pause()
+            assert "account" not in yaml.safe_load(proj.read_text())["slurm"]
+        _assert_clean(app)
+
+    asyncio.run(scenario())

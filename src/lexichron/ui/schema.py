@@ -364,16 +364,22 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
     return [corpus, stage_sec]
 
 
-# Slurm resources live in the settings file too, under `slurm:`.
+# Slurm settings come from three layers (lexichron.slurm_settings): per-stage
+# defaults, the user's account and partition, and the settings file's
+# `slurm:` section with a block per stage. The defaults here are the fallback.
 SLURM_FIELDS = Section("slurm", [
-    Field("account", "text", "", True, help="Slurm account, e.g. torch_pr_600_general", label="Account"),
-    Field("partition", "text", "", False, help="Partition (leave empty for the default)", label="Partition"),
-    # Acquisition throughput flattens out around 40 workers (the single merging
-    # parent becomes the limit); 28G covers 40 workers on 5-grams.
-    Field("cpus", "int", 40, True, help="CPUs for the job (also used as the worker count unless set). "
-          "Acquisition gains little beyond 40.", label="CPUs"),
-    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; the Submit tab shows the estimate.", label="Memory"),
-    Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS", label="Time limit"),
+    Field("account", "text", "", True, help="Slurm account, e.g. torch_pr_600_general. The first one you save "
+          "becomes your default for every corpus; a different one here applies to this corpus only.", label="Account"),
+    Field("partition", "text", "", False, help="Partition (leave empty for the cluster's default). Kept with the "
+          "account as your default.", label="Partition"),
+    Field("cpus", "int", 40, True, help="CPUs for the job (also the worker count unless set). Each stage has its "
+          "own default: 40 for acquire and filter (acquisition gains little beyond that), 64 for tune and train "
+          "(a 64-core slice starts within minutes). Saved for the stage shown.", label="CPUs"),
+    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; "
+          "tune and train default to 64G, mostly reclaimable page cache. The Submit tab shows the estimate.",
+          label="Memory"),
+    Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS or D-HH:MM:SS. Defaults: 12 hours for "
+          "acquire and filter, two days for tune, one day for train.", label="Time limit"),
     Field("job_name", "text", "lexichron", False, help="Job name shown in squeue", label="Job name"),
     Field("jobs", "int", 1, False, help=("Split the run over this many jobs (a Slurm job array), each taking "
           "every N-th year and writing into the same output. Each job gets the CPUs, memory and time "
