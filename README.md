@@ -472,12 +472,13 @@ Run and Submit act on.
   file; *Submit* also submits it and shows the job id. A line above the
   buttons says what the script runs the stage with: the image the UI was
   started from, or, from a development environment, the `lexichron` on
-  the job's PATH. *Jobs* splits a
-  tune (or train) run over that many jobs: the script becomes a Slurm job
-  array whose tasks each take every N-th year of the run and write into
-  the same output, so a run too long for one job's time limit, or one
-  that should spread over several nodes, is one submission; the grid
-  summary on the Settings tab says how the years would split. Run, Write
+  the job's PATH. *Jobs*, shown for the tune and train stages only, splits
+  the run over that many jobs: the script becomes a Slurm job array whose
+  tasks each take every N-th year of the run and write into the same
+  output, so a run too long for one job's time limit, or one that should
+  spread over several nodes, is one submission; the grid summary on the
+  Settings tab says how the years would split. The acquire and filter
+  stages write one database and run as one job, parallel inside it. Run, Write
   batch script and Submit all check first whether the settings would make
   the stage delete its earlier output (a database, a tuning search); if so,
   a dialog says what and how much, and *Keep it* cancels. A restart

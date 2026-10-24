@@ -679,7 +679,8 @@ class LexichronApp(App):
         wid = f"f-{section}-{f.name}"
         current = (self.config.get(section) or {}).get(f.name, f.default)
         label = f.title + (" *" if f.required else "")
-        with Horizontal(classes="row"):
+        # the row and its help line carry ids so a field can be shown or hidden by stage
+        with Horizontal(classes="row", id=f"row-{section}-{f.name}"):
             yield Label(label)
             if f.kind == "bool":
                 w = Switch(value=bool(current), id=wid)
@@ -721,7 +722,7 @@ class LexichronApp(App):
             mark.tooltip = f.help or None
             yield mark
         if f.help:
-            yield Static(f.help, classes="field-help")
+            yield Static(f.help, classes="field-help", id=f"help-{section}-{f.name}")
 
     def action_toggle_help(self) -> None:
         """F1: show or hide the help line under every setting."""
@@ -737,6 +738,9 @@ class LexichronApp(App):
         for name in STAGES:
             self.query_one(f"#stage-btn-{name}", Button).variant = "primary" if name == stage else "default"
         self.query_one("#stage-desc", Static).update(STAGES[stage][1])
+        # Jobs (a job array) only means something for the stages that split their years
+        for wid in ("#row-slurm-jobs", "#help-slurm-jobs"):
+            self.query_one(wid).display = stage in ARRAY_STAGES
         self.query_one("#inspect-search").display = stage == "tune"
         self.query_one("#inspect-ensemble").display = stage == "train"
         self.query_one("#inspect-generic").display = stage not in ("tune", "train")

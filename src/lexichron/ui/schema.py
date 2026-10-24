@@ -373,6 +373,6 @@ SLURM_FIELDS = Section("slurm", [
     Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS", label="Time limit"),
     Field("job_name", "text", "lexichron", False, help="Job name shown in squeue", label="Job name"),
     Field("jobs", "int", 1, False, help=("Split the run over this many jobs (a Slurm job array), each taking "
-          "every N-th year and writing into the same output. For the tune and train stages; the "
-          "others run as one job. Each job gets the CPUs, memory and time above."), label="Jobs"),
+          "every N-th year and writing into the same output. Each job gets the CPUs, memory and time "
+          "above. Shown for the tune and train stages; the others run as one job."), label="Jobs"),
 ])

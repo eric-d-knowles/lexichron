@@ -998,3 +998,26 @@ def test_submit_tab_says_what_a_job_would_run(tmp_path, monkeypatch):
     asyncio.run(scenario("on the job's PATH"))                      # a development environment
     monkeypatch.setenv("APPTAINER_CONTAINER", "/images/lexichron-9.9.sif")
     asyncio.run(scenario("Jobs run in the image /images/lexichron-9.9.sif"))
+
+
+def test_jobs_field_appears_only_for_stages_that_split_over_an_array(tmp_path):
+    """Acquire and filter write one database and run as one job, so the Jobs
+    row would be a no-op there; it is shown for tune and train."""
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+
+    async def scenario():
+        app = LexichronApp(proj)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            shown = {}
+            for stage in ("acquire", "filter", "tune", "train"):
+                app.select_stage(stage)
+                await pilot.pause()
+                shown[stage] = (app.query_one("#row-slurm-jobs").display, app.query_one("#help-slurm-jobs").display)
+            assert shown == {"acquire": (False, False), "filter": (False, False),
+                             "tune": (True, True), "train": (True, True)}
+            assert app.query_one("#row-slurm-cpus").display                   # the other resources stay
+        _assert_clean(app)
+
+    asyncio.run(scenario())
