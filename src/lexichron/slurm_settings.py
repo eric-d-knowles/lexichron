@@ -30,8 +30,8 @@ __all__ = ["ARRAY_STAGES", "STAGE_DEFAULTS", "STAGE_KEYS", "USER_KEYS", "describ
            "write_user_defaults"]
 
 # Stages whose years can be split over the tasks of a job array.
-ARRAY_STAGES = ("tune", "train")
-STAGE_NAMES = ("acquire", "filter", "tune", "train")
+ARRAY_STAGES = ("tune", "train", "measure")
+STAGE_NAMES = ("acquire", "filter", "tune", "train", "measure")
 USER_KEYS = ("account", "partition")                   # about the person
 STAGE_KEYS = ("cpus", "mem", "time", "jobs", "job_name")   # about the stage
 
@@ -45,6 +45,9 @@ STAGE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     # the memory is page cache from the database scan and reclaimable.
     "tune": {"cpus": 64, "mem": "64G", "time": "2-00:00:00", "jobs": 8},
     "train": {"cpus": 64, "mem": "64G", "time": "1-00:00:00", "jobs": 13},
+    # Measuring reads each model once and does a few hundred dot products:
+    # a small job, limited by reading the models; 8 in memory at a time.
+    "measure": {"cpus": 8, "mem": "16G", "time": "04:00:00", "jobs": 1},
 }
 
 

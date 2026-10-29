@@ -1027,12 +1027,12 @@ def test_jobs_field_appears_only_for_stages_that_split_over_an_array(tmp_path):
         async with app.run_test(size=(140, 50)) as pilot:
             await pilot.pause()
             shown = {}
-            for stage in ("acquire", "filter", "tune", "train"):
+            for stage in ("acquire", "filter", "tune", "train", "measure"):
                 app.select_stage(stage)
                 await pilot.pause()
                 shown[stage] = (app.query_one("#row-slurm-jobs").display, app.query_one("#help-slurm-jobs").display)
             assert shown == {"acquire": (False, False), "filter": (False, False),
-                             "tune": (True, True), "train": (True, True)}
+                             "tune": (True, True), "train": (True, True), "measure": (True, True)}
             assert app.query_one("#row-slurm-cpus").display                   # the other resources stay
         _assert_clean(app)
 
@@ -1190,3 +1190,73 @@ def test_new_corpus_dialog_starts_at_acquire(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_measure_stage_form_and_inspect_pane(tmp_path):
+    """The Measure form offers the corpus's ensembles and the Inspect tab
+    shows a measure's years x words."""
+    import json
+    import numpy as np
+    from textual.widgets import DataTable, Input, Static
+    from lexichron.training import trainer
+    from lexichron.stages.measure import measure_series
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    ens = corpus / "models" / "e1"
+    rng = np.random.default_rng(0)
+    words = ["he", "she", "man", "woman", "king", "queen", "doctor", "nurse"]
+    for y in (1990, 1991):
+        (ens / f"y{y}").mkdir(parents=True)
+        for c in range(2):
+            for s in range(2):
+                v = trainer.Vectors(words=words, matrix=rng.normal(size=(8, 6)).astype(np.float32),
+                                    counts=np.arange(8, 0, -1))
+                trainer.save_vectors(v, str(ens / f"y{y}" / f"c{c:02d}_s{s}.npz"))
+    (ens / "train.json").write_text(json.dumps({"cell_stem": "vs6", "years": [1990, 1991], "years_with_data": [1990, 1991],
+                                                "corpus_replicates": 2, "seeds_per_corpus": 2}))
+    measure_series(5, "20200217", "eng", str(tmp_path / "corp"), ensemble="e1", name="gender", words=["doctor", "nurse"],
+                   positive=["he", "man", "king"], negative=["she", "woman", "queen"])
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "measure:\n  ensemble: e1\n  name: gender\n  words: [doctor, nurse]\n"
+                    "  positive: [he, man, king]\n  negative: [she, woman, queen]\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "measure")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.query_one("#inspect-measure").display and not app.query_one("#inspect-generic").display
+            assert not app.query_one("#inspect-ensemble").display
+            assert app.query_one("#f-measure-kind").value == "projection"
+            assert app.query_one("#f-measure-words", Input).value == "doctor, nurse"
+            assert "projection of 2 words" in str(app.query_one("#measure-summary", Static).content)
+            assert "on ensemble 'e1'" in str(app.query_one("#measure-summary", Static).content)
+            # From ensemble fills the field
+            app.query_one("#f-measure-ensemble", Input).value = ""
+            app._measure_ensemble_use_pressed()
+            await pilot.pause()
+            assert app.query_one("#f-measure-ensemble", Input).value == "e1"
+            # the Inspect pane shows the measure named in the settings
+            sel = app.query_one("#measure-name", Select)
+            assert str(sel.value).endswith("measures/gender")
+            table = app.query_one("#measure-table", DataTable)
+            assert [str(c.label) for c in table.columns.values()] == ["Year", "doctor", "nurse"]
+            assert table.row_count == 2
+            app.query_one("#measure-view", Select).value = "n"
+            await pilot.pause()
+            assert str(table.get_row_at(0)[1]).strip() == "4"
+            # the Jobs field shows for measure (it splits over an array)
+            assert app.query_one("#row-slurm-jobs").display
+
+    asyncio.run(scenario())
+
+
+def test_table_cells_align_negative_numbers_with_positive_ones():
+    from lexichron.ui.app import _aligned
+    assert _aligned("0.142", 8) == "   0.142"
+    assert _aligned("-0.097", 8) == "  -0.097"           # a negative is a number too
+    assert _aligned("-0.097 ±0.004", 14) == " -0.097 ±0.004"
+    assert _aligned("–", 4) == "   –"
+    assert _aligned("doctor", 8) == "doctor  "
+    assert _aligned("-", 4) == "-   "                     # a bare dash is a label

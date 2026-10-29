@@ -172,6 +172,9 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     elif doc.get("stage") == "train":
         phase_labels = (("queued", "waiting"), ("parsing", "training"),
                         ("parsed", "trained, year not yet complete"), ("ingesting", "writing the year's record"))
+    elif doc.get("stage") == "measure":
+        phase_labels = (("queued", "waiting"), ("parsing", "measuring"),
+                        ("parsed", "measured"), ("ingesting", "writing"))
     else:
         phase_labels = (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
                         ("parsed", "parsed, waiting to ingest"), ("ingesting", "ingesting"))
@@ -266,8 +269,9 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
          " · ".join(x for x in [(f"{info['percent']:.0f}%" if info["percent"] is not None else ""),
                                 (f"{failed} failed" if failed else ""),
                                 (f"{doc['files_skipped']} already done" if doc.get("files_skipped") else "")] if x)),
-        (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—", "models")
-         if stage in ("tune", "train") else
+        (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—",
+          "years" if stage == "measure" else "models")
+         if stage in ("tune", "train", "measure") else
          ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries")),
         ("Elapsed", fmt_duration(info["elapsed_s"]), ""),
         ("Remaining", fmt_duration(info["eta_s"]) if info["eta_s"] is not None else "—", "estimate"),
@@ -296,6 +300,8 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         elif stage == "train":
             labels = (("queued", "Waiting"), ("parsing", "Training"),
                       ("parsed", "Trained, year not yet complete"), ("ingesting", "Writing the year's record"))
+        elif stage == "measure":
+            labels = (("queued", "Waiting"), ("parsing", "Measuring"), ("parsed", "Measured"), ("ingesting", "Writing"))
         else:
             labels = (("queued", "Waiting for a worker"), ("parsing", "Downloading & parsing"),
                       ("parsed", "Parsed, waiting to ingest"), ("ingesting", "Ingesting"))
@@ -317,7 +323,14 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             ("Corpus lines", f"{int(counters.get('corpus_lines', 0)):,}", "weighted repeats, all resamples"),
         ]))
         groups += ensemble_groups(doc.get("ensemble") or {})
-        groups += ensemble_groups(doc.get("ensemble") or {})
+    elif stage == "measure":
+        years, years_done = int(counters.get("years", 0)), int(counters.get("years_done", 0))
+        groups.append(("Measure", [
+            ("Years measured", f"{years_done:,}" + (f"/{years:,}" if years else ""), "this run"),
+            ("Years pending", f"{int(counters.get('years_pending', 0)):,}", "models not all trained yet"),
+            ("Models read", f"{int(counters.get('models', 0)):,}", "this run"),
+            ("Words", f"{int(counters.get('words', 0)):,}", "series"),
+        ]))
     elif stage == "filter":
         scanned = int(counters.get("scanned", 0))
         kept = int(counters.get("kept", 0))

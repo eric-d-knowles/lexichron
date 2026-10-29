@@ -46,9 +46,11 @@ from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, load_project
 from lexichron.corpora import CorpusInfo, corpus_info, scan_corpora, stage_prerequisites
-from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, PARAM_KEYS, SEARCH_COLUMNS, STABILITY_NOTE,
+from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, MEASURE_LEGEND, MEASURE_VIEWS, PARAM_KEYS,
+                                  SEARCH_COLUMNS, STABILITY_NOTE,
                                   best_in_columns, ensemble_overview, ensemble_profile, ensemble_table, ensembles,
-                                  read_ensemble,
+                                  measure_overview, measure_profile, measure_table, measures, read_ensemble,
+                                  read_measure,
                                   suggested_for, candidates, cell_pairs, cell_years,
                                   describe, format_summary, read_search, rows as inspect_rows, search_overview,
                                   search_table, searches, year_series)
@@ -301,9 +303,18 @@ class Meters(Vertical):
 
 
 def _aligned(value: str, width: int) -> str:
-    """A table cell padded to its column's width: numbers (and the "–" of a
-    missing one) flush right, labels flush left."""
-    return value.rjust(width) if value[:1].isdigit() or value == "–" else value.ljust(width)
+    """A table cell padded to its column's width: numbers (negative ones and
+    the "–" of a missing one included) flush right, labels flush left."""
+    return value.rjust(width) if _looks_numeric(value) else value.ljust(width)
+
+
+def _looks_numeric(value: str) -> bool:
+    v = value.strip()
+    if v in ("–", "-", ""):
+        return v == "–"
+    if v[:1] in "-−+":
+        v = v[1:].lstrip()
+    return v[:1].isdigit()
 
 
 class Confirm(ModalScreen[bool]):
@@ -511,6 +522,15 @@ class LexichronApp(App):
     #ensemble-legend Static { height: auto; padding: 0 1; color: $text-muted; }
     #train-summary { height: auto; padding: 0 1; color: $text-muted; }
     #tuned-cell { margin: 0 0 0 2; }
+    #measure-name { width: 50; }
+    #measure-meters { height: auto; }
+    #measure-meters .meter-group { display: none; }
+    #measure-empty, #measure-note { height: auto; padding: 0 1; color: $text-muted; }
+    #measure-table { height: auto; max-height: 60%; }
+    #measure-legend { margin: 1 0 0 0; }
+    #measure-legend Static { height: auto; padding: 0 1; color: $text-muted; }
+    #measure-summary { height: auto; padding: 0 1; color: $text-muted; }
+    #measure-ensemble-use { margin: 0 0 0 2; }
     #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
     #inspect-provenance { height: auto; padding: 0 1; }
     #inspect-detail { height: auto; max-height: 12; padding: 0 1; overflow-y: auto; }
@@ -671,6 +691,13 @@ class LexichronApp(App):
                                                  prompt="(searches of this corpus)")
                                     yield Button("Use its suggested cell", id="tuned-cell", compact=True)
                                 yield Static("", id="train-summary")
+                            if name == "measure":
+                                with Horizontal(classes="row"):
+                                    yield Label("From ensemble")
+                                    yield Select([], allow_blank=True, id="measure-ensemble-pick", compact=True,
+                                                 prompt="(ensembles of this corpus)")
+                                    yield Button("Use this ensemble", id="measure-ensemble-use", compact=True)
+                                yield Static("", id="measure-summary")
                     with Collapsible(title="Advanced", collapsed=True, id="advanced"):
                         for f in self.corpus_section.fields:
                             if f.advanced:
@@ -763,6 +790,22 @@ class LexichronApp(App):
                     yield Static("", id="ensemble-note")
                     with Collapsible(title="What the columns mean", collapsed=True, id="ensemble-legend"):
                         yield Static(ENSEMBLE_LEGEND, id="ensemble-legend-text")
+                # the measure stage: a measure's years x words
+                with Vertical(id="inspect-measure"):
+                    with Horizontal(classes="row"):
+                        yield Label("Measure")
+                        yield Select([], allow_blank=True, id="measure-name", compact=True,
+                                     prompt="(measures of this corpus's ensembles)")
+                        yield Button("Reload", id="measure-reload", compact=True)
+                        yield Label("Show", classes="search-opt")
+                        yield Select([(label, key) for key, label in MEASURE_VIEWS], value="mean",
+                                     allow_blank=False, id="measure-view", compact=True)
+                    yield Static("", id="measure-empty")
+                    yield Meters(id="measure-meters")
+                    yield DataTable(id="measure-table", zebra_stripes=True)
+                    yield Static("", id="measure-note")
+                    with Collapsible(title="What the numbers mean", collapsed=True, id="measure-legend"):
+                        yield Static(MEASURE_LEGEND, id="measure-legend-text")
                 # the other stages: records of a database or vocabulary file.
                 # The corpus is chosen in the bar above; this picks which of
                 # its databases or files to open.
@@ -868,12 +911,16 @@ class LexichronApp(App):
         self._populate_slurm()
         self.query_one("#inspect-search").display = stage == "tune"
         self.query_one("#inspect-ensemble").display = stage == "train"
-        self.query_one("#inspect-generic").display = stage not in ("tune", "train")
+        self.query_one("#inspect-measure").display = stage == "measure"
+        self.query_one("#inspect-generic").display = stage not in ("tune", "train", "measure")
         if stage == "tune":
             self._refresh_searches()
         if stage == "train":
             self._refresh_ensembles()
             self._refresh_tuned_searches()
+        if stage == "measure":
+            self._refresh_measures()
+            self._refresh_measure_ensembles()
 
     @on(Button.Pressed, ".stage-button")
     def _stage_button_pressed(self, event: Button.Pressed) -> None:
@@ -903,6 +950,8 @@ class LexichronApp(App):
         self._search: Optional[Dict[str, Any]] = None
         self._ensemble: Optional[Dict[str, Any]] = None
         self._ensemble_at = 0.0
+        self._measure: Optional[Dict[str, Any]] = None
+        self._measure_at = 0.0
         self._search_sort: Tuple[Optional[str], bool] = (None, False)
         self.selected_run: Optional[Path] = None
         self._log_shown: Optional[tuple] = None
@@ -1008,6 +1057,51 @@ class LexichronApp(App):
             self._refresh_grid_summary(kwargs)
         if self.stage == "train":
             self._refresh_train_summary(kwargs)
+        if self.stage == "measure":
+            self._refresh_measure_summary(kwargs)
+
+    def _refresh_measure_summary(self, kwargs: Dict[str, Any]) -> None:
+        """Under the measure form: what would be measured, in one line."""
+        widget = self.query_one("#measure-summary", Static)
+        kind = str(kwargs.get("kind") or "projection")
+        words = list(kwargs.get("words") or [])
+        n_words = len(words) + (1 if kwargs.get("words_file") else 0)
+        parts = [f"Measure: {kind} of {len(words)} word{'s' if len(words) != 1 else ''}"
+                 + (" plus a file" if kwargs.get("words_file") else "")]
+        if kind == "projection":
+            pos, neg = list(kwargs.get("positive") or []), list(kwargs.get("negative") or [])
+            parts.append(f"axis from {len(neg)} negative to {len(pos)} positive pole words"
+                         + (" plus a file" if kwargs.get("poles_file") else ""))
+        elif kind == "similarity":
+            parts.append(f"against {len(list(kwargs.get('target') or []))} target words")
+        ens = kwargs.get("ensemble")
+        parts.append(f"on ensemble '{ens}'" if ens else "on an ensemble still to choose")
+        if not n_words:
+            parts.append("no words yet")
+        widget.update("; ".join(parts))
+
+    def _refresh_measure_ensembles(self) -> None:
+        """The ensembles a measure can run on."""
+        corpus_dir = self._corpus_dir(self.config)
+        found = ensembles(str(corpus_dir) if corpus_dir else None)
+        sel = self.query_one("#measure-ensemble-pick", Select)
+        current = sel.value if sel.value is not Select.NULL else None
+        sel.set_options(found)
+        wanted = (self.config.get("measure") or {}).get("ensemble")
+        choice = next((path for name, path in found if name == wanted), None) or \
+            (current if any(path == current for _, path in found) else None) or (found[0][1] if found else None)
+        if choice is not None:
+            sel.value = choice
+
+    @on(Button.Pressed, "#measure-ensemble-use")
+    def _measure_ensemble_use_pressed(self) -> None:
+        """Put the chosen ensemble's name into the form's Ensemble field."""
+        sel = self.query_one("#measure-ensemble-pick", Select)
+        if sel.value is Select.NULL:
+            self.notify("No ensemble to measure: run the train stage first", severity="warning")
+            return
+        self.query_one("#f-measure-ensemble", Input).value = Path(str(sel.value)).name
+        self._refresh_preview()
 
     def _refresh_grid_summary(self, kwargs: Dict[str, Any]) -> None:
         """Under the tune form: what the grid amounts to, and whether the
@@ -1166,6 +1260,87 @@ class LexichronApp(App):
         if ens.get("provenance"):
             note = (note + "\n" if note else "") + "\n".join(format_provenance(ens["provenance"])[:1])
         self.query_one("#ensemble-note", Static).update(note)
+
+    # -- Inspect tab, measure stage: a measure's years x words ---------------
+    def _refresh_measures(self) -> None:
+        corpus_dir = self._corpus_dir(self.config)
+        found = measures(str(corpus_dir) if corpus_dir else None)
+        sel = self.query_one("#measure-name", Select)
+        current = sel.value if sel.value is not Select.NULL else None
+        sel.set_options(found)
+        cfg = self.config.get("measure") or {}
+        wanted = f"{cfg.get('ensemble')} / {cfg.get('name')}" if cfg.get("ensemble") and cfg.get("name") else None
+        choice = next((path for label, path in found if label == wanted), None) or \
+            (current if any(path == current for _, path in found) else None) or (found[0][1] if found else None)
+        if choice is None:
+            self._show_measure(None)
+            return
+        if sel.value != choice:
+            sel.value = choice
+        else:
+            self._load_measure(choice)
+
+    @on(Select.Changed, "#measure-name")
+    def _measure_chosen(self, event: Select.Changed) -> None:
+        if event.value is not Select.NULL:
+            self._load_measure(str(event.value))
+
+    @on(Button.Pressed, "#measure-reload")
+    def _measure_reload_pressed(self) -> None:
+        self._refresh_measures()
+
+    @on(Select.Changed, "#measure-view")
+    def _measure_view_changed(self) -> None:
+        if self._measure is not None:
+            self._show_measure(self._measure)
+
+    @work(thread=True, group="measure", exclusive=True)
+    def _load_measure(self, path: str) -> None:
+        self._measure_at = time.monotonic()
+        m = read_measure(path)
+        self.call_from_thread(self._show_measure, m)
+
+    def _follow_running_measure(self, docs: List[tuple]) -> None:
+        """A measure run writes a year record per year: reread the shown
+        measure now and then while one is running."""
+        if self.stage != "measure" or not self._measure or self._measure.get("error"):
+            return
+        running = any(doc and doc.get("stage") == "measure" and doc.get("state") == "running" for _, doc in docs)
+        if running and time.monotonic() - self._measure_at >= self.ENSEMBLE_EVERY_S:
+            self._load_measure(self._measure["path"])
+
+    def _show_measure(self, m: Optional[Dict[str, Any]]) -> None:
+        self._measure = m
+        table = self.query_one("#measure-table", DataTable)
+        table.clear(columns=True)
+        empty = self.query_one("#measure-empty", Static)
+        has = m is not None and not m.get("error")
+        for wid in ("#measure-meters", "#measure-table", "#measure-note", "#measure-legend"):
+            self.query_one(wid).display = has
+        if not has:
+            empty.update(m["error"] if m else
+                         "No measure of this corpus's ensembles yet: run the measure stage, and its years appear "
+                         "here as they are written.")
+            empty.display = True
+            return
+        empty.display = False
+        view = self.query_one("#measure-view", Select).value
+        view = str(view) if view is not Select.NULL else "mean"
+        self.query_one("#measure-meters", Meters).show([("", measure_overview(m)), measure_profile(m)])
+        headings, rows = measure_table(m, view)
+        for h in headings:
+            table.add_column(h, key=h)
+        widths = [max([len(h)] + [len(r[i]) for r in rows]) for i, h in enumerate(headings)]
+        for row in rows:
+            table.add_row(*[Text(_aligned(v, widths[i])) for i, v in enumerate(row)], key=row[0])
+        note = "" if rows else "(no year measured yet)"
+        if m.get("years_pending") and rows:
+            pend = m["years_pending"]
+            note = f"Pending, models not all trained yet: {', '.join(str(y) for y in pend[:12])}" + \
+                (f" and {len(pend) - 12} more" if len(pend) > 12 else "") + "; a run in resume mode fills them in."
+        if m.get("provenance"):
+            note = (note + "\n" if note else "") + "\n".join(format_provenance(m["provenance"])[:1])
+        self.query_one("#measure-note", Static).update(note)
 
     def _array_note(self, years: List[int], models_per_year: int) -> str:
         """How the Submit tab's Jobs setting would split the years."""
@@ -1771,6 +1946,7 @@ class LexichronApp(App):
             return
         self._status = snap
         self._follow_running_ensemble(snap["docs"])
+        self._follow_running_measure(snap["docs"])
         table = self.query_one("#jobs", DataTable)
         table.clear()
         # Job ids of queued/running jobs, or None when Slurm cannot be asked.

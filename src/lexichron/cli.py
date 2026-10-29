@@ -44,6 +44,11 @@ STAGES: Dict[str, tuple[str, str]] = {
         "lexichron.stages.train:train_models",
         "Final models: a replicate ensemble (corpus resamples x seeds) of one cell for every year of the study",
     ),
+    "measure": (
+        "lexichron.stages.measure:measure_series",
+        "A time series with its error: your words measured inside every model of an ensemble "
+        "(a projection onto your axis, a similarity, a frequency)",
+    ),
 }
 
 
@@ -157,7 +162,7 @@ def _inspect(args: argparse.Namespace) -> int:
         for line in format_provenance(prov):
             print(line)
         return 0
-    if info["kind"] == "ensemble":                     # a model ensemble: its per-year table (printed above)
+    if info["kind"] in ("ensemble", "measure"):        # an ensemble or a measure: its per-year table (printed above)
         return 0
     if info["kind"] == "search":                       # a tuning search: its per-cell table
         from lexichron.inspection import cell_detail, search_table

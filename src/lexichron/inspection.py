@@ -44,6 +44,9 @@ def describe(path: str) -> Dict[str, Any]:
     if p.is_dir() and (p / "train.json").is_file():
         ens = read_ensemble(str(p))
         return {"kind": "ensemble", "layout": "ensemble", "ensemble": ens, "provenance": ens.get("provenance")}
+    if p.is_dir() and (p / "measure.json").is_file():
+        m = read_measure(str(p))
+        return {"kind": "measure", "layout": "measure", "measure": m, "provenance": m.get("provenance")}
     if p.is_file():
         try:
             with open(p, "rb") as fh:
@@ -350,6 +353,8 @@ def format_summary(info: Dict[str, Any]) -> str:
         return "\n".join(format_search(info["search"]))
     if info["kind"] == "ensemble":
         return "\n".join(format_ensemble(info["ensemble"]))
+    if info["kind"] == "measure":
+        return "\n".join(format_measure(info["measure"]))
     if info["kind"] == "table":
         text = f"table: {info['lines']:,} rows, {len(info['columns'])} columns"
         if info.get("search") and info["search"].get("best_cell"):
@@ -918,3 +923,181 @@ def _fmt_cell(v: Any, kind: str) -> str:
         except (TypeError, ValueError):
             return str(v)
     return str(v)
+
+
+# ---------------------------------------------------------------- measures
+MEASURE_VIEWS = (("mean", "Means"), ("se", "Standard errors"), ("both", "Mean ± SE"), ("n", "Replicates with the word"))
+MEASURE_LEGEND = (
+    "A measure is one scalar computed inside every model of an ensemble for a list of words: a projection (cosine "
+    "with the axis from the negative pole's centroid to the positive pole's, both built in that model), a "
+    "similarity (cosine with the target words' centroid) or a frequency (the word's share of the model's tokens). "
+    "Nothing is aligned: each value is rotation-invariant, so a year's replicates are averaged as they are. Mean "
+    "is the ensemble mean over the year's replicates; SE its standard error, sqrt(corpus var / C + seed var / n), "
+    "from the nested design (seeds within corpus resamples); n the replicates that had the word (a rare word can "
+    "miss a resample's min count). The summary tiles give the noise share: the squared SE against the variance "
+    "of the means across the words, how much of the spread between words is noise. series.tsv (year, word, mean, "
+    "se, n, var_seed, var_corpus) and y<year>.npz (the raw corpus x seed x word values) hold the same numbers."
+)
+
+
+def measures(corpus_dir: Optional[str]) -> List[Tuple[str, str]]:
+    """The measures of a corpus's ensembles (``models/<ensemble>/measures/
+    <name>``), newest first, as ("ensemble / name", path)."""
+    if not corpus_dir:
+        return []
+    models = Path(corpus_dir).expanduser() / "models"
+    if not models.is_dir():
+        return []
+    found = []
+    for ens in models.iterdir():
+        md = ens / "measures"
+        if not md.is_dir():
+            continue
+        for m in md.iterdir():
+            if m.is_dir() and (m / "measure.json").is_file():
+                found.append((f"{ens.name} / {m.name}", str(m), (m / "measure.json").stat().st_mtime))
+    found.sort(key=lambda t: t[2], reverse=True)
+    return [(label, path) for label, path, _ in found]
+
+
+def read_measure(m_dir: str) -> Dict[str, Any]:
+    """What a measure run has written: its manifest (``measure.json``), one
+    record per measured year (``y<year>.json``), which years are pending,
+    and its provenance when finished."""
+    import json
+    d = Path(m_dir).expanduser()
+    out: Dict[str, Any] = {"path": str(d), "name": d.name, "manifest": {}, "years": [], "years_done": [],
+                           "years_pending": [], "words": [], "provenance": None}
+    if not d.is_dir():
+        out["error"] = f"{d}: no such directory"
+        return out
+    try:
+        out["manifest"] = json.loads((d / "measure.json").read_text())
+    except (OSError, ValueError):
+        out["error"] = f"{d}: not a measure (no measure.json)"
+        return out
+    m = out["manifest"]
+    out["words"] = list(m.get("words") or [])
+    years: List[Dict[str, Any]] = []
+    for p in sorted(d.glob("y[0-9]*.json")):
+        try:
+            rec = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(rec, dict) and "words" in rec:
+            years.append(rec)
+    years.sort(key=lambda r: int(r.get("year", 0)))
+    out["years"] = years
+    out["years_done"] = [int(r["year"]) for r in years]
+    out["years_pending"] = [int(y) for y in (m.get("years_with_data") or []) if int(y) not in out["years_done"]]
+    from lexichron.provenance import read_provenance
+    out["provenance"] = read_provenance(d)
+    return out
+
+
+def measure_overview(m: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    """Tiles: (label, value, note)."""
+    man = m.get("manifest") or {}
+    words = m.get("words") or []
+    with_data = man.get("years_with_data") or []
+    span = f"{with_data[0]}-{with_data[-1]}" if with_data else "-"
+    kind = str(man.get("kind") or "-")
+    if kind == "projection":
+        what = f"{len(man.get('positive') or [])} positive vs {len(man.get('negative') or [])} negative pole words"
+    elif kind == "similarity":
+        what = "with " + ", ".join(man.get("target") or [])[:40]
+    else:
+        what = man.get("description") or ""
+    return [("Kind", kind, what),
+            ("Words", f"{len(words)}", ", ".join(words[:6]) + (", …" if len(words) > 6 else "")),
+            ("Years", f"{len(m.get('years_done') or [])}/{len(with_data)}", f"measured; {span}"
+             + (f"; {len(m.get('years_pending') or [])} pending" if m.get("years_pending") and m.get("years_done") else "")),
+            ("Ensemble", str(man.get("ensemble_name") or "-"), f"{man.get('corpus_replicates', '?')} corpus x "
+             f"{man.get('seeds_per_corpus', '?')} seed replicates; cell {man.get('cell') or '?'}")]
+
+
+def measure_profile(m: Dict[str, Any]) -> Tuple[str, List[Tuple[str, str, str]]]:
+    """A group of tiles: the measure's error, averaged over the years done,
+    with the latest year's own figure as the note."""
+    done = m.get("years") or []
+    n = len(done)
+    title = f"Error · {n} year{'s' if n != 1 else ''} measured"
+    if not done:
+        return title, [("SE of mean", "–", "after the first year"), ("Noise share", "–", ""), ("Words covered", "–", "")]
+    latest = max(done, key=lambda r: int(r.get("year", 0)))
+
+    def ok(v: Any) -> bool:
+        return isinstance(v, (int, float)) and v == v
+
+    def mean(key: str) -> Optional[float]:
+        vals = [float((r.get("summary") or {}).get(key)) for r in done if ok((r.get("summary") or {}).get(key))]
+        return sum(vals) / len(vals) if vals else None
+
+    def note(what: str, key: str, fmt) -> str:
+        v = (latest.get("summary") or {}).get(key)
+        return what + (f"; {latest.get('year')}: {fmt(v)}" if n > 1 and ok(v) else "")
+
+    sci = lambda v: _fmt_cell(v, "sci")
+    tiles: List[Tuple[str, str, str]] = []
+    se = mean("se_mean")
+    tiles.append(("SE of mean", sci(se) if se is not None else "–", note("per word, mean over years", "se_mean", sci)))
+    tiles.append(("Noise share", _pct(mean("noise_share")), note("of the spread across words", "noise_share", _pct)))
+    vc, vs = mean("var_corpus"), mean("var_seed")
+    if vc is not None and vs is not None and vc + vs > 0:
+        tiles.append(("Fit's share of the noise", f"{100.0 * vs / (vc + vs):.0f}%", "seed var over seed + corpus var"))
+    all_, some, none = latest.get("words_all"), latest.get("words_some"), latest.get("words_none")
+    if all_ is not None:
+        tiles.append(("Words covered", f"{all_}", f"in every replicate of {latest.get('year')}"
+                      + (f"; {some} in some, {none} in none" if (some or none) else "")))
+    cov = latest.get("coverage") or {}
+    if cov:
+        tiles.append(("Pole / target words found", "; ".join(f"{k} {lo}" if lo == hi else f"{k} {lo}-{hi}"
+                                                               for k, (lo, hi) in cov.items()), f"in {latest.get('year')}"))
+    return title, tiles
+
+
+def measure_table(m: Dict[str, Any], view: str = "mean") -> Tuple[List[str], List[List[str]]]:
+    """(headings, rows): a row per measured year, a column per word, showing
+    the ensemble mean, its standard error, both, or the replicates with the
+    word (``view``: mean, se, both, n)."""
+    words = list(m.get("words") or [])
+    years = m.get("years") or []
+    headings = ["Year"] + words
+    rows = []
+    for rec in years:
+        by_word = {r["word"]: r for r in rec.get("words") or []}
+        cells = [str(rec.get("year"))]
+        for w in words:
+            r = by_word.get(w)
+            if r is None or not r.get("n"):
+                cells.append("–")
+            elif view == "se":
+                cells.append(_fmt_cell(r.get("se"), "num"))
+            elif view == "n":
+                cells.append(f"{r.get('n')}")
+            elif view == "both":
+                se = r.get("se")
+                cells.append(_fmt_cell(r.get("mean"), "num") + (f" ±{_fmt_cell(se, 'num')}" if se is not None and se == se
+                                                                 else f" (n={r.get('n')})"))
+            else:
+                cells.append(_fmt_cell(r.get("mean"), "num"))
+        rows.append(cells)
+    return headings, rows
+
+
+def format_measure(m: Dict[str, Any]) -> List[str]:
+    if m.get("error"):
+        return [m["error"]]
+    lines = [f"measure {m['name']}: " + "; ".join(f"{l} {v} ({n})" if n else f"{l} {v}" for l, v, n in measure_overview(m))]
+    title, tiles = measure_profile(m)
+    lines.append(f"{title}: " + "; ".join(f"{l} {v}" + (f" ({n})" if n else "") for l, v, n in tiles))
+    headings, rows = measure_table(m, "both")
+    if rows:
+        widths = [max(len(headings[i]), *(len(r[i]) for r in rows)) for i in range(len(headings))]
+        for row in [headings] + rows:
+            lines.append("  ".join(f"{c:<{w}}" for c, w in zip(row, widths)).rstrip())
+    else:
+        lines.append("(no year measured yet)")
+    if m.get("years_pending") and m.get("years_done"):
+        lines.append(f"pending (models not all trained yet): {m['years_pending']}")
+    return lines

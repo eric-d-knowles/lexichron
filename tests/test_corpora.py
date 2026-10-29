@@ -44,9 +44,14 @@ def test_prerequisites_follow_the_state(tmp_path):
     assert not fresh.dir.exists() and fresh.state == "new: nothing acquired yet"
     pre = stage_prerequisites(fresh)
     assert pre["acquire"] is None and "Acquire first" in pre["filter"] and "Filter first" in pre["tune"] == pre["train"]
+    assert "Train first" in pre["measure"]
     _corpus(root, "ger", 3, db=True)
     pre = stage_prerequisites(corpus_info(root, "20200217", "ger", 3))
     assert pre["filter"] is None and pre["tune"] is not None
     _corpus(root, "ger", 3, pivoted=True)
+    pre = stage_prerequisites(corpus_info(root, "20200217", "ger", 3))
+    assert all(v is None for k, v in pre.items() if k != "measure") and "Train first" in pre["measure"]
+    (root / "20200217" / "ger" / "3gram_files" / "models" / "e1").mkdir(parents=True)
+    (root / "20200217" / "ger" / "3gram_files" / "models" / "e1" / "train.json").write_text("{}")
     assert all(v is None for v in stage_prerequisites(corpus_info(root, "20200217", "ger", 3)).values())
     assert all(v is None for v in stage_prerequisites(None).values())

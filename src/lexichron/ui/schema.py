@@ -35,7 +35,9 @@ ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
             "axis_poles", "temp_dir",
             "keep_models",
             # train
-            "noise_seed", "corpus_writers"}
+            "noise_seed", "corpus_writers",
+            # measure
+            "out_dir"}
 
 # Known choice lists for arguments whose type is a plain str/int. A list with a
 # single entry is shown as fixed text rather than a menu.
@@ -52,6 +54,8 @@ CHOICES: Dict[str, List[str]] = {
     "approach": ["skip-gram", "cbow"],
     "weight_by": ["freq", "doc_freq", "none"],
     "resampling": ["poisson", "none"],
+    # measure
+    "kind": ["projection", "similarity", "frequency"],
 }
 
 # Hyperparameter axes of the tune stage: shown as rows of toggles.
@@ -74,6 +78,9 @@ ORDER_BY_STAGE = {
               "years", "vector_size", "window", "min_count", "epochs", "approach", "weight_by",
               "corpus_replicates", "seeds_per_corpus", "resampling", "unk_mode", "name", "mode", "workers",
               "workers_per_model"],
+    "measure": ["release", "language", "ngram_size", "db_path_stub",
+                "ensemble", "name", "kind", "words", "words_file", "positive", "negative", "poles_file", "target",
+                "years", "mode", "workers"],
 }
 
 # Plain-language labels for the form (settings-file keys stay as they are).
@@ -145,6 +152,18 @@ LABELS: Dict[str, str] = {
     "resampling": "Resampling",
     "noise_seed": "Ensemble seed",
     "corpus_writers": "Corpus writers",
+    # measure
+    "ensemble": "Ensemble",
+    "measure.name": "Measure name",
+    "kind": "What to measure",
+    "words": "Words to measure",
+    "words_file": "Words file",
+    "positive": "Positive pole",
+    "negative": "Negative pole",
+    "poles_file": "Poles file",
+    "target": "Target words",
+    "measure.years": "Years",
+    "out_dir": "Output directory",
 }
 
 # User-facing help, where the docstring is too terse or too technical.
@@ -240,6 +259,20 @@ HELP: Dict[str, str] = {
     "train.workers_per_model": "Threads per model, at least; CPUs / threads models train at once, across years. When fewer models remain than that, each gets more threads.",
     "train.corpus_writers": "Processes writing corpus resamples ahead of training (each streams the pivoted database).",
     "train.temp_dir": "Where the corpus resamples are written. Blank: inside the ensemble directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
+    # measure
+    "measure.ensemble": "The trained ensemble to measure: its name under <corpus>/models/ (From ensemble lists them), or a directory.",
+    "measure.name": "Name of this measure; its files go to <ensemble>/measures/<name>/. One name holds one specification: another axis or word list is another name.",
+    "measure.kind": "projection: each word's cosine with the axis from the negative pole's centroid to the positive pole's, both built inside the model. similarity: cosine with the centroid of the target words. frequency: the word's share of the model's tokens.",
+    "measure.words": "The words to measure, comma-separated; each gets a series. A group written surgeon|physician|doctor is one series, the mean of its members inside each model. Words a year's models lack are reported with how many replicates had them.",
+    "measure.words_file": "A file of words to measure, one per line (added to the list).",
+    "measure.positive": "Pole words of the positive end of the axis, comma-separated (at least 3). Pairs (he/she, man/woman) go as two lists: the axis is the same.",
+    "measure.negative": "Pole words of the negative end (at least 3).",
+    "measure.poles_file": "A file of pole words: two lines (positive, then negative), or one positive,negative pair per line. Added to the lists.",
+    "measure.target": "For a similarity: the word, or words, whose centroid each word is compared with, comma-separated.",
+    "measure.years": "First and last year to measure. Blank: every year of the ensemble.",
+    "measure.mode": "resume keeps years already measured and fills in the rest (years whose models are still training are left pending); restart deletes this measure first.",
+    "measure.workers": "Models read at once; each holds a whole model in memory. Blank: 8, or the job's CPUs if fewer.",
+    "measure.out_dir": "Write the files here instead of under the ensemble (for a project directory of your own).",
 }
 
 
@@ -302,7 +335,7 @@ def _kind_for(annotation: Any, default: Any, name: str, stage: str = "") -> str:
         return "path"
     if name == "vocabulary":
         return "path"
-    if name.endswith(("_stub", "_dir", "_path")):
+    if name.endswith(("_stub", "_dir", "_path", "_file")):
         return "path"
     origin = typing.get_origin(annotation)
     args = typing.get_args(annotation)

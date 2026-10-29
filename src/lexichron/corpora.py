@@ -108,10 +108,11 @@ def stage_prerequisites(info: Optional[CorpusInfo]) -> Dict[str, Optional[str]]:
     """For each stage, why it cannot run on this corpus yet (None: it can).
     Acquire creates the corpus, so it always can."""
     if info is None:
-        return {"acquire": None, "filter": None, "tune": None, "train": None}
+        return {"acquire": None, "filter": None, "tune": None, "train": None, "measure": None}
     out: Dict[str, Optional[str]] = {"acquire": None}
     out["filter"] = None if info.database else f"needs the database {info.ngram_size}grams.db: run Acquire first"
     pivot = None if info.pivoted else f"needs the pivoted database {info.ngram_size}grams_pivoted.db: run Filter first"
     out["tune"] = pivot
     out["train"] = pivot
+    out["measure"] = None if info.ensembles else "needs a model ensemble under models/: run Train first"
     return out

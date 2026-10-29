@@ -119,6 +119,20 @@ def _target(stage: str, kwargs: Dict[str, Any]) -> Optional[tuple[Path, str, str
         paths = derive_paths(str(stub), int(n), str(release), str(lang))
         return Path(paths["pivoted_db"]).parent / "models" / str(kwargs["name"]), \
             f"the model ensemble '{kwargs['name']}' (every year's replicates)", "train.mode = restart"
+    if stage == "measure":
+        if kwargs.get("mode", "resume") != "restart" or not kwargs.get("name"):
+            return None
+        if kwargs.get("out_dir"):
+            return Path(os.path.expandvars(os.path.expanduser(str(kwargs["out_dir"])))), \
+                f"the measure '{kwargs['name']}' (its series and per-year values)", "measure.mode = restart"
+        from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+        paths = derive_paths(str(stub), int(n), str(release), str(lang))
+        ens = str(kwargs.get("ensemble") or "")
+        ens_dir = Path(os.path.expandvars(os.path.expanduser(ens))) if ens.startswith(("/", "~", "$")) or "/" in ens \
+            else Path(paths["pivoted_db"]).parent / "models" / ens
+        return ens_dir / "measures" / str(kwargs["name"]), \
+            f"the measure '{kwargs['name']}' of ensemble '{ens_dir.name}' (its series and per-year values)", \
+            "measure.mode = restart"
     return None
 
 
