@@ -361,8 +361,10 @@ lexichron acquire lexichron.yaml --set acquire.workers=20   # override a setting
 lexichron filter lexichron.yaml --dry-run              # show the call, don't run it
 lexichron tune lexichron.yaml                          # hyperparameter search
 lexichron train lexichron.yaml                         # the final models, as replicate ensembles
+lexichron measure lexichron.yaml                       # your words' series, with error bars, from an ensemble
 lexichron inspect 5grams_pivoted.db --prefix "[2011] nuclear"   # look at a database
 lexichron inspect models/eng-us-final                  # an ensemble's years and noise profile
+lexichron inspect models/eng-us-final/measures/gender  # a measure's years x words
 ```
 
 `lexichron inspect` opens a database read-only (any size, any node) and
@@ -539,7 +541,10 @@ Tabs:
   (`lexichron inspect` on the command line does the same); selecting a row
   of an n-gram-keyed database shows its full year series, and *How it was
   made* shows the database's provenance record. Databases are opened
-  read-only with a small footprint, so this is fine on a login node.
+  read-only with a small footprint, so this is fine on a login node. With
+  the Tune, Train or Measure stage selected, the tab shows that stage's
+  own output instead: a search's scores, an ensemble's years and noise
+  profile, or a measure's years × words (below).
 
 Run straight from the image instead (`apptainer run --app ui lexichron-0.9.3.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
@@ -734,9 +739,10 @@ resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
   with that count as its mean (`resampling: poisson`), which is another
   same-sized sample of books: with the `none` weighting a count-1 n-gram
   survives with probability 1 − 1/e. Two seeds on the same replicate
-  isolate the fit's share. The crossed design is a two-way random-effects
-  model, and its arithmetic gives the error of any measurement made the
-  same way on these models. The per-replicate models are the product and
+  isolate the fit's share. The design is nested (seeds within resamples: a
+  seed index is a different fit on every resample), a two-level
+  random-effects model whose arithmetic gives the error of any measurement
+  made the same way on these models. The per-replicate models are the product and
   nothing is aligned: a scalar computed inside one model is unaffected by
   the arbitrary rotation between fits, so replicates are averaged, and
   their spread used, as they are.
@@ -749,7 +755,7 @@ resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
 - **The noise profile.** `year.json` also carries a general-purpose
   measurement of the year's noise, with no research question assumed, in
   the three families the search scores. Each measures a scalar inside
-  every replicate and decomposes its spread across the crossed design into
+  every replicate and decomposes its spread across the nested design into
   *corpus variance* (across resamples), *seed variance* (across seeds
   within a resample), the *standard error of the ensemble mean*
   (√(corpus/C + seed/(C·S))) and, where it applies, the *noise share*, that
@@ -770,7 +776,8 @@ resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
   current year's replicates exist. An ensemble trained before a family
   existed gains it from a run in resume mode, which rewrites the records
   from the models on disk without retraining. The same arithmetic on your
-  own axis and words is the measurement error of your series.
+  own axis and words is the measurement error of your series: that is the
+  `measure` stage, next.
 - **Scale.** The default 20 × 2 is 40 models a year; 40 × 2 for a tight
   error estimate. Fifty years of 80 eight-minute models is about 140
   node-hours, so a run spans jobs: `mode: resume` trains only the models
@@ -780,6 +787,88 @@ resamples of the year's corpus, each fitted with `seeds_per_corpus` seeds.
   resamples are written ahead of training by `corpus_writers` processes
   and deleted as their models finish; `temp_dir: $TMPDIR` keeps them on
   node-local disk.
+
+## Your words' time series (`measure`)
+
+`lexichron measure` is where a research question meets the models. It takes
+one trained ensemble, a list of words, and one thing to measure, computes
+that scalar inside every model of every year for every word, and writes each
+word's series as the ensemble mean per year with its standard error and the
+two parts of its variance. The settings file's `measure:` section names the
+ensemble, the measure and its words; the Measure stage's form in the UI is
+the same, with *From ensemble* listing the corpus's ensembles.
+
+- **What can be measured.** Three kinds, all computed inside one model:
+  `projection`, each word's cosine with the axis from the *negative* pole
+  words' centroid to the *positive* pole words' (the poles as two lists, or
+  a `poles_file` of two lines or of one `positive,negative` pair per line;
+  pairs and lists give the same axis, since the mean of the pairwise
+  differences is the difference of the means); `similarity`, each word's
+  cosine with the centroid of the `target` words (one word: the plain
+  cosine); and `frequency`, the word's share of the model's tokens, whose
+  error is the text's alone. At least three pole words per side must be in
+  a model for its axis to be built; the per-year record says how many were.
+  A word may be a group, `surgeon|physician|doctor`: one series whose value
+  in each model is the mean of the members' values, so its error across the
+  ensemble is exact where averaging the members' series afterwards would
+  have to take their errors as independent.
+- **Why nothing is aligned.** Each of these is a cosine or a count computed
+  in one model's own space, so the arbitrary rotation between fits does not
+  touch it, and a year's replicates are averaged, and their spread used, as
+  they are. That is the border this stage keeps to: a lexeme's *vector*
+  over time, or a construct's centroid tracked across years, compares
+  vectors between models and needs every replicate rotated into a common
+  frame first (one Procrustes rotation per replicate), a different
+  operation that lexichron does not yet provide. Most questions of that
+  kind have a within-model form, a word's cosine with a fixed set of
+  reference words, say, which this stage measures with no alignment and a
+  clean error.
+- **The error.** Per word and year: the *mean* over the year's replicates,
+  the *standard error* of that mean, √(corpus var / C + seed var / n), and
+  the two variances, from the same nested arithmetic as the `train` noise
+  profile; and *n*, the replicates that had the word, since a rare word can
+  miss a resample's min count (it is then averaged over the replicates that
+  have it, and a word found in one resample only gets the error of its
+  seeds alone, flagged by its n). Per year, the summary gives the *noise
+  share*: the squared standard error against the variance of the means
+  across your words, how much of the spread between them is noise.
+- **What is written**, under `models/<ensemble>/measures/<name>/` (or
+  `out_dir`): `measure.json` (the specification and the ensemble it ran on);
+  per year, `y<year>.json` (the per-word statistics, pole or target
+  coverage, the summary) and `y<year>.npz` (the raw corpus × seed × word
+  values, for your own statistics); `series.tsv`, long, one row per year and
+  word (`year, word, mean, se, n, var_seed, var_corpus`), and `summary.tsv`,
+  one row per year, both rebuilt from the year files after every year. One
+  name holds one specification: a run under an existing name with a
+  different kind, word list or poles is refused (give it another name, or
+  `mode: restart`). A year whose models are not all trained yet is left
+  pending and filled in by a later run in resume mode, so a measure can be
+  started while `train` is still running. The Inspect tab shows a measure's
+  years × words, with *Show* switching between means, standard errors, both
+  and n, and the error summary above it; `lexichron inspect
+  models/<ensemble>/measures/<name>` prints the same.
+- **From Python.** The stage is a plain function and the files are plain:
+
+  ```python
+  from lexichron.stages.measure import measure_series
+  out = measure_series(5, "20200217", "eng-us", "/scratch/me/NLP_corpora/Google_Books",
+                       ensemble="eng-us-final", name="gender", kind="projection",
+                       words=["doctor", "nurse", "engineer"],
+                       positive=["he", "him", "man", "men"], negative=["she", "her", "woman", "women"])
+  import pandas as pd
+  series = pd.read_csv(f"{out}/series.tsv", sep="\t")      # year, word, mean, se, n, ...
+  ```
+
+  `lexichron.training.measures` has the kernels themselves (`projection`,
+  `similarity`, `frequency`, each `(Vectors, Spec) -> values`) for measuring
+  one model, and `lexichron.training.ensemble.word_components` turns a
+  (corpus, seed, word) cube of any within-model scalar into the same
+  per-word statistics.
+- **Scale.** Reading the models is the cost: a year of 40 models of 300
+  dimensions is a few gigabytes decompressed, read `workers` models at a
+  time (8 by default; each holds a whole model in memory). The default
+  Slurm settings ask for 8 CPUs and 16 GB; *Jobs* splits the years over a
+  job array as for `tune` and `train`.
 
 ## Provenance
 

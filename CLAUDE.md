@@ -11,10 +11,11 @@ section for whatever you are touching before changing it.
 
 - `src/lexichron/` — the application: `cli.py` (stage registry `STAGES`,
   `inspect`), `config.py` (project YAML → stage call), `stages/` (one plain-
-  value entry point per stage: `filter`, `tune`, `train`; `acquire` lives in
-  `ngramprep`), `training/` (the shared word2vec core: `corpus` writer,
+  value entry point per stage: `filter`, `tune`, `train`, `measure`; `acquire`
+  lives in `ngramprep`), `training/` (the shared word2vec core: `corpus` writer,
   `trainer`, `grid`, `scheduler`, `scores`, `ensemble`, `axis`, `stability`,
-  `benchmarks`), `ui/` (`app.py`, `schema.py` which derives each stage's form
+  `benchmarks`, `measures` which are the within-model scalars the measure
+  stage runs), `ui/` (`app.py`, `schema.py` which derives each stage's form
   from its function signature, `slurm.py` which writes batch scripts),
   `arrays.py` (Slurm job-array slicing), `corpora.py` (the corpora under a
   directory and their state, for the UI's corpus bar), `slurm_settings.py`
@@ -79,12 +80,23 @@ in the image; tests create their own.
   valence axis is the general-purpose yardstick for axis-projection work.
 - **Per-replicate models are the product.** Nothing is aligned or averaged in
   `train`; scalar measurements made inside each replicate are rotation-
-  invariant. Projecting a user's own words onto their own axis is a later
-  stage, not part of `train`.
+  invariant. The design is nested (seeds within corpus resamples), and
+  `ensemble.variance_components` / `word_components` are its arithmetic.
+- **`measure` is the border with a research project, and it stays
+  within-model.** It runs one scalar kind (`training/measures.py`:
+  projection onto an axis from pole words, similarity to a target centroid,
+  frequency) over every replicate of every year for the user's words, and
+  writes per-word mean, standard error, variance parts and n per year under
+  `models/<ensemble>/measures/<name>/`. One name holds one specification.
+  Anything that compares vectors between models (a lexeme's vector over
+  time, a tracked centroid, drift as self-cosine) needs an alignment, one
+  orthogonal rotation per replicate against a reference and anchor
+  vocabulary, and is a separate future kernel; do not fold it into
+  `measure`.
 - **Scores are files.** A tuning search keeps one JSON file per scored
   cell-year (`scores/`) and per year pair (`pairs/`); `results.tsv`,
   `pairs.tsv`, `summary.*` are exports. Readers derive from the files.
-- **Job arrays.** `slurm.jobs > 1` splits `tune` or `train` over the tasks of
+- **Job arrays.** `slurm.jobs > 1` splits `tune`, `train` or `measure` over the tasks of
   a Slurm job array; a task takes every N-th year (round-robin), runs in
   resume mode, and writes only its years. A year pair is scored by whichever
   task finds both models on disk. `mode: restart` is refused under an array:
@@ -104,13 +116,17 @@ in the image; tests create their own.
 
 - Never run a stage on a login node. Tests and the UI are fine there. For a
   smoke test of a stage, run it on a compute node:
-  `srun --account=torch_pr_600_general --cpus-per-task=16 --mem=48G --time=01:00:00 lexichron <stage> lexichron.yaml --set ...`
+  `srun --account=torch_pr_772_general --cpus-per-task=16 --mem=48G --time=01:00:00 lexichron <stage> lexichron.yaml --set ...`
   For anything longer, write a batch script (`write_sbatch`, or the UI's Submit
   tab) and `sbatch` it; inside a job `$SLURM_CPUS_PER_TASK` sets the workers.
 - Corpora live under `/scratch/edk202/NLP_corpora/Google_Books/`; the working
   corpus is `eng-us`, release `20200217`, 5-grams, tagged tokens only. The
-  chosen tuning cell for it is 100 dims, window 2, min count 5, 10 epochs,
-  skip-gram, `none` weighting.
+  ensemble `training_run1` is the tuning search's axis pick, 100 dims, window
+  5, min count 1, 10 epochs, skip-gram, `none` weighting (40 corpus × 2 seed
+  replicates). For the occupation-gender project the valence yardstick
+  undersells dimensionality: 300 dims raise the projections' correlation
+  with CPS women shares from 0.64 to 0.73, so a second ensemble at 300 dims
+  and 30 epochs (`vs300_w5_mc1_e30_sg1_wbnone`) is the planned follow-up.
 - Put corpus files on node-local disk in jobs (`temp_dir: $TMPDIR`).
 - Nothing on a login node should hold large data in memory; the pivoted
   database is hundreds of GB and is read in streaming scans only.
