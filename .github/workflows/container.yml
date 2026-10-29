@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest to runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
 
     steps:
