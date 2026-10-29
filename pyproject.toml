@@ -1,6 +1,6 @@
 [project]
 name = "lexichron"
-version = "0.9.3"
+version = "0.9.4"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.20",
