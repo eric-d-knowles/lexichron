@@ -5,8 +5,9 @@ For each year the train stage fits one hyperparameter cell many times: on
 n-gram's repeat count, so each resample is another same-sized sample of
 books: with the ``none`` weighting a count-1 n-gram survives with
 probability 1 - 1/e) and, on each resample, with ``seeds`` training seeds.
-The crossed design separates the two sources of noise in anything measured
-on a model — the sample of text and the fit — and the per-replicate models
+The nested design (seeds within resamples: a seed index names a different
+fit on every resample) separates the two sources of noise in anything
+measured on a model — the sample of text and the fit — and the per-replicate models
 are the product: a scalar measured inside each replicate (a projection on
 an axis, say) is unaffected by the arbitrary rotation between fits, so
 nothing needs aligning before the replicates are averaged or their spread
@@ -26,7 +27,7 @@ import numpy as np
 from lexichron.training.grid import Cell
 
 __all__ = ["RESAMPLINGS", "ReplicaTask", "plan_replicas", "resample_seed", "training_seed",
-           "variance_components", "VarianceComponents", "projection_cube"]
+           "variance_components", "VarianceComponents", "projection_cube", "word_components"]
 
 RESAMPLINGS = ("poisson", "none")
 
@@ -90,8 +91,9 @@ def plan_replicas(cell: Cell, years: Sequence[int], corpora: int, seeds: int, no
 
 @dataclass
 class VarianceComponents:
-    """The two-way random-effects decomposition of a scalar measured on
-    every replicate of a year (one value per model and word)."""
+    """The nested random-effects decomposition (seeds within corpus
+    resamples) of a scalar measured on every replicate of a year (one value
+    per model and word), summarized over the words."""
     words: int                        # words measured in every replicate
     corpora: int
     seeds: int
@@ -111,8 +113,8 @@ class VarianceComponents:
 
 
 def variance_components(values: np.ndarray) -> VarianceComponents:
-    """``values`` is (corpora, seeds, words). With both factors crossed and
-    at least two levels each: the seed component is the variance across
+    """``values`` is (corpora, seeds, words). With seeds nested in corpora
+    and at least two levels of each: the seed component is the variance across
     seeds within a corpus, averaged; the corpus component the variance of
     the corpus means less the seed part they carry (seed variance / seeds),
     floored at zero. With one level of either, the other's variance is all
@@ -151,16 +153,83 @@ def variance_components(values: np.ndarray) -> VarianceComponents:
 
 
 def projection_cube(projections: Dict[Tuple[int, int], Dict[str, float]], corpora: int, seeds: int,
-                    ) -> Tuple[List[str], np.ndarray]:
+                    words: Optional[Sequence[str]] = None) -> Tuple[List[str], np.ndarray]:
     """From each replicate's ``{word: value}`` (keyed by (corpus, seed)),
-    the words every replicate has and their (corpora, seeds, words) cube."""
-    if not projections:
-        return [], np.zeros((corpora, seeds, 0))
-    common: Optional[set] = None
-    for d in projections.values():
-        common = set(d) if common is None else common & set(d)
-    words = sorted(common or [])
+    a (corpora, seeds, words) cube. Without ``words``, over the words every
+    replicate has, sorted (the profile's complete cube). With ``words``, in
+    that order, NaN where a replicate lacks a word (a rare word can miss a
+    resample's min count): :func:`word_components` handles the gaps."""
+    if words is None:
+        if not projections:
+            return [], np.zeros((corpora, seeds, 0))
+        common: Optional[set] = None
+        for d in projections.values():
+            common = set(d) if common is None else common & set(d)
+        words = sorted(common or [])
+    words = list(words)
     cube = np.full((corpora, seeds, len(words)), np.nan)
     for (c, s), d in projections.items():
-        cube[c, s] = [d[w] for w in words]
+        cube[c, s] = [d.get(w, np.nan) for w in words]
     return words, cube
+
+
+def word_components(values: np.ndarray) -> Dict[str, np.ndarray]:
+    """Per word, the same decomposition as :func:`variance_components`
+    (which averages it over the words), tolerating replicates that lack a
+    word: ``mean``, ``se`` (standard error of the ensemble mean),
+    ``var_seed``, ``var_corpus``, ``n`` (replicates with a value), each a
+    (words,) array over the (corpora, seeds, words) cube. The seed variance
+    pools the resamples that have two or more values for the word; the
+    corpus variance is the variance of the resample means less the seed
+    part they carry, floored at zero; the standard error is
+    sqrt(var_corpus / C_w + var_seed / n_w) with C_w the resamples and n_w
+    the replicates that have the word. With one seed per resample only
+    the replicate variance can be measured and stands in for var_corpus,
+    with var_seed NaN; with one resample the reverse. A word found in a
+    single resample of a larger design gets var_corpus NaN and the
+    standard error of its seeds alone (an understatement, flagged by n)."""
+    import warnings
+    v = np.asarray(values, dtype=np.float64)
+    if v.ndim != 3:
+        raise ValueError("values must be (corpora, seeds, words)")
+    C, S, W = v.shape
+    with np.errstate(invalid="ignore", divide="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)                # nanvar over a single value
+        have = ~np.isnan(v)                                            # (C, S, W)
+        n = have.sum(axis=(0, 1))                                      # (W,)
+        mean = np.where(n > 0, np.nansum(v, axis=(0, 1)) / np.maximum(n, 1), np.nan)
+        n_cs = have.sum(axis=1)                                        # (C, W) seeds with a value
+        corpus_means = np.where(n_cs > 0, np.nansum(v, axis=1) / np.maximum(n_cs, 1), np.nan)   # (C, W)
+        C_w = (n_cs > 0).sum(axis=0)                                   # (W,) resamples with a value
+        nan = np.full(W, np.nan)
+        var_seed = nan.copy()
+        if S > 1:
+            # within-resample variance, over resamples with two or more seeds (ddof 1 each), pooled
+            dev2 = np.nansum((v - corpus_means[:, None, :]) ** 2, axis=1)           # (C, W)
+            dof = np.where(n_cs > 1, n_cs - 1, 0)
+            pooled_dof = dof.sum(axis=0)
+            var_seed = np.where(pooled_dof > 0, dev2.sum(axis=0) / np.maximum(pooled_dof, 1), np.nan)
+        var_corpus = nan.copy()
+        between = nan.copy()
+        if C > 1:
+            ok = C_w > 1
+            between = np.where(ok, np.nanvar(corpus_means, axis=0, ddof=1), np.nan)
+            seeds_per = np.where(C_w > 0, n_cs.sum(axis=0) / np.maximum(C_w, 1), np.nan)   # mean seeds per resample
+            if S > 1:
+                var_corpus = np.where(ok & ~np.isnan(var_seed), np.maximum(between - var_seed / seeds_per, 0.0),
+                                      np.where(ok, between, np.nan))
+            else:
+                var_corpus = between                                   # one seed: text and fit together
+        if C > 1 and S > 1:
+            se2 = var_corpus / np.maximum(C_w, 1) + var_seed / np.maximum(n, 1)
+            se2 = np.where(np.isnan(var_seed), between / np.maximum(C_w, 1), se2)
+            # a word in one resample only: the text's share cannot be measured; the fit's can
+            se2 = np.where(np.isnan(var_corpus) & ~np.isnan(var_seed), var_seed / np.maximum(n, 1), se2)
+        elif C > 1:
+            se2 = between / np.maximum(C_w, 1)
+        elif S > 1:
+            se2 = var_seed / np.maximum(n, 1)
+        else:
+            se2 = nan.copy()
+        se = np.sqrt(np.where(n > 1, se2, np.nan))
+    return {"mean": mean, "se": se, "var_seed": var_seed, "var_corpus": var_corpus, "n": n.astype(int)}

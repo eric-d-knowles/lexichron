@@ -34,7 +34,7 @@ import numpy as np
 from lexichron.training.trainer import Vectors
 
 __all__ = ["PLEASANT", "UNPLEASANT", "Axis", "load_axis", "read_ratings", "read_poles", "axis_vector",
-           "projections", "validity", "agreement"]
+           "axis_from_poles", "projections", "validity", "agreement"]
 
 # Greenwald, McGhee & Schwartz (1998), as listed by Caliskan et al. (2017), WEAT 1
 PLEASANT = ("caress", "freedom", "health", "love", "peace", "cheer", "friend", "heaven", "loyal", "pleasure",
@@ -107,23 +107,36 @@ def load_axis(lexicon: Optional[str], poles: Optional[str]) -> Optional[Axis]:
     return Axis(pos, neg, read_ratings(lexicon), lexicon, poles)
 
 
+def axis_from_poles(vectors: Vectors, positive: Iterable[str], negative: Iterable[str],
+                    min_words: int = MIN_POLE_WORDS) -> Tuple[Optional[np.ndarray], List[str], List[str]]:
+    """The unit vector from the negative pole's centroid to the positive
+    pole's, over the pole words the model has, with those words: (axis,
+    positive found, negative found). The axis is None with fewer than
+    ``min_words`` on either side, or when the centroids coincide.
+
+    The centroids are of unit vectors, so a frequent pole word weighs no
+    more than a rare one. Given pole words in pairs (he/she, man/woman,
+    ...), the mean of the pairwise differences is the same vector as the
+    difference of the two means, so pairs are passed as two lists."""
+    pos, pv = vectors.unit_rows(positive)
+    neg, nv = vectors.unit_rows(negative)
+    if len(pos) < min_words or len(neg) < min_words:
+        return None, pos, neg
+    d = pv.mean(axis=0) - nv.mean(axis=0)
+    n = np.linalg.norm(d)
+    return (d / n if n > 0 else None), pos, neg
+
+
 def axis_vector(vectors: Vectors, pleasant: Iterable[str], unpleasant: Iterable[str]) -> Optional[np.ndarray]:
     """Unit vector from the unpleasant centroid to the pleasant one, over the
     pole words the model has; None with too few on either side."""
-    unit = vectors.unit()
-    pos = [unit[vectors.index(w)] for w in pleasant if w in vectors]
-    neg = [unit[vectors.index(w)] for w in unpleasant if w in vectors]
-    if len(pos) < MIN_POLE_WORDS or len(neg) < MIN_POLE_WORDS:
-        return None
-    d = np.mean(pos, axis=0) - np.mean(neg, axis=0)
-    n = np.linalg.norm(d)
-    return d / n if n > 0 else None
+    return axis_from_poles(vectors, pleasant, unpleasant)[0]
 
 
 def projections(vectors: Vectors, axis: np.ndarray, words: Iterable[str]) -> Dict[str, float]:
     """Cosine of each word (that the model has) with the axis."""
-    unit = vectors.unit()
-    return {w: float(unit[vectors.index(w)] @ axis) for w in words if w in vectors}
+    found, rows = vectors.unit_rows(words)
+    return dict(zip(found, (rows @ axis).astype(float).tolist()))
 
 
 def validity(vectors: Vectors, yard: Axis) -> Tuple[float, float]:

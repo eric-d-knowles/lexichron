@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent))
 import fake_rocks                                      # noqa: E402
 from ngramprep.common_db import api as dbapi            # noqa: E402
-from lexichron.training import benchmarks, corpus, grid, stability, trainer   # noqa: E402
+from lexichron.training import benchmarks, corpus, ensemble, grid, stability, trainer   # noqa: E402
 
 
 @pytest.fixture
@@ -207,3 +207,54 @@ def test_neighbour_sets_reproduce_the_pairwise_overlap():
     assert via_sets.shape == direct.shape and np.allclose(via_sets, direct)
     assert all(len(v) == 10 and w not in v for w, v in sa.items())
     assert stability.neighbour_sets(a, probes, 10, within=words[:5]) == {}      # too few words to rank
+
+
+def test_unit_vectors_are_cached_and_rows_can_be_taken_alone(tmp_path):
+    words = [f"w{i:03d}" for i in range(50)]
+    v = _fake_vectors(words, dim=8)
+    u = v.unit()
+    assert u is v.unit()                                  # computed once
+    assert np.allclose(np.linalg.norm(u, axis=1), 1.0)
+    found, rows = v.unit_rows(["w003", "nope", "w001", "w003"])
+    assert found == ["w003", "w001"] and np.allclose(rows, u[[3, 1]])
+    fresh = _fake_vectors(words, dim=8)                   # without the cache: the same rows
+    found2, rows2 = fresh.unit_rows(["w003", "w001"])
+    assert found2 == found and np.allclose(rows2, rows)
+    assert fresh.unit_rows(["nope"])[1].shape == (0, 8)
+    trainer.save_vectors(v, str(tmp_path / "m.npz"))
+    assert trainer.load_words(str(tmp_path / "m.npz")) == words
+    # the axis helpers go through the same rows
+    from lexichron.training import axis
+    ax, pos, neg = axis.axis_from_poles(v, ["w000", "w001", "w002", "nope"], ["w010", "w011", "w012"])
+    assert pos == ["w000", "w001", "w002"] and neg == ["w010", "w011", "w012"]
+    assert np.linalg.norm(ax) == pytest.approx(1.0)
+    assert axis.axis_from_poles(v, ["w000", "w001"], ["w010", "w011", "w012"])[0] is None
+    proj = axis.projections(v, ax, ["w020", "nope", "w021"])
+    assert list(proj) == ["w020", "w021"] and proj["w020"] == pytest.approx(float(u[20] @ ax), abs=1e-6)
+
+
+def test_word_components_agree_with_the_summary_and_tolerate_gaps():
+    rng = np.random.default_rng(1)
+    C, S, W = 20, 3, 40
+    v = rng.normal(size=W) + rng.normal(scale=0.3, size=(C, 1, W)) + rng.normal(scale=0.1, size=(C, S, W))
+    vc = ensemble.variance_components(v)
+    wc = ensemble.word_components(v)
+    assert wc["var_seed"].mean() == pytest.approx(vc.var_seed) and wc["var_corpus"].mean() == pytest.approx(vc.var_corpus)
+    assert np.sqrt((wc["se"] ** 2).mean()) == pytest.approx(vc.se_mean) and (wc["n"] == C * S).all()
+    assert np.allclose(wc["mean"], v.mean(axis=(0, 1)))
+    g = v.copy()
+    g[0, 0, 5] = np.nan                                   # one replicate lacks word 5
+    g[3:, :, 6] = np.nan                                  # word 6 in three resamples only
+    g[1:, :, 7] = np.nan                                  # word 7 in one resample
+    g[:, :, 8] = np.nan                                   # word 8 nowhere
+    wc = ensemble.word_components(g)
+    assert wc["n"][5] == C * S - 1 and wc["mean"][5] == pytest.approx(np.nanmean(g[:, :, 5])) and wc["se"][5] > 0
+    assert wc["n"][6] == 3 * S and wc["var_corpus"][6] >= 0 and wc["se"][6] > wc["se"][5]
+    assert wc["n"][7] == S and np.isnan(wc["var_corpus"][7]) and wc["se"][7] == pytest.approx(np.sqrt(wc["var_seed"][7] / S))
+    assert wc["n"][8] == 0 and np.isnan(wc["mean"][8]) and np.isnan(wc["se"][8])
+    one_seed = ensemble.word_components(v[:, :1, :])
+    assert np.isnan(one_seed["var_seed"]).all() and one_seed["se"][0] == pytest.approx(np.sqrt(v[:, 0, 0].var(ddof=1) / C))
+    # the cube keeps a requested word order and marks the missing
+    words, cube = ensemble.projection_cube({(0, 0): {"a": 1.0, "b": 2.0}, (0, 1): {"a": 1.5}}, 1, 2, words=["b", "a", "z"])
+    assert words == ["b", "a", "z"] and cube[0, 0, :2].tolist() == [2.0, 1.0] and np.isnan(cube[0, 1, 0])
+    assert np.isnan(cube[:, :, 2]).all()

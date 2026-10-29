@@ -10,13 +10,13 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
 from .grid import Cell
 
-__all__ = ["Vectors", "TrainResult", "train_model", "gensim_train", "save_vectors", "load_vectors"]
+__all__ = ["Vectors", "TrainResult", "train_model", "gensim_train", "save_vectors", "load_vectors", "load_words"]
 
 
 @dataclass
@@ -25,6 +25,7 @@ class Vectors:
     matrix: np.ndarray                 # (len(words), dim)
     counts: Optional[np.ndarray] = None
     _index: Dict[str, int] = field(default_factory=dict, repr=False)
+    _unit: Optional[np.ndarray] = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if not self._index:
@@ -40,10 +41,36 @@ class Vectors:
         return self._index[word]
 
     def unit(self) -> np.ndarray:
-        """Rows normalized to unit length (zero rows left zero)."""
-        norms = np.linalg.norm(self.matrix, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        return self.matrix / norms
+        """Rows normalized to unit length (zero rows left zero). Computed
+        once and kept: the axis, neighbourhood and benchmark measurements
+        each want it, and renormalizing a large matrix for each was the
+        bulk of a year's record-writing time. Callers must not write to it."""
+        if self._unit is None:
+            self._unit = _normalized(self.matrix)
+        return self._unit
+
+    def unit_rows(self, words: Iterable[str]) -> Tuple[List[str], np.ndarray]:
+        """The words of ``words`` the model has (in that order, once each)
+        and their unit vectors as a (n, dim) array: normalizes only those
+        rows, so a measurement of a few hundred words never touches the
+        whole matrix."""
+        found: List[str] = []
+        seen = set()
+        for w in words:
+            if w in self._index and w not in seen:
+                found.append(w)
+                seen.add(w)
+        if not found:
+            return found, np.zeros((0, self.matrix.shape[1]), dtype=self.matrix.dtype)
+        if self._unit is not None:
+            return found, self._unit[[self._index[w] for w in found]]
+        return found, _normalized(self.matrix[[self._index[w] for w in found]])
+
+
+def _normalized(rows: np.ndarray) -> np.ndarray:
+    norms = np.linalg.norm(rows, axis=1, keepdims=True)
+    norms[norms == 0] = 1.0
+    return rows / norms
 
 
 @dataclass
@@ -94,3 +121,12 @@ def load_vectors(path: str) -> Vectors:
         words = [str(w) for w in z["words"]]
         counts = z["counts"] if z["counts"].size else None
         return Vectors(words=words, matrix=np.asarray(z["matrix"], dtype=np.float32), counts=counts)
+
+
+def load_words(path: str) -> List[str]:
+    """Only the word list of a saved model, most frequent first. An ``.npz``
+    is a zip archive and a member is decompressed on access, so this reads
+    a few megabytes where :func:`load_vectors` would decompress the matrix
+    (hundreds of megabytes) just to find the vocabulary."""
+    with np.load(path, allow_pickle=True) as z:
+        return [str(w) for w in z["words"]]

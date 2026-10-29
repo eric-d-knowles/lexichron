@@ -42,7 +42,7 @@ from lexichron.training.ensemble import (RESAMPLINGS, ReplicaTask, plan_replicas
 from lexichron.training.grid import AXIS_BY_NAME, Cell
 from lexichron.training.scheduler import train_across_years
 from lexichron.training.scores import write_json
-from lexichron.training.trainer import TrainFn, load_vectors
+from lexichron.training.trainer import TrainFn, load_vectors, load_words
 from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
 
@@ -411,18 +411,18 @@ def _year_record(out_dir: Path, year: int, cell: Cell, corpora: int, seeds: int,
         return int(p.stem[1:3]), int(p.stem.split("_s")[1])
 
     in_design = [p for p in models if coords(p)[0] < corpora and coords(p)[1] < seeds]
-    # pass 1: the vocabulary every replicate has, in the first replicate's frequency order
+    # pass 1: the vocabulary every replicate has, in the first replicate's
+    # frequency order (only the word lists are read, not the matrices)
     probes: List[str] = []
     within: List[str] = []
     if k > 0 and per_decile > 0 and in_design:
         common: Optional[set] = None
         order: List[str] = []
         for p in in_design:
-            v = load_vectors(str(p))
+            ws = load_words(str(p))
             if not order:
-                order = list(v.words)
-            common = set(v.words) if common is None else common & set(v.words)
-            del v
+                order = ws
+            common = set(ws) if common is None else common & set(ws)
         within = [w for w in order if w in (common or set())]
         probes = stability.probe_sample(within, per_decile=per_decile, seed=year)
     # pass 2: the facts and the three families' per-replicate measurements
