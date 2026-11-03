@@ -1,6 +1,6 @@
 [project]
 name = "lexichron"
-version = "0.9.5"
+version = "0.10.0"
 requires-python = ">=3.11"
 dependencies = [
     "numpy>=1.20",
@@ -30,6 +30,11 @@ dependencies = [
 [project.optional-dependencies]
 ui = ["textual>=0.80"]
 dev = ["pytest", "textual>=0.80"]   # the test suite, including the UI tests
+# JAX with NVIDIA GPU support (CUDA 12 wheels, which bundle the CUDA libraries
+# and need only an NVIDIA driver >= 525 on the host) and the samplers built on
+# it, for Bayesian models that projects fit downstream of lexichron. It falls
+# back to the CPU where there is no GPU.
+jax = ["jax[cuda12]>=0.10.2", "numpyro>=0.22", "blackjax>=1.7"]
 
 [project.scripts]
 lexichron = "lexichron.cli:main"

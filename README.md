@@ -37,7 +37,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.9.5}
+  version = {0.10.0}
 }
 ```
 
@@ -147,7 +147,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.9.5 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.10.0 bash install.sh`.
 
 That is all that is needed to download and process corpora. Steps 2 and 3
 below are for people who want to work with lexichron from their own notebooks
@@ -159,7 +159,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.9.5.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.10.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -179,7 +179,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.9.5)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.10.0)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -241,6 +241,35 @@ To execute a notebook unattended inside a Slurm job:
     --to notebook --execute --output run.ipynb unigrams_workflow.ipynb
 ```
 
+#### GPUs and JAX
+
+The image carries [JAX](https://docs.jax.dev) with NVIDIA GPU support and two
+samplers built on it, [NumPyro](https://num.pyro.ai) and
+[BlackJAX](https://blackjax-devs.github.io/blackjax/), for statistical models
+fitted downstream of lexichron (the `jax` extra in `pyproject.toml`). lexichron's
+own stages do not use them. The CUDA libraries come with the image, so the
+host needs only an NVIDIA driver (version 525 or later).
+
+The launchers (`.venv/host-python` and the project's Jupyter kernel) give the
+container the host's GPUs whenever the node has them, so a script or notebook
+started inside a GPU job sees them without changes:
+
+```bash
+srun --gres=gpu:1 --time=00:10:00 /path/to/project/.venv/host-python -c "import jax; print(jax.devices())"
+```
+
+On a node without a GPU they tell JAX to use the CPU. Set `LEXICHRON_NV=1` or
+`LEXICHRON_NV=0` to force the GPU flag on or off, or `JAX_PLATFORMS` to choose
+JAX's device yourself. JAX works in single precision unless a program turns on
+double precision (`jax.config.update("jax_enable_x64", True)`), which most
+statistical models need; for that, data-center GPUs (A100, H100, H200, B200)
+are much faster than workstation ones (L40S, RTX 6000), whose double-precision
+rate is 1/64 of their single-precision one. The image sets
+`XLA_PYTHON_CLIENT_PREALLOCATE=false`, so JAX takes GPU memory as it needs it
+instead of 75% at start, and two processes can share a GPU. A project created
+with an image older than 0.10 gets the GPU launchers by running `new-project`
+again with the new image (see "Updating a project to a new release").
+
 Notes on the container route:
 
 - The image is read-only. All output paths (`db_path_stub`, model directories,
@@ -249,7 +278,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.9.5.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.10.0.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -546,7 +575,7 @@ Tabs:
   own output instead: a search's scores, an ensemble's years and noise
   profile, or a measure's years × words (below).
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.9.5.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.10.0.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 

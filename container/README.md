@@ -89,6 +89,16 @@ From the repository root, on a machine with Apptainer and root or fakeroot:
   minor version; `new_project.sh` refuses to reuse one built for a different
   version.
 - Compiled extensions (`.so`) are not tracked in git; the build compiles them.
+- JAX, NumPyro and BlackJAX (the `jax` extra) are installed with the CUDA 12
+  wheels, which bundle the CUDA libraries (about 5 GB unpacked, most of the
+  image's size): the host needs only an NVIDIA driver, and the CUDA 12 wheels
+  accept older drivers (525+) than the CUDA 13 ones (580+). The build machine
+  has no GPU, so the build checks the CPU backend, double precision and that
+  the CUDA plugin is installed; `tests/test_jax_stack.py` runs on whatever
+  device is present. The launcher `register_kernel.sh` writes adds `--nv` when
+  the host has `/dev/nvidiactl` (checked at each start, since one launcher
+  serves CPU and GPU nodes), and otherwise sets `JAX_PLATFORMS=cpu` so JAX
+  does not print a CUDA traceback while looking for a GPU.
 - The test suite in `tests/` is copied into the image and run by `apptainer
   test` during every CI build, so a failing test fails the build. Run it by
   hand with `apptainer exec lexichron.sif python -m pytest /opt/lexichron/tests`

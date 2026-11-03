@@ -85,7 +85,7 @@ From: {{ BASE }}
     find /opt/lexichron-src/src -name '*.o' -delete
     find /opt/lexichron-src/src -type d -name build -prune -exec rm -rf {} +
 
-    python -m pip install --no-cache-dir "/opt/lexichron-src[ui]"
+    python -m pip install --no-cache-dir "/opt/lexichron-src[ui,jax]"
 
     # gensim's corpus_file reader, rebuilt free of the GIL (scripts/patch_gensim.py
     # explains): on n-gram corpora, where a line is five tokens, the stock build
@@ -157,6 +157,17 @@ import ngramprep.ngram_filter.filters.core_cy
 import ngramprep.utilities.count_items
 import daviesprep.davies_filter.filters.core_cy
 print("enchant languages:", langs)
+# JAX: the build machine has no GPU, so this checks the CPU backend, double
+# precision and both samplers' imports; the CUDA plugin must be installed
+import importlib.util
+import jax
+jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+import numpyro, blackjax
+assert jnp.ones(2).dtype == jnp.float64
+assert float(jax.grad(lambda x: jnp.sum(x ** 2))(jnp.arange(3.0))[2]) == 4.0
+assert importlib.util.find_spec("jax_plugins.xla_cuda12") is not None, "CUDA plugin missing"
+print("jax", jax.__version__, "numpyro", numpyro.__version__, "blackjax", blackjax.__version__)
 print("all runtime resources present")
 EOF
 
@@ -181,6 +192,9 @@ EOF
     # Never write caches inside the (read-only) image
     export XDG_CACHE_HOME=${XDG_CACHE_HOME:-/tmp/lexichron-cache}
     export MPLCONFIGDIR=${MPLCONFIGDIR:-/tmp/lexichron-cache/matplotlib}
+    # JAX takes 75% of a GPU's memory when it starts unless told not to, which
+    # makes a second process on the same GPU (a notebook beside a script) fail
+    export XLA_PYTHON_CLIENT_PREALLOCATE=${XLA_PYTHON_CLIENT_PREALLOCATE:-false}
 
 %runscript
     # `apptainer run lexichron.sif` behaves like `python`:
@@ -287,6 +301,10 @@ EOF
     To use the image as a Jupyter kernel (no clone of the repository needed):
 
         apptainer run --app register-kernel lexichron.sif
+
+    JAX (with NVIDIA GPU support), NumPyro and BlackJAX are included; add
+    --nv to `apptainer exec` on a GPU node (the project launchers do this
+    themselves).
 
     To create a project environment that adds your own packages on top:
 

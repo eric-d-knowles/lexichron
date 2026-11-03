@@ -130,9 +130,22 @@ for d in ${CANDIDATES}; do
   case " ${SYSTEM_BOUND} " in *" \$d "*) continue ;; esac
   [ -d "\$d" ] && binds="\$binds --bind \$d"
 done
+# NVIDIA GPUs: --nv makes the host's driver and devices visible inside the
+# container. Decided here, at each start, because the same launcher runs on
+# CPU nodes (where --nv only warns) and GPU nodes. LEXICHRON_NV=1 forces it
+# on, LEXICHRON_NV=0 off. Without a GPU, JAX is told to use the CPU (unless
+# JAX_PLATFORMS is already set), so it does not print a CUDA traceback each
+# time it starts while looking for one.
+nv=""
+case "\${LEXICHRON_NV:-auto}" in
+  1) nv=" --nv" ;;
+  0) ;;
+  *) [ -e /dev/nvidiactl ] && nv=" --nv" ;;
+esac
+[ -n "\$nv" ] || [ -n "\${JAX_PLATFORMS:-}" ] || nv=" --env JAX_PLATFORMS=cpu"
 runtime=apptainer
 command -v apptainer >/dev/null 2>&1 || { command -v singularity >/dev/null 2>&1 && runtime=singularity; }
-exec "\$runtime" exec \$binds${ENV_ARGS} "\$img" "\$py" "\$@"
+exec "\$runtime" exec\$nv \$binds${ENV_ARGS} "\$img" "\$py" "\$@"
 EOF
 chmod 755 "$LAUNCHER"
 
