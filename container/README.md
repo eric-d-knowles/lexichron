@@ -27,7 +27,7 @@ it automates, for when something needs doing manually:
   bare image (`apptainer run --app register-kernel lexichron.sif`).
 - `host_bridge.sh` — a shell loop that runs on the *host* beside `lexichron ui`
   and executes a short allow-list of Slurm commands (`sbatch`, `squeue`,
-  `sacct`, `scancel`, `sinfo`) on request, via files in
+  `sacct`, `scancel`, `sinfo`, `sshare`) on request, via files in
   `<project>/.lexichron/bridge/`. The UI inside the container writes a request,
   the bridge writes the answer. `new_project.sh` writes the
   `.venv/lexichron-ui` launcher that starts both.

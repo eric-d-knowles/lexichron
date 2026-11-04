@@ -15,7 +15,7 @@
 set -u
 
 BRIDGE_DIR="${1:?usage: host_bridge.sh BRIDGE_DIR}"
-ALLOWED="sbatch squeue sacct scancel sinfo"
+ALLOWED="sbatch squeue sacct scancel sinfo sshare"
 PARENT=$PPID
 
 mkdir -p "$BRIDGE_DIR/req" "$BRIDGE_DIR/res"

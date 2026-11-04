@@ -33,7 +33,7 @@ __all__ = ["BridgeResult", "SlurmRunner", "HostBridge", "LocalSlurm", "BridgeUna
            "default_bridge_dir", "slurm_backend", "ALLOWED_COMMANDS"]
 
 # The same list as ALLOWED in container/host_bridge.sh.
-ALLOWED_COMMANDS = ("sbatch", "squeue", "sacct", "scancel", "sinfo")
+ALLOWED_COMMANDS = ("sbatch", "squeue", "sacct", "scancel", "sinfo", "sshare")
 
 
 class BridgeUnavailable(RuntimeError):
