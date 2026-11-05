@@ -29,6 +29,7 @@ def launcher(tmp_path):
                APPTAINER_CONTAINER=str(tmp_path / "lexichron-9.9.9.sif"),
                JUPYTER_DATA_DIR=str(tmp_path / "jupyter"))
     env.pop("LEXICHRON_NV", None)
+    env.pop("JAX_PLATFORMS", None)               # set when these tests are themselves started by a launcher
     path = tmp_path / "host-python"
     subprocess.run(["bash", str(REGISTER), "--launcher", str(path),
                     "--env", "CMDSTAN=/x/cmdstan"],
@@ -65,7 +66,30 @@ def test_without_a_gpu_jax_is_pointed_at_the_cpu(launcher):
     assert "JAX_PLATFORMS" not in run(LEXICHRON_NV="0", JAX_PLATFORMS="cuda")
 
 
+def _usable_gpu():
+    """The launcher's own test: the driver is on this host and, where
+    nvidia-smi can be asked, it lists a GPU this process may use."""
+    if not Path("/dev/nvidiactl").exists():
+        return False
+    if shutil.which("nvidia-smi") is None:
+        return True
+    listed = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout
+    return any(line.startswith("GPU ") for line in listed.splitlines())
+
+
 def test_gpu_flag_follows_the_host_by_default(launcher):
     _, run = launcher
-    has_gpu = Path("/dev/nvidiactl").exists()
-    assert ("--nv" in run().split()) == has_gpu
+    assert ("--nv" in run().split()) == _usable_gpu()
+
+
+@pytest.mark.skipif(not Path("/dev/nvidiactl").exists(), reason="needs a host with the NVIDIA driver")
+def test_a_job_without_a_gpu_on_a_gpu_node_gets_the_cpu(launcher, tmp_path):
+    """A CPU job on a GPU node sees the driver but no device: no --nv, and JAX
+    pointed at the CPU, or it prints a CUDA traceback at every start."""
+    _, run = launcher
+    fake = tmp_path / "fakebin" / "nvidia-smi"       # first on the launcher's PATH
+    fake.write_text('#!/usr/bin/env bash\necho "No devices found."\n')
+    fake.chmod(0o755)
+    assert run().startswith("apptainer exec --env JAX_PLATFORMS=cpu ")
+    fake.write_text('#!/usr/bin/env bash\necho "GPU 0: NVIDIA L40S (UUID: GPU-0)"\n')
+    assert run().startswith("apptainer exec --nv ")

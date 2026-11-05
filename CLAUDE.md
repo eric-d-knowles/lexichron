@@ -108,8 +108,9 @@ in the image; tests create their own.
   the CUDA 12 wheels, NumPyro, BlackJAX), for projects that fit statistical
   models on lexichron's measures (first: occfem_bidir2's Kalman state-space
   models). The stages do not import it; keep it that way, so a broken GPU
-  stack never touches the pipeline. The launchers pass `--nv` on GPU nodes
-  (`/dev/nvidiactl`) and set `JAX_PLATFORMS=cpu` elsewhere; `LEXICHRON_NV`
+  stack never touches the pipeline. The launchers pass `--nv` where a GPU is
+  usable (`/dev/nvidiactl` and a device in `nvidia-smi -L`: a CPU job on a
+  GPU node has the driver but no device) and set `JAX_PLATFORMS=cpu` elsewhere; `LEXICHRON_NV`
   overrides.
 - **`<UNK>` default is `strip`** in training (drop the token, keep the n-gram
   if two real tokens remain).

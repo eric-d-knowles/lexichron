@@ -132,15 +132,22 @@ for d in ${CANDIDATES}; do
 done
 # NVIDIA GPUs: --nv makes the host's driver and devices visible inside the
 # container. Decided here, at each start, because the same launcher runs on
-# CPU nodes (where --nv only warns) and GPU nodes. LEXICHRON_NV=1 forces it
-# on, LEXICHRON_NV=0 off. Without a GPU, JAX is told to use the CPU (unless
-# JAX_PLATFORMS is already set), so it does not print a CUDA traceback each
-# time it starts while looking for one.
+# CPU nodes (where --nv only warns) and GPU nodes, and on GPU nodes in jobs
+# that were given none of the GPUs (the driver is there, nvidia-smi lists no
+# device). LEXICHRON_NV=1 forces it on, LEXICHRON_NV=0 off. Without a GPU,
+# JAX is told to use the CPU (unless JAX_PLATFORMS is already set), so it
+# does not print a CUDA traceback each time it starts while looking for one.
 nv=""
 case "\${LEXICHRON_NV:-auto}" in
   1) nv=" --nv" ;;
   0) ;;
-  *) [ -e /dev/nvidiactl ] && nv=" --nv" ;;
+  *) if [ -e /dev/nvidiactl ]; then
+       if command -v nvidia-smi >/dev/null 2>&1; then
+         nvidia-smi -L 2>/dev/null | grep -q '^GPU ' && nv=" --nv"
+       else
+         nv=" --nv"
+       fi
+     fi ;;
 esac
 [ -n "\$nv" ] || [ -n "\${JAX_PLATFORMS:-}" ] || nv=" --env JAX_PLATFORMS=cpu"
 runtime=apptainer

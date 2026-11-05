@@ -96,9 +96,11 @@ From the repository root, on a machine with Apptainer and root or fakeroot:
   has no GPU, so the build checks the CPU backend, double precision and that
   the CUDA plugin is installed; `tests/test_jax_stack.py` runs on whatever
   device is present. The launcher `register_kernel.sh` writes adds `--nv` when
-  the host has `/dev/nvidiactl` (checked at each start, since one launcher
-  serves CPU and GPU nodes), and otherwise sets `JAX_PLATFORMS=cpu` so JAX
-  does not print a CUDA traceback while looking for a GPU.
+  the host has `/dev/nvidiactl` and `nvidia-smi -L` lists a GPU (checked at
+  each start, since one launcher serves CPU nodes, GPU nodes and CPU jobs
+  that land on GPU nodes, which see the driver but no device), and otherwise
+  sets `JAX_PLATFORMS=cpu` so JAX does not print a CUDA traceback while
+  looking for a GPU.
 - The test suite in `tests/` is copied into the image and run by `apptainer
   test` during every CI build, so a failing test fails the build. Run it by
   hand with `apptainer exec lexichron.sif python -m pytest /opt/lexichron/tests`
