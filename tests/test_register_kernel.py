@@ -30,6 +30,8 @@ def launcher(tmp_path):
                JUPYTER_DATA_DIR=str(tmp_path / "jupyter"))
     env.pop("LEXICHRON_NV", None)
     env.pop("JAX_PLATFORMS", None)               # set when these tests are themselves started by a launcher
+    env.pop("BASH_ENV", None)                    # a cluster profile that puts the real apptainer back on PATH
+    env.pop("ENV", None)                         # in every non-interactive bash (see test_install_scripts)
     path = tmp_path / "host-python"
     subprocess.run(["bash", str(REGISTER), "--launcher", str(path),
                     "--env", "CMDSTAN=/x/cmdstan"],
