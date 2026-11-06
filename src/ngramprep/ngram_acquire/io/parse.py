@@ -6,22 +6,46 @@ from typing import Callable, List, Optional, Tuple, TypedDict
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["YearFreq", "NgramRecord", "parse_line"]
+__all__ = ["YearFreq", "NgramRecord", "parse_line", "prepare_bigrams"]
 
 
-def _combine_bigrams_in_ngram(ngram_text: str, combined_bigrams: set) -> str:
+def prepare_bigrams(bigrams, case_sensitive: bool = False) -> Optional[frozenset]:
+    """The set of word pairs to combine, as the parser wants it: each entry
+    two words joined by one space, lowercased unless matching is
+    case-sensitive. None for no combining. An entry that is not two words
+    could never match, so it is refused rather than silently ignored."""
+    if not bigrams:
+        return None
+    out = set()
+    for entry in bigrams:
+        words = str(entry).split()
+        if len(words) != 2:
+            raise ValueError(f"a combined bigram must be two words separated by a space, not {entry!r}")
+        pair = " ".join(words)
+        out.add(pair if case_sensitive else pair.lower())
+    return frozenset(out)
+
+
+def _combine_bigrams_in_ngram(ngram_text: str, combined_bigrams, case_sensitive: bool = False) -> str:
     """
     Replace consecutive token pairs matching combined_bigrams with hyphenated versions.
 
-    Scans the n-gram tokens from left to right, looking for consecutive pairs
-    that match entries in combined_bigrams. When found, replaces the pair with
-    a hyphenated version. For POS-tagged data, strips tags before matching but
-    preserves them in the output.
+    Scans the n-gram tokens (split on single spaces, as the tagged/untagged
+    filter does) from left to right, looking for consecutive pairs that match
+    entries in combined_bigrams. When found, replaces the pair with a
+    hyphenated version. For POS-tagged data, strips tags before matching but
+    preserves the first token's tag in the output. Matching ignores case
+    unless ``case_sensitive``; the output keeps the tokens' own case, so a
+    later lowercasing (the filter stage) folds the variants together and a
+    project that keeps case keeps it. ``combined_bigrams`` is as
+    :func:`prepare_bigrams` returns it (lowercased when matching ignores
+    case).
 
     Args:
         ngram_text: Space-separated n-gram tokens (e.g., "the working class in america")
                    or POS-tagged tokens (e.g., "the_DET working_VERB class_NOUN in_ADP america_PROPN")
         combined_bigrams: Set of bigrams to combine (e.g., {"working class"})
+        case_sensitive: Match the pair's case exactly
 
     Returns:
         Modified n-gram text with bigrams hyphenated (e.g., "the working-class in america")
@@ -30,46 +54,36 @@ def _combine_bigrams_in_ngram(ngram_text: str, combined_bigrams: set) -> str:
     Examples:
         >>> _combine_bigrams_in_ngram("the working class in america", {"working class"})
         'the working-class in america'
+        >>> _combine_bigrams_in_ngram("The Working Class", {"working class"})
+        'The Working-Class'
         >>> _combine_bigrams_in_ngram("lower class working class", {"lower class", "working class"})
         'lower-class working-class'
         >>> _combine_bigrams_in_ngram("the_DET working_VERB class_NOUN", {"working class"})
         'the_DET working-class_VERB'
     """
-    tokens = ngram_text.split()
-
-    # Scan for consecutive pairs matching combined_bigrams
+    tokens = ngram_text.split(" ")
     i = 0
     result_tokens = []
-
     while i < len(tokens):
-        # Check if we have at least 2 tokens remaining
         if i + 1 < len(tokens):
-            # Strip POS tags for matching (if present)
-            # POS tags are indicated by underscore suffix (e.g., "working_VERB")
             token1 = tokens[i]
-            token2 = tokens[i+1]
-
-            # Extract base forms (without POS tags) for matching
+            token2 = tokens[i + 1]
+            # the base forms, without the POS tag an underscore introduces
             base1 = token1.rsplit('_', 1)[0] if '_' in token1 else token1
             base2 = token2.rsplit('_', 1)[0] if '_' in token2 else token2
-
-            # Form potential bigram from base forms
             bigram = f"{base1} {base2}"
-
-            # If bigram matches, combine and skip next token
+            if not case_sensitive:
+                bigram = bigram.lower()
             if bigram in combined_bigrams:
-                # Preserve POS tag from first token if present
+                # the first token's tag survives; the second's is dropped
                 if '_' in token1:
                     result_tokens.append(f"{base1}-{base2}_{token1.rsplit('_', 1)[1]}")
                 else:
                     result_tokens.append(f"{base1}-{base2}")
-                i += 2  # Skip both tokens
+                i += 2
                 continue
-
-        # No match, keep token as-is
         result_tokens.append(tokens[i])
         i += 1
-
     return " ".join(result_tokens)
 
 
@@ -90,6 +104,7 @@ def parse_line(
         *,
         filter_pred: Optional[Callable[[str], bool]] = None,
         combined_bigrams: Optional[set] = None,
+        bigram_case_sensitive: bool = False,
 ) -> Tuple[Optional[str], Optional[NgramRecord]]:
     """
     Parse Google Ngrams line format into structured data.
@@ -139,7 +154,7 @@ def parse_line(
 
     # Apply combined bigrams transformation: collapse matching consecutive tokens
     if combined_bigrams is not None:
-        ngram_text = _combine_bigrams_in_ngram(ngram_text, combined_bigrams)
+        ngram_text = _combine_bigrams_in_ngram(ngram_text, combined_bigrams, bigram_case_sensitive)
 
     # Apply filter before parsing frequency data (optimization)
     if filter_pred is not None and not filter_pred(ngram_text):

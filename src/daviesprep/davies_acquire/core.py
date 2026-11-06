@@ -39,6 +39,7 @@ def process_single_file(
     bin_size: int = 1,
     corpus_path: Optional[Path] = None,
     chunk_on: str = "sentence",
+    bigram_case_sensitive: bool = False,
 ) -> Tuple[str, int, int, Dict, Dict[str, int], Set[int]]:
     """
     Process a single text file: read, tokenize, accumulate sentence counts.
@@ -117,7 +118,8 @@ def process_single_file(
                 binned_year = (doc_year // bin_size) * bin_size
 
                 # Tokenize into sentences (with optional bigram combination)
-                for tokens in tokenize_sentences(text, combined_bigrams=combined_bigrams, chunk_on=chunk_on):
+                for tokens in tokenize_sentences(text, combined_bigrams=combined_bigrams, chunk_on=chunk_on,
+                                                 bigram_case_sensitive=bigram_case_sensitive):
                     sentence_str = ' '.join(tokens)
 
                     # Include genre in key: (genre, year, sentence_str)
@@ -213,6 +215,7 @@ def ingest_davies_corpus(
     genre_focus: Optional[List[str]] = None,
     bin_size: int = 1,
     chunk_on: str = "sentence",
+    bigram_case_sensitive: bool = False,
 ) -> None:
     """
     Main pipeline: read Davies corpus text files and ingest into RocksDB.
@@ -245,7 +248,9 @@ def ingest_davies_corpus(
         compact_after: If True, perform full compaction after ingestion
         combined_bigrams: Optional set of bigrams to combine with hyphens during tokenization
                          (e.g., {"working class", "middle class"}). Consecutive tokens matching
-                         these bigrams will be replaced with hyphenated versions (e.g., "working-class")
+                         these bigrams will be replaced with hyphenated versions (e.g., "working-class");
+                         a pair matches whatever its capitalization unless bigram_case_sensitive
+        bigram_case_sensitive: Match the pairs' case exactly
         genre_focus: Optional list of genres to ingest (e.g., ["fic", "mag"]). If None, ingest all
                     genres with genre-prefixed keys. If specified, only ingest those genres and use
                     year-only keys for direct training compatibility.
@@ -394,7 +399,7 @@ def ingest_davies_corpus(
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 # Submit all files for processing with worker IDs
                 future_to_file = {
-                    executor.submit(process_single_file, text_file, year, worker_id, combined_bigrams, genre_focus, bin_size, corpus_path, chunk_on): (text_file, year)
+                    executor.submit(process_single_file, text_file, year, worker_id, combined_bigrams, genre_focus, bin_size, corpus_path, chunk_on, bigram_case_sensitive): (text_file, year)
                     for worker_id, (text_file, year) in enumerate(file_year_pairs)
                 }
 

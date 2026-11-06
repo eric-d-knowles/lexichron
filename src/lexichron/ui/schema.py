@@ -26,7 +26,7 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
-            "compact_after_ingest",
+            "compact_after_ingest", "bigram_case_sensitive",
             # filter
             "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path",
@@ -97,6 +97,7 @@ LABELS: Dict[str, str] = {
     "workers": "Workers",
     "overwrite_db": "Start fresh",
     "combined_bigrams": "Combine bigrams",
+    "bigram_case_sensitive": "Match bigram case",
     "random_seed": "Shuffle seed",
     "open_type": "Database profile",
     "compact_after_ingest": "Compact when done",
@@ -182,7 +183,10 @@ HELP: Dict[str, str] = {
                 "the job's CPU count automatically."),
     "overwrite_db": "Delete an existing database first. Off = resume it, skipping files already done.",
     "combined_bigrams": ("Word pairs to treat as one hyphenated token, comma-separated: "
-                         "working class, middle class  ->  working-class, middle-class."),
+                         "working class, middle class  ->  working-class, middle-class. A pair matches whatever "
+                         "its capitalization in the data; the combined token keeps the capitalization it had."),
+    "bigram_case_sensitive": ("Combine a pair only when its capitalization matches the list exactly "
+                              "(off: Working Class and working class both combine)."),
     "random_seed": "Seed for shuffling the download order (blank = no shuffle).",
     "open_type": "RocksDB profile. Leave at write:packed24 unless you know why.",
     "compact_after_ingest": "Compact the database when done (recommended).",

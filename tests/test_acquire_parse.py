@@ -3,7 +3,7 @@ import struct
 
 import pytest
 
-from ngramprep.ngram_acquire.io.parse import parse_line, _combine_bigrams_in_ngram
+from ngramprep.ngram_acquire.io.parse import parse_line, prepare_bigrams, _combine_bigrams_in_ngram
 from ngramprep.ngram_acquire.worker import merge_packed_records, _pack_record
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
 
@@ -84,3 +84,36 @@ def test_pack_then_merge_matches_hand_sum():
     _, r2 = parse_line("k\t1990,20,5")
     merged = merge_packed_records(_pack_record(r1), _pack_record(r2))
     assert unpack(merged) == [(1990, 520, 85), (2000, 600, 90)]
+
+
+# --- case ------------------------------------------------------------------
+
+def test_pairs_match_whatever_their_case_and_keep_it():
+    s = prepare_bigrams({"working class"})
+    assert _combine_bigrams_in_ngram("The Working Class in", s) == "The Working-Class in"
+    assert _combine_bigrams_in_ngram("WORKING_NOUN CLASS_NOUN", s) == "WORKING-CLASS_NOUN"
+    assert _combine_bigrams_in_ngram("Working class", s) == "Working-class"
+    # the list's own case does not matter either
+    assert prepare_bigrams({"Working  Class"}) == frozenset({"working class"})
+    k, _ = parse_line("Working_NOUN Class_NOUN in_ADP\t1990,1,1", combined_bigrams=s)
+    assert k == "Working-Class_NOUN in_ADP"
+
+
+def test_case_sensitive_matching_is_a_switch():
+    s = prepare_bigrams({"Working Class"}, case_sensitive=True)
+    assert s == frozenset({"Working Class"})
+    assert _combine_bigrams_in_ngram("The Working Class in", s, case_sensitive=True) == "The Working-Class in"
+    assert _combine_bigrams_in_ngram("the working class in", s, case_sensitive=True) == "the working class in"
+    k, _ = parse_line("working class\t1990,1,1", combined_bigrams=s, bigram_case_sensitive=True)
+    assert k == "working class"
+
+
+def test_prepare_refuses_a_non_pair_and_combining_leaves_other_spacing_alone():
+    with pytest.raises(ValueError, match="two words"):
+        prepare_bigrams({"working-class"})
+    with pytest.raises(ValueError, match="two words"):
+        prepare_bigrams({"the working class"})
+    assert prepare_bigrams(None) is None and prepare_bigrams(set()) is None
+    s = prepare_bigrams(["working class"])
+    assert _combine_bigrams_in_ngram("a  b", s) == "a  b"          # no match: the text stands, double space and all
+    assert _combine_bigrams_in_ngram("x", s) == "x"

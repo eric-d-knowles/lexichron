@@ -11,18 +11,21 @@ __all__ = [
 ]
 
 
-def combine_bigrams_in_tokens(tokens: List[str], combined_bigrams: Set[str]) -> List[str]:
+def combine_bigrams_in_tokens(tokens: List[str], combined_bigrams: Set[str],
+                              case_sensitive: bool = False) -> List[str]:
     """
     Replace consecutive token pairs matching combined_bigrams with hyphenated versions.
 
     Scans the token list from left to right, looking for consecutive pairs
-    that match entries in combined_bigrams (case-insensitive). When found,
-    replaces the pair with a hyphenated version.
+    that match entries in combined_bigrams, ignoring case unless
+    ``case_sensitive``. When found, replaces the pair with a hyphenated
+    version that keeps the tokens' own case.
 
     Args:
         tokens: List of tokens (e.g., ["the", "working", "class", "family"])
-        combined_bigrams: Set of bigrams to combine (e.g., {"working class", "middle class"})
-                         Note: Bigrams in the set should be lowercase with spaces
+        combined_bigrams: Set of bigrams to combine (e.g., {"working class", "middle class"}),
+                         lowercase unless matching is case-sensitive
+        case_sensitive: Match the pair's case exactly
 
     Returns:
         Modified token list with bigrams hyphenated (e.g., ["the", "working-class", "family"])
@@ -42,8 +45,9 @@ def combine_bigrams_in_tokens(tokens: List[str], combined_bigrams: Set[str]) -> 
     while i < len(tokens):
         # Check if we have at least 2 tokens remaining
         if i + 1 < len(tokens):
-            # Form potential bigram (lowercase for matching)
-            bigram = f"{tokens[i].lower()} {tokens[i+1].lower()}"
+            bigram = f"{tokens[i]} {tokens[i+1]}"
+            if not case_sensitive:
+                bigram = bigram.lower()
 
             # If bigram matches, combine with hyphen
             if bigram in combined_bigrams:
@@ -61,7 +65,8 @@ def combine_bigrams_in_tokens(tokens: List[str], combined_bigrams: Set[str]) -> 
 
 def simple_sentence_tokenizer(
     text: str,
-    combined_bigrams: Optional[Set[str]] = None
+    combined_bigrams: Optional[Set[str]] = None,
+    bigram_case_sensitive: bool = False,
 ) -> Iterator[List[str]]:
     """
     Simple sentence tokenizer for Davies corpus text.
@@ -97,7 +102,8 @@ def simple_sentence_tokenizer(
             current_sentence += part
             # Yield the sentence
             if current_sentence.strip():
-                tokens = tokenize_sentence(current_sentence, combined_bigrams=combined_bigrams)
+                tokens = tokenize_sentence(current_sentence, combined_bigrams=combined_bigrams,
+                                           bigram_case_sensitive=bigram_case_sensitive)
                 if len(tokens) >= 2:  # Require at least 2 tokens
                     yield tokens
             current_sentence = ""
@@ -107,14 +113,16 @@ def simple_sentence_tokenizer(
 
     # Don't forget the last sentence if it doesn't end with punctuation
     if current_sentence.strip():
-        tokens = tokenize_sentence(current_sentence, combined_bigrams=combined_bigrams)
+        tokens = tokenize_sentence(current_sentence, combined_bigrams=combined_bigrams,
+                                           bigram_case_sensitive=bigram_case_sensitive)
         if len(tokens) >= 2:
             yield tokens
 
 
 def tokenize_sentence(
     sentence: str,
-    combined_bigrams: Optional[Set[str]] = None
+    combined_bigrams: Optional[Set[str]] = None,
+    bigram_case_sensitive: bool = False,
 ) -> List[str]:
     """
     Tokenize a single sentence into words.
@@ -148,7 +156,7 @@ def tokenize_sentence(
 
     # Apply bigram combination if specified
     if combined_bigrams:
-        tokens = combine_bigrams_in_tokens(tokens, combined_bigrams)
+        tokens = combine_bigrams_in_tokens(tokens, combined_bigrams, bigram_case_sensitive)
 
     return tokens
 
@@ -158,6 +166,7 @@ def tokenize_sentences(
     min_tokens: int = 2,
     combined_bigrams: Optional[Set[str]] = None,
     chunk_on: str = "sentence",
+    bigram_case_sensitive: bool = False,
 ) -> Iterator[List[str]]:
     """
     Tokenize text into sentences with word tokens.
@@ -171,6 +180,8 @@ def tokenize_sentences(
                          (e.g., {"working class", "middle class"})
         chunk_on: Chunking mode. "sentence" (default) splits on sentence-ending punctuation;
               "scene" or "document" keeps the entire chunk intact (no punctuation-based splitting).
+        bigram_case_sensitive: Match the pairs' case exactly (default: a pair matches whatever
+              its capitalization; the set is then expected in lowercase)
 
     Yields:
         Lists of tokens for each sentence or chunk (depending on chunk_on)
@@ -186,12 +197,14 @@ def tokenize_sentences(
     mode = (chunk_on or "sentence").lower()
 
     if mode in ("scene", "document"):
-        tokens = tokenize_sentence(text, combined_bigrams=combined_bigrams)
+        tokens = tokenize_sentence(text, combined_bigrams=combined_bigrams,
+                                   bigram_case_sensitive=bigram_case_sensitive)
         if len(tokens) >= min_tokens:
             yield tokens
         return
 
     # Default: sentence-level splitting on . ! ?
-    for tokens in simple_sentence_tokenizer(text, combined_bigrams=combined_bigrams):
+    for tokens in simple_sentence_tokenizer(text, combined_bigrams=combined_bigrams,
+                                            bigram_case_sensitive=bigram_case_sensitive):
         if len(tokens) >= min_tokens:
             yield tokens

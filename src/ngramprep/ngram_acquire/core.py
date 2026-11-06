@@ -21,6 +21,7 @@ from ngramprep.ngram_acquire.executor import process_files
 from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES
 from ngramprep.ngram_acquire.reporter import print_pipeline_header, print_final_summary
+from ngramprep.ngram_acquire.io.parse import prepare_bigrams
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
 from ngramprep.ngram_acquire.utils.cleanup import safe_db_cleanup
 from ngramprep.ngram_acquire.db.build_path import build_db_path
@@ -59,6 +60,7 @@ def download_and_ingest_to_rocksdb(
         compact_after_ingest: bool = True,
         archive_path_stub: Optional[str] = None,
         combined_bigrams: Optional[set] = None,
+        bigram_case_sensitive: bool = False,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         spool_dir: Optional[str] = None,
         progress_path: Optional[str] = None,
@@ -96,7 +98,11 @@ def download_and_ingest_to_rocksdb(
             compaction is what folds those files together and applies pending
             merges; skip it only for a quick partial run.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
-        combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"})
+        combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"}).
+            A pair matches whatever its capitalization in the data ("Working Class", "working class"),
+            and the combined token keeps the capitalization it had, so the filter stage's lowercasing
+            folds the variants together.
+        bigram_case_sensitive: Match the pairs' case exactly instead (only "working class" as written).
         chunk_entries: Entries per spooled chunk. Workers stream parsed entries
             to chunk files on disk instead of holding a whole shard in memory;
             peak memory is roughly (workers + 1) x one chunk of packed values.
@@ -201,6 +207,7 @@ def download_and_ingest_to_rocksdb(
         # Configure executor (always use processes for better parallelism)
         executor_class: Type = ProcessPoolExecutor
         filter_pred = make_ngram_type_predicate(ngram_type)
+        combined_bigrams = prepare_bigrams(combined_bigrams, bigram_case_sensitive)   # refuses a non-pair early
 
         # Print run summary
         print_pipeline_header(
@@ -228,6 +235,7 @@ def download_and_ingest_to_rocksdb(
             db=db,
             filter_pred=filter_pred,
             combined_bigrams=combined_bigrams,
+            bigram_case_sensitive=bigram_case_sensitive,
             spool_dir=spool_dir,
             chunk_entries=chunk_entries,
             progress=progress,

@@ -29,6 +29,7 @@ def process_files(
         *,
         filter_pred: Optional[Callable[[str], bool]] = None,
         combined_bigrams: Optional[set] = None,
+        bigram_case_sensitive: bool = False,
         spool_dir: Optional[str] = None,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         write_batch_size: Optional[int] = None,  # accepted for compatibility; chunk_entries governs
@@ -50,6 +51,7 @@ def process_files(
         db: RocksDB database handle
         filter_pred: Optional predicate to filter ngrams by text
         combined_bigrams: Optional set of bigrams to combine with hyphens
+        bigram_case_sensitive: Match those pairs' case exactly
         spool_dir: Directory for chunk files (default: a fresh temp directory)
         chunk_entries: Entries per chunk file
         write_batch_size: Ignored (kept so older callers do not break)
@@ -123,6 +125,7 @@ def process_files(
                             filter_pred,
                             log_file_path,
                             combined_bigrams=combined_bigrams,
+                            bigram_case_sensitive=bigram_case_sensitive,
                             spool_dir=spool_path,
                             chunk_entries=chunk_entries,
                         )
