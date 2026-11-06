@@ -129,6 +129,14 @@ def download_and_ingest_to_rocksdb(
 
     start_time = datetime.now()
 
+    # The pair list is checked before anything is downloaded or created: an
+    # entry that is not two words could never match, and a 1-gram file has
+    # one token per line, so there is never a pair to combine.
+    combined_bigrams = prepare_bigrams(combined_bigrams, bigram_case_sensitive)
+    if combined_bigrams and int(ngram_size) == 1:
+        raise ValueError("combined_bigrams cannot apply to 1-grams: each line holds one token, so no pair "
+                         "ever occurs. Combine pairs when acquiring 2-grams or larger, or clear the list.")
+
     # Build full database path from stub
     db_path = build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
 
@@ -207,7 +215,6 @@ def download_and_ingest_to_rocksdb(
         # Configure executor (always use processes for better parallelism)
         executor_class: Type = ProcessPoolExecutor
         filter_pred = make_ngram_type_predicate(ngram_type)
-        combined_bigrams = prepare_bigrams(combined_bigrams, bigram_case_sensitive)   # refuses a non-pair early
 
         # Print run summary
         print_pipeline_header(
