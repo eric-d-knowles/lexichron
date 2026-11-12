@@ -10,9 +10,9 @@ from __future__ import annotations
 import os
 import shlex
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-__all__ = ["stage_command", "write_sbatch", "ARRAY_STAGES", "array_size"]
+__all__ = ["stage_command", "container_runtime", "write_sbatch", "ARRAY_STAGES", "RUNTIMES", "array_size"]
 
 from lexichron.config import ConfigError
 from lexichron.slurm_settings import ARRAY_STAGES  # stages whose years split over a job array (re-exported)
@@ -29,21 +29,68 @@ def array_size(stage: str, slurm: Dict[str, Any]) -> int:
         return 1
 
 
+RUNTIMES = ("apptainer", "singularity")
+
+
+def container_runtime() -> Tuple[Optional[str], Optional[str]]:
+    """(runtime, image) when this process runs inside the lexichron image:
+    the command that started it, as far as the environment tells. Apptainer
+    sets both APPTAINER_CONTAINER and SINGULARITY_CONTAINER; Singularity
+    sets only the latter. (None, None) outside an image."""
+    image = os.environ.get("APPTAINER_CONTAINER")
+    if image:
+        return "apptainer", image
+    image = os.environ.get("SINGULARITY_CONTAINER")
+    if image:
+        return "singularity", image
+    return None, None
+
+
 def stage_command(project_yaml: Path, stage: str) -> List[str]:
     """How a batch job should invoke the stage.
 
     Prefer the project's host launcher (written by ``new-project``): it runs
     inside the image with the project's environment and bind mounts. Fall
-    back to the image we are running in, then to a bare ``lexichron`` on PATH.
+    back to the image we are running in, with the runtime that started it
+    (``write_sbatch`` lets the job substitute whichever runtime it finds),
+    then to a bare ``lexichron`` on PATH.
     """
     project_dir = project_yaml.parent
     launcher = project_dir / ".venv" / "host-python"
     if launcher.exists():
         return [str(launcher), "-m", "lexichron.cli", stage, str(project_yaml)]
-    image = os.environ.get("APPTAINER_CONTAINER") or os.environ.get("SINGULARITY_CONTAINER")
+    runtime, image = container_runtime()
     if image:
-        return ["apptainer", "exec", image, "lexichron", stage, str(project_yaml)]
+        return [runtime, "exec", image, "lexichron", stage, str(project_yaml)]
     return ["lexichron", stage, str(project_yaml)]
+
+
+def _runtime_preamble(preferred: str) -> List[str]:
+    """Shell lines that set ``$runtime`` to a container runtime the job can
+    run: the one that started the UI, else whichever of apptainer and
+    singularity the node has, else one its modules provide. The node a job
+    lands on need not have the submitting node's PATH, and a cluster may
+    call the runtime by either name."""
+    return [
+        "# The container runtime: the one the UI ran under, else whichever this node has",
+        f"runtime={preferred}",
+        'if ! command -v "$runtime" >/dev/null 2>&1; then',
+        f'  for c in {" ".join(RUNTIMES)}; do',
+        '    if command -v "$c" >/dev/null 2>&1; then runtime=$c; break; fi',
+        "  done",
+        "fi",
+        'if ! command -v "$runtime" >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then',
+        f'  for m in {" ".join(RUNTIMES)}; do',
+        '    if module load "$m" >/dev/null 2>&1 && command -v "$m" >/dev/null 2>&1; then runtime=$m; break; fi',
+        "  done",
+        "fi",
+        'if ! command -v "$runtime" >/dev/null 2>&1; then',
+        '  echo "lexichron: neither apptainer nor singularity is available in this job; add the module load'
+        ' your cluster needs to this script" >&2',
+        "  exit 127",
+        "fi",
+        "",
+    ]
 
 
 def write_sbatch(
@@ -111,6 +158,9 @@ def write_sbatch(
         "",
     ]
     cmd = stage_command(project_yaml, stage)
+    if cmd[0] in RUNTIMES:
+        lines += _runtime_preamble(cmd[0])
+        cmd[0] = '"$runtime"'
     # Let the job's CPU count drive the worker count unless the project sets it.
     sets = list(extra_sets or [])
     if stage in ("acquire", "filter", "tune", "train", "measure") and not any(s.startswith(f"{stage}.workers=") for s in sets):
@@ -124,7 +174,7 @@ def write_sbatch(
         cmd += ["--set", s]
     if assume_yes:
         cmd.append("--yes")
-    lines.append(" ".join(c if "=$SLURM_" in c else shlex.quote(c) for c in cmd))
+    lines.append(" ".join(c if "=$SLURM_" in c or c == '"$runtime"' else shlex.quote(c) for c in cmd))
     lines.append("")
     out.write_text("\n".join(lines))
     out.chmod(0o755)

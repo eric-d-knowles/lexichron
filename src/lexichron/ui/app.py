@@ -1621,7 +1621,7 @@ class LexichronApp(App):
         on the job's PATH (a development environment, not the image)."""
         cmd = stage_command(dest or Path(SETTINGS_FILENAME), self.stage)
         if cmd[0] == "apptainer":
-            text = f"Jobs run in the image {cmd[2]}"
+            text = f"Jobs run in the image {cmd[2]} with {cmd[0]}, or whichever runtime the job's node has"
         elif cmd[0] == "lexichron":
             text = ("Jobs run the 'lexichron' on the job's PATH (this environment, not the image); "
                     "for the image, start the UI with lexichron-ui.")

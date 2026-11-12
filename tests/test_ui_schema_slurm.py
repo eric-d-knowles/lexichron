@@ -69,6 +69,37 @@ def test_stage_command_falls_back_to_image(tmp_path, monkeypatch):
     assert stage_command(yaml_path, "acquire")[:3] == ["apptainer", "exec", "/img/lexichron.sif"]
     monkeypatch.delenv("APPTAINER_CONTAINER")
     assert stage_command(yaml_path, "acquire") == ["lexichron", "acquire", str(yaml_path)]
+    # Singularity sets only its own variable: the command names it, not apptainer
+    monkeypatch.setenv("SINGULARITY_CONTAINER", "/img/lexichron.sif")
+    assert stage_command(yaml_path, "acquire")[:3] == ["singularity", "exec", "/img/lexichron.sif"]
+
+
+def test_write_sbatch_lets_the_job_pick_its_container_runtime(tmp_path, monkeypatch):
+    """A UI started by singularity must not write a script that calls
+    apptainer (a cluster with one rarely has the other, and the job's node
+    need not have the submitting node's PATH): the script prefers the
+    runtime the UI ran under and falls back to whichever the job finds."""
+    yaml_path = tmp_path / "project.yaml"; yaml_path.write_text("corpus: {}\n")
+    monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
+    monkeypatch.setenv("SINGULARITY_CONTAINER", "/img/lexichron.sif")
+    text = write_sbatch(yaml_path, "tune", {"account": "a", "cpus": 8, "mem": "8G", "time": "01:00:00"}).read_text()
+    assert "runtime=singularity\n" in text and 'for c in apptainer singularity; do' in text
+    assert "module load" in text and "exit 127" in text
+    assert '"$runtime" exec /img/lexichron.sif lexichron tune' in text
+    assert "apptainer exec" not in text and "singularity exec" not in text
+    # the script resolves the runtime at run time: with only a fake singularity on PATH it runs it
+    fake = tmp_path / "bin"; fake.mkdir()
+    (fake / "singularity").write_text('#!/bin/sh\necho "singularity $*"\n'); (fake / "singularity").chmod(0o755)
+    import subprocess
+    body = text.replace("set -euo pipefail", "set -eo pipefail")     # the test's env lacks the Slurm variables
+    out = subprocess.run(["bash", "-c", body], env={"PATH": f"{fake}:/usr/bin:/bin", "SLURM_CPUS_PER_TASK": "8"},
+                         capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip().startswith("singularity exec /img/lexichron.sif lexichron tune")
+    monkeypatch.delenv("SINGULARITY_CONTAINER")
+    monkeypatch.setenv("APPTAINER_CONTAINER", "/img/lexichron.sif")
+    text = write_sbatch(yaml_path, "tune", {"account": "a", "cpus": 8, "mem": "8G", "time": "01:00:00"}).read_text()
+    assert "runtime=apptainer\n" in text
 
 
 def test_slurm_fields_have_required_account():

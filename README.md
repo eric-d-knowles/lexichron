@@ -133,6 +133,9 @@ The commands below are written for Apptainer. On a cluster that has
 Singularity instead (NYUAD's Jubail, for one), type `singularity` where
 they say `apptainer` — the rest of each command is the same — or put
 `alias apptainer=singularity` in your `~/.bashrc` and use them as written.
+The batch scripts the UI's Submit tab writes need no such care: a script
+runs the image with the runtime that started the UI, or, failing that,
+whichever of the two the job's node has or can `module load`.
 The `lexichron` and `lexichron-ui` commands the installer writes, and the
 kernel launchers below, find whichever of the two is available by
 themselves, as long as it is on your PATH (load its module in the shell or
@@ -414,8 +417,9 @@ starting: .../5grams_pivoted.db (412 GB in 1,204 files)`) and asks. A batch
 job has nobody to ask, so it needs `--yes` and otherwise stops right there,
 having deleted nothing; the UI adds `--yes` to the scripts it writes once you
 have confirmed in its dialog. Inside the
-container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml` (or a
-project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
+container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml`
+(`singularity exec` on a Singularity cluster, or a project's
+`.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
 
 ### The filter stage
 
