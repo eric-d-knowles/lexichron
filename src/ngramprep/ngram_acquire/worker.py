@@ -71,7 +71,7 @@ def process_and_ingest_file(
     *,
     session: Optional[requests.Session] = None,
     combined_multigrams: Optional[set] = None,
-    multigram_case_sensitive: bool = False,
+    combined_multigrams_case: Optional[set] = None,
     max_attempts: int = 3,
     spool_dir: Optional[str] = None,
     chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
@@ -91,9 +91,9 @@ def process_and_ingest_file(
         filter_pred: Optional predicate to filter ngrams by text
         log_file_path: Optional path to log file for worker output
         session: Optional requests.Session for connection pooling
-        combined_multigrams: Optional set of word sequences to combine with hyphens
-        multigram_case_sensitive: Match those sequences' case exactly (default: a
-            sequence matches whatever its capitalization; the tokens keep theirs)
+        combined_multigrams: Optional word sequences to combine (matched whatever
+            their capitalization), or a prepared Multigrams
+        combined_multigrams_case: Sequences that must match as written
         max_attempts: How many times to attempt the whole download-and-parse
             of this file. A connection dropped part-way through a stream is
             retried from the beginning, discarding partial results (including
@@ -161,11 +161,12 @@ def process_and_ingest_file(
     # Use the compiled parser when the filter is one it knows; it hands
     # anything unusual back to parse_line. The sequences to combine are
     # normalized once here (the entry point did it already; this is idempotent).
-    combined_multigrams = prepare_multigrams(combined_multigrams, multigram_case_sensitive)
+    combined_multigrams = prepare_multigrams(combined_multigrams, exact=combined_multigrams_case)
     fast_mode = _FAST_MODES.get(getattr(filter_pred, "ngram_type", None))
     fast = _parse_packed is not None and fast_mode is not None
     fast_suffixes = tuple(s.encode("ascii") for s in getattr(filter_pred, "suffixes", ())) if fast else ()
-    fast_multigrams, fast_firsts, fast_words = _multigram_tables(combined_multigrams) if fast else (None, None, 0)
+    fast_folded, fast_exact, fast_firsts, fast_words = _multigram_tables(combined_multigrams) if fast \
+        else (None, None, None, 0)
     # Tell the parent (which reports progress) that a worker has this file.
     try:
         open(os.path.join(spool_root, f"{file_tag}.started"), "w").close()
@@ -202,8 +203,8 @@ def process_and_ingest_file(
                                 continue
                             lines_processed += 1
                             if fast:
-                                hit = _parse_packed(raw, fast_mode, fast_suffixes, fast_multigrams, fast_firsts,
-                                                    multigram_case_sensitive, fast_words)
+                                hit = _parse_packed(raw, fast_mode, fast_suffixes, fast_folded, fast_exact,
+                                                    fast_firsts, fast_words)
                                 if hit is not _FALLBACK:
                                     if hit is not None:
                                         writer.add(hit[0], hit[1])
@@ -213,7 +214,6 @@ def process_and_ingest_file(
                                     raw.decode("utf-8"),
                                     filter_pred=filter_pred,
                                     combined_multigrams=combined_multigrams,
-                                    multigram_case_sensitive=multigram_case_sensitive,
                                 )
                                 if key and rec:
                                     # Repeated keys within a chunk (e.g. tagged

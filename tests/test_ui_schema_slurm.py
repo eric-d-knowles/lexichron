@@ -23,9 +23,8 @@ def test_sections_cover_every_visible_argument():
     # docstring help is the fallback for arguments without a HELP entry
     assert kinds["file_range"] == "range"
     assert {f.name for f in stage.fields if f.advanced} == {
-        "spool_dir", "chunk_entries", "random_seed", "compact_after_ingest",
-        "multigram_case_sensitive"}                                             # open_type is hidden
-    assert kinds["multigram_case_sensitive"] == "bool"
+            "spool_dir", "chunk_entries", "random_seed", "compact_after_ingest"}   # open_type is hidden
+    assert "combined_multigrams_case" not in kinds                            # edited with combined_multigrams
     assert next(f for f in corpus.fields if f.name == "archive_path_stub").advanced
 
 

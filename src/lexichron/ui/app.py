@@ -139,8 +139,6 @@ def _from_widget(field: Field, raw: Any) -> Any:
         return float(str(raw).strip())
     if field.kind == "grid":
         return list(raw) if isinstance(raw, (list, tuple)) else [raw]
-    if field.kind == "multigrams":
-        return list(raw) or None
     if field.kind == "list":
         items = [p.strip() for p in str(raw).split(",") if p.strip()]
         conv = []
@@ -462,35 +460,40 @@ MULTIGRAM_WORDS = 5          # fields per sequence: the longest n-gram Google pu
 
 
 def multigram_rows(entries: List[Any]) -> List[Tuple[List[str], str]]:
-    """Settings entries -> (words, target text) rows for the editor; a
-    target's hyphens are shown as the spaces the user typed."""
+    """Settings entries -> (words, target token) rows for the editor; the
+    target is the token the run becomes, hyphens and all (blank: the
+    default, the words joined by hyphens)."""
     rows = []
     for entry in entries or []:
         words, target = parse_multigram_entry(entry)
-        rows.append((words, (target or "").replace("-", " ")))
+        rows.append((words, target or ""))
     return rows
 
 
 def multigram_entry(words: List[str], target: str) -> str:
     """An editor row -> its settings entry: the words, and ``=> target``
-    when the target is not the default."""
+    when the target is not the default (the words joined by hyphens)."""
     words = [w for w in words if w]
     text = " ".join(words)
-    target = " ".join(target.split())
-    if target and target != " ".join(words):
+    target = "-".join(target.split())
+    # the default keeps the data's own capitalization, so a target that is the
+    # words joined by hyphens in any case is the default
+    if target and target.lower() != "-".join(words).lower():
         return f"{text} {TARGET_ARROW} {target}"
     return text
 
 
 class MultigramRow(Horizontal):
-    """One sequence: five word boxes, an arrow, and the token it becomes,
-    which follows the words until the user edits it."""
+    """One sequence: five word boxes, an arrow, the token it becomes (which
+    follows the words, joined by hyphens, until the user edits it), and
+    whether the sequence must match the data's capitalization."""
 
-    def __init__(self, words: List[str], target: str, **kwargs) -> None:
+    def __init__(self, words: List[str], target: str, match_case: bool = False, **kwargs) -> None:
         super().__init__(classes="mg-row", **kwargs)
         self._words = (list(words) + [""] * MULTIGRAM_WORDS)[:MULTIGRAM_WORDS]
         self._target = target
-        self.auto = not target or target == " ".join(w for w in words if w)
+        self._case = match_case
+        self.auto = not target or target == "-".join(w for w in words if w)
         self._filling = False
 
     def compose(self) -> ComposeResult:
@@ -499,16 +502,21 @@ class MultigramRow(Horizontal):
         yield Static(TARGET_ARROW, classes="mg-arrow")
         yield Input(value=self._target if not self.auto else self.joined(), classes="mg-target", compact=True,
                     placeholder="(the words, hyphenated)")
+        yield Switch(value=self._case, classes="mg-case")
+        yield Label("Match case", classes="mg-case-label")
         yield Button("✕", classes="mg-remove", compact=True)
 
     def joined(self) -> str:
-        return " ".join(self.words())
+        return "-".join(self.words())
 
     def words(self) -> List[str]:
         return [w.value.strip() for w in self.query(".mg-word") if w.value.strip()]
 
     def target(self) -> str:
         return self.query_one(".mg-target", Input).value.strip()
+
+    def match_case(self) -> bool:
+        return bool(self.query_one(".mg-case", Switch).value)
 
     @on(Input.Changed, ".mg-word")
     def _word_changed(self) -> None:
@@ -528,13 +536,13 @@ class MultigramRow(Horizontal):
         self.remove()
 
 
-class MultigramEditor(ModalScreen[Optional[List[str]]]):
+class MultigramEditor(ModalScreen[Optional[List[Tuple[str, bool]]]]):
     """The sequences Acquire combines into single tokens, a row each.
-    Dismisses with the settings entries, or None on Cancel."""
+    Dismisses with (settings entry, match case) pairs, or None on Cancel."""
 
     DEFAULT_CSS = """
     MultigramEditor { align: center middle; }
-    MultigramEditor > Vertical { width: 110; height: auto; max-height: 90%; border: thick $accent;
+    MultigramEditor > Vertical { width: 130; height: auto; max-height: 90%; border: thick $accent;
                                  background: $surface; padding: 1 2; }
     MultigramEditor #mg-title { text-style: bold; color: $accent; }
     MultigramEditor #mg-note, MultigramEditor #mg-error { color: $text-muted; margin: 1 0; height: auto; }
@@ -544,13 +552,14 @@ class MultigramEditor(ModalScreen[Optional[List[str]]]):
     MultigramEditor .mg-word { width: 1fr; margin-right: 1; }
     MultigramEditor .mg-arrow { width: 4; content-align: center middle; }
     MultigramEditor .mg-target { width: 2fr; margin-right: 1; }
+    MultigramEditor .mg-case-label { width: 12; padding-left: 1; }
     MultigramEditor .mg-remove { min-width: 3; }
     MultigramEditor #mg-buttons { height: auto; align-horizontal: right; }
     MultigramEditor Button { margin-left: 1; }
     """
     BINDINGS = [("escape", "cancel", "Back")]
 
-    def __init__(self, entries: List[Any]) -> None:
+    def __init__(self, entries: List[Tuple[str, bool]]) -> None:
         super().__init__()
         self.entries = list(entries or [])
 
@@ -558,13 +567,16 @@ class MultigramEditor(ModalScreen[Optional[List[str]]]):
         with Vertical():
             yield Static("Combine multigrams", id="mg-title")
             yield Static("Each row is a run of up to five tokens, as Google's files tokenize them (A.I. is "
-                         "A . I .), and the one token it becomes. The right-hand box follows the words, joined "
-                         "by hyphens, until you type something else: human being -> human-being, "
-                         "A . I . -> A.I. Capitalization in the data does not matter; the token is written as "
-                         "you give it here.", id="mg-note")
+                         "A . I .), and the one token it becomes. The right-hand box shows that token: the words "
+                         "joined by hyphens until you type something else, so human being gives human-being and "
+                         "A . I . gives A-.-I-. unless you make it A.I. A sequence matches whatever its "
+                         "capitalization in the data unless its row says Match case; the token is written as you "
+                         "give it here.", id="mg-note")
             with VerticalScroll(id="mg-rows"):
-                for words, target in multigram_rows(self.entries) or [([], "")]:
-                    yield MultigramRow(words, target)
+                rows = [(words, target, match_case) for (entry, match_case) in self.entries
+                        for words, target in multigram_rows([entry])] or [([], "", False)]
+                for words, target, match_case in rows:
+                    yield MultigramRow(words, target, match_case)
             yield Static("", id="mg-error")
             with Horizontal(id="mg-buttons"):
                 yield Button("Add a sequence", id="mg-add", compact=True)
@@ -583,7 +595,7 @@ class MultigramEditor(ModalScreen[Optional[List[str]]]):
 
     @on(Button.Pressed, "#mg-ok")
     def _ok(self) -> None:
-        entries = []
+        entries: List[Tuple[str, bool]] = []
         for row in self.query(MultigramRow):
             words = row.words()
             if not words:
@@ -592,42 +604,52 @@ class MultigramEditor(ModalScreen[Optional[List[str]]]):
                 self.query_one("#mg-error", Static).update(
                     f"'{words[0]}' is one word: a sequence needs at least two tokens, or clear the row.")
                 return
-            entries.append(multigram_entry(words, row.target()))
+            entries.append((multigram_entry(words, row.target()), row.match_case()))
         self.dismiss(entries)
 
 
 class MultigramField(Horizontal):
     """The Combine multigrams setting on the form: a summary and an Edit
     button that opens :class:`MultigramEditor`. ``value`` is the list of
-    settings entries."""
+    (settings entry, match case) pairs; ``lists()`` splits it into
+    combined_multigrams and combined_multigrams_case."""
 
     class Changed(Message):
         def __init__(self, field: "MultigramField") -> None:
             super().__init__()
             self.field = field
 
-    def __init__(self, entries: Optional[List[Any]], **kwargs) -> None:
+    def __init__(self, entries: Optional[List[Any]], exact: Optional[List[Any]] = None, **kwargs) -> None:
         super().__init__(classes="mg-field", **kwargs)
-        self._entries: List[str] = [str(e) for e in (entries or [])]
+        self._entries: List[Tuple[str, bool]] = []
+        self._fill(entries, exact)
+
+    def _fill(self, entries, exact) -> None:
+        self._entries = [(str(e), False) for e in (entries or [])] + [(str(e), True) for e in (exact or [])]
 
     def compose(self) -> ComposeResult:
         yield Button("Edit…", classes="mg-edit", compact=True)
         yield Static(self.summary(), classes="mg-summary")
 
     @property
-    def value(self) -> List[str]:
+    def value(self) -> List[Tuple[str, bool]]:
         return list(self._entries)
 
-    def set_value(self, entries: Optional[List[Any]]) -> None:
-        self._entries = [str(e) for e in (entries or [])]
+    def lists(self) -> Tuple[List[str], List[str]]:
+        """(combined_multigrams, combined_multigrams_case)."""
+        return [e for e, c in self._entries if not c], [e for e, c in self._entries if c]
+
+    def set_value(self, entries: Optional[List[Any]], exact: Optional[List[Any]] = None) -> None:
+        self._fill(entries, exact)
         self.query_one(".mg-summary", Static).update(self.summary())
 
     def summary(self) -> str:
         if not self._entries:
             return "(none)"
         shown = []
-        for words, target in multigram_rows(self._entries):
-            shown.append(f"{' '.join(words)} -> {'-'.join(target.split()) if target else '-'.join(words)}")
+        for entry, match_case in self._entries:
+            for words, target in multigram_rows([entry]):
+                shown.append(f"{' '.join(words)} -> {target or '-'.join(words)}" + (" (case)" if match_case else ""))
         text = "; ".join(shown)
         n = len(self._entries)
         head = f"{n} sequence{'s' if n != 1 else ''}: "
@@ -637,9 +659,10 @@ class MultigramField(Horizontal):
     def _edit(self, event: Button.Pressed) -> None:
         event.stop()
 
-        def done(entries: Optional[List[str]]) -> None:
+        def done(entries: Optional[List[Tuple[str, bool]]]) -> None:
             if entries is not None:
-                self.set_value(entries)
+                self._entries = list(entries)
+                self.query_one(".mg-summary", Static).update(self.summary())
                 self.post_message(self.Changed(self))
 
         self.app.push_screen(MultigramEditor(self._entries), done)
@@ -1221,7 +1244,9 @@ class LexichronApp(App):
                     opts.append((val, val))
                 w = Select(opts, value=val, allow_blank=True, id=wid, compact=True)
             elif f.kind == "multigrams":
-                w = MultigramField(list(current) if isinstance(current, (list, tuple, set)) else [], id=wid)
+                exact = (self.config.get(section) or {}).get("combined_multigrams_case")
+                w = MultigramField(list(current) if isinstance(current, (list, tuple, set)) else [],
+                                   list(exact) if isinstance(exact, (list, tuple, set)) else [], id=wid)
             elif f.kind == "keeplist":
                 exact = (self.config.get(section) or {}).get("always_include_case")
                 w = KeepListField(list(current) if isinstance(current, (list, tuple, set)) else [],
@@ -1367,12 +1392,13 @@ class LexichronApp(App):
                 continue
             for f in sec.fields:
                 w = self.query_one(f"#f-{sec.name}-{f.name}")
-                if f.kind == "keeplist":                       # one widget, two settings
+                if f.kind in ("keeplist", "multigrams"):       # one widget, two settings
                     plain, exact = w.lists()
+                    key = "always_include" if f.kind == "keeplist" else "combined_multigrams"
                     if plain:
-                        vals["always_include"] = plain
+                        vals[key] = plain
                     if exact:
-                        vals["always_include_case"] = exact
+                        vals[key + "_case"] = exact
                     continue
                 try:
                     if f.kind == "range":
@@ -1883,6 +1909,9 @@ class LexichronApp(App):
                 for f in sec.fields:
                     if f.kind == "keeplist":                   # two settings, one widget
                         self._set_field_widget(sec.name, f, (vals.get("always_include"), vals.get("always_include_case")))
+                    elif f.kind == "multigrams":
+                        self._set_field_widget(sec.name, f, (vals.get("combined_multigrams"),
+                                                             vals.get("combined_multigrams_case")))
                     else:
                         self._set_field_widget(sec.name, f, vals.get(f.name, f.default))
         finally:
@@ -1916,7 +1945,9 @@ class LexichronApp(App):
             w.value = lo
             self.query_one(f"{wid}-end").value = hi
         elif f.kind == "multigrams":
-            w.set_value(list(value) if isinstance(value, (list, tuple, set)) else [])
+            plain, exact = value if isinstance(value, tuple) and len(value) == 2 else (value, None)
+            w.set_value(list(plain) if isinstance(plain, (list, tuple, set)) else [],
+                        list(exact) if isinstance(exact, (list, tuple, set)) else [])
         elif f.kind == "keeplist":
             plain, exact = value if isinstance(value, tuple) and len(value) == 2 else (value, None)
             w.set_value(list(plain) if isinstance(plain, (list, tuple, set)) else [],

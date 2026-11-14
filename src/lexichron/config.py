@@ -84,6 +84,13 @@ def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
         section = data.get(section_name)
         if isinstance(section, dict) and old_key in section:
             section.setdefault(new_key, section.pop(old_key))
+    # The global case switch for combined multigrams became a per-sequence
+    # choice: a file that had it on wanted every sequence matched as written.
+    acquire = data.get("acquire")
+    if isinstance(acquire, dict) and "multigram_case_sensitive" in acquire:
+        if acquire.pop("multigram_case_sensitive") and acquire.get("combined_multigrams"):
+            moved = list(acquire.pop("combined_multigrams"))
+            acquire["combined_multigrams_case"] = list(acquire.get("combined_multigrams_case") or []) + moved
     for section_name, key in _DROPPED_KEYS:
         section = data.get(section_name)
         if isinstance(section, dict):

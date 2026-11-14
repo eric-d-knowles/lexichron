@@ -60,7 +60,7 @@ def download_and_ingest_to_rocksdb(
         compact_after_ingest: bool = True,
         archive_path_stub: Optional[str] = None,
         combined_multigrams: Optional[set] = None,
-        multigram_case_sensitive: bool = False,
+        combined_multigrams_case: Optional[set] = None,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         spool_dir: Optional[str] = None,
         progress_path: Optional[str] = None,
@@ -98,12 +98,12 @@ def download_and_ingest_to_rocksdb(
             compaction is what folds those files together and applies pending
             merges; skip it only for a quick partial run.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
-        combined_multigrams: Optional set of word sequences to combine into one hyphenated token
-            (e.g., {"working class", "new york city"}): two or more words each; the longest match
-            at a position wins. A sequence matches whatever its capitalization in the data
-            ("Working Class", "working class"), and the combined token keeps the capitalization it
-            had, so the filter stage's lowercasing folds the variants together.
-        multigram_case_sensitive: Match the sequences' case exactly instead (only "working class" as written).
+        combined_multigrams: Optional set of word sequences to combine into one token as the files are
+            read: an entry is two or more words, optionally followed by "=> target", the token the run
+            becomes (e.g., {"working class", "a . i . => A.I."}); without a target the run's own tokens
+            are joined by hyphens in the case they had. The longest match at a position wins. These match
+            whatever their capitalization in the data ("Working Class", "working class").
+        combined_multigrams_case: The same, for sequences that must match as written.
         chunk_entries: Entries per spooled chunk. Workers stream parsed entries
             to chunk files on disk instead of holding a whole shard in memory;
             peak memory is roughly (workers + 1) x one chunk of packed values.
@@ -134,14 +134,14 @@ def download_and_ingest_to_rocksdb(
     # an entry of one word could never match, and an entry longer than the
     # n-grams being acquired never occurs in one line (a 1-gram file has one
     # token per line, so no list applies there).
-    combined_multigrams = prepare_multigrams(combined_multigrams, multigram_case_sensitive)
+    combined_multigrams = prepare_multigrams(combined_multigrams, exact=combined_multigrams_case)
     if combined_multigrams:
         n = int(ngram_size)
         if n == 1:
             raise ValueError("combined_multigrams cannot apply to 1-grams: each line holds one token, so no "
                              "sequence ever occurs. Combine sequences when acquiring 2-grams or larger, or clear "
                              "the list.")
-        too_long = sorted(m for m in combined_multigrams if m.count(" ") + 1 > n)
+        too_long = sorted(m for m in combined_multigrams.sequences() if m.count(" ") + 1 > n)
         if too_long:
             raise ValueError(f"combined_multigrams: {too_long[0]!r} has {too_long[0].count(' ') + 1} words, which "
                              f"cannot occur in a {n}-gram; drop it or acquire longer n-grams")
@@ -251,7 +251,7 @@ def download_and_ingest_to_rocksdb(
             db=db,
             filter_pred=filter_pred,
             combined_multigrams=combined_multigrams,
-            multigram_case_sensitive=multigram_case_sensitive,
+
             spool_dir=spool_dir,
             chunk_entries=chunk_entries,
             progress=progress,

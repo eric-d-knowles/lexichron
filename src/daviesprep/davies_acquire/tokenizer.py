@@ -18,18 +18,13 @@ def combine_multigrams_in_tokens(tokens: List[str], combined_multigrams,
     Replace runs of tokens matching an entry of combined_multigrams with one token.
 
     Scans the token list from left to right; at each token the longest
-    matching sequence wins and the scan continues after it. The run becomes
-    the entry's target token when it has one (a dict of sequence -> target,
-    as ngramprep's ``prepare_multigrams`` returns), else its own tokens
-    joined by hyphens in the case they had. Matching ignores case unless
-    ``case_sensitive``.
-
-    Args:
-        tokens: List of tokens (e.g., ["the", "working", "class", "family"])
-        combined_multigrams: Sequences to combine, words joined by single spaces
-                            (e.g., {"working class", "new york city"}), lowercase unless
-                            matching is case-sensitive; a dict maps each to its target token
-        case_sensitive: Match the sequences' case exactly
+    matching sequence wins and the scan continues after it. ``combined_multigrams``
+    is a set of sequences (words joined by single spaces) matched whatever
+    their capitalization, a dict of sequence -> target token, or ngramprep's
+    ``Multigrams`` with its ``exact`` side of sequences that must match as
+    written; ``case_sensitive`` makes a plain set or dict exact. The run
+    becomes the entry's target token when it has one, else its own tokens
+    joined by hyphens in the case they had.
 
     Examples:
         >>> combine_multigrams_in_tokens(["the", "working", "class"], {"working class"})
@@ -41,22 +36,31 @@ def combine_multigrams_in_tokens(tokens: List[str], combined_multigrams,
     """
     if not combined_multigrams or len(tokens) < 2:
         return tokens
+    strict = getattr(combined_multigrams, "exact", None) or {}
+    folded = combined_multigrams
+    if case_sensitive and not strict:
+        folded, strict = {}, combined_multigrams
     longest = getattr(combined_multigrams, "max_words", None) or \
-        max((len(m.split(" ")) for m in combined_multigrams), default=2)
-    targets = combined_multigrams if isinstance(combined_multigrams, dict) else {}
-    keys = tokens if case_sensitive else [t.lower() for t in tokens]
+        max((len(m.split(" ")) for m in list(folded) + list(strict)), default=2)
+    tf = folded if isinstance(folded, dict) else {}
+    ts = strict if isinstance(strict, dict) else {}
+    lowered = [t.lower() for t in tokens]
     result = []
     i = 0
     n = len(tokens)
     while i < n:
         hit = 0
+        target = None
         for length in range(min(longest, n - i), 1, -1):
-            key = " ".join(keys[i:i + length])
-            if key in combined_multigrams:
-                hit = length
+            raw = " ".join(tokens[i:i + length])
+            if raw in strict:
+                hit, target = length, ts.get(raw)
+                break
+            low = " ".join(lowered[i:i + length])
+            if low in folded:
+                hit, target = length, tf.get(low)
                 break
         if hit:
-            target = targets.get(key)
             result.append(target if target else "-".join(tokens[i:i + hit]))
             i += hit
         else:

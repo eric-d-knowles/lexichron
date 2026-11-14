@@ -118,4 +118,7 @@ def test_sequence_list_is_refused_where_it_cannot_apply_before_anything_runs(tmp
     with pytest.raises(ValueError, match="3 words, which cannot occur in a 2-gram"):
         download_and_ingest_to_rocksdb(ngram_size=2, repo_release_id="20200217", repo_corpus_id="eng",
                                        db_path_stub=str(tmp_path), combined_multigrams={"new york city", "new york"})
+    with pytest.raises(ValueError, match="3 words, which cannot occur in a 2-gram"):
+        download_and_ingest_to_rocksdb(ngram_size=2, repo_release_id="20200217", repo_corpus_id="eng",
+                                       db_path_stub=str(tmp_path), combined_multigrams_case={"New York City"})
     assert not list(tmp_path.iterdir())

@@ -99,13 +99,20 @@ def test_pairs_match_whatever_their_case_and_keep_it():
     assert k == "Working-Class_NOUN in_ADP"
 
 
-def test_case_sensitive_matching_is_a_switch():
-    s = prepare_multigrams({"Working Class"}, case_sensitive=True)
-    assert dict(s) == {"Working Class": None}
-    assert _combine_multigrams_in_ngram("The Working Class in", s, case_sensitive=True) == "The Working-Class in"
-    assert _combine_multigrams_in_ngram("the working class in", s, case_sensitive=True) == "the working class in"
-    k, _ = parse_line("working class\t1990,1,1", combined_multigrams=s, multigram_case_sensitive=True)
+def test_exact_case_sequences_match_as_written_beside_folded_ones():
+    s = prepare_multigrams({"Working Class"}, case_sensitive=True)             # the older spelling of the call
+    assert dict(s) == {} and s.exact == {"Working Class": None}
+    assert _combine_multigrams_in_ngram("The Working Class in", s) == "The Working-Class in"
+    assert _combine_multigrams_in_ngram("the working class in", s) == "the working class in"
+    k, _ = parse_line("working class\t1990,1,1", combined_multigrams=s)
     assert k == "working class"
+    # both kinds in one list: exact wins at a length; folded entries still match any case
+    s = prepare_multigrams(["human being"], exact=["AI Lab => AI-Lab", "US Army"])
+    assert dict(s) == {"human being": None} and s.exact == {"AI Lab": "AI-Lab", "US Army": None}
+    assert _combine_multigrams_in_ngram("the AI Lab and the Human Being", s) == "the AI-Lab and the Human-Being"
+    assert _combine_multigrams_in_ngram("the ai lab", s) == "the ai lab"
+    assert _combine_multigrams_in_ngram("US Army us army", s) == "US-Army us army"
+    assert bool(prepare_multigrams([], exact=["a b"])) and prepare_multigrams([], exact=[]) is None
 
 
 def test_prepare_refuses_a_non_pair_and_combining_leaves_other_spacing_alone():

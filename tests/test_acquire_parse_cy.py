@@ -21,8 +21,7 @@ def _reference(raw: bytes, pred, multigrams=None, cs=False):
     """What the Python path produces for this raw line (None = rejected,
     'raises' = an exception the worker would log and skip)."""
     try:
-        key, rec = parse_line(raw.decode("utf-8"), filter_pred=pred, combined_multigrams=multigrams,
-                              multigram_case_sensitive=cs)
+        key, rec = parse_line(raw.decode("utf-8"), filter_pred=pred, combined_multigrams=multigrams)
         if not (key and rec):
             return None
         return key, _pack_record(rec)
@@ -39,7 +38,7 @@ def _check(raw: bytes, multigrams=None, cs=False):
     for mode, m in MODES.items():
         pred = make_ngram_type_predicate(mode)
         sfx = tuple(s.encode() for s in pred.suffixes)
-        got = parse_cy.parse_packed(raw, m, sfx, tables[0], tables[1], cs, tables[2])
+        got = parse_cy.parse_packed(raw, m, sfx, *tables)
         if got is parse_cy.FALLBACK:
             fb = 1
             continue
@@ -153,23 +152,38 @@ def test_combining_matches_python_without_fallback():
         assert _check(raw, PAIRS, cs=True) == 0, raw
     # a capitalized pair combines by default and not under the switch
     tables = parse_cy.multigram_tables(prepare_multigrams(PAIRS))
-    assert tables[2] == 4
-    key, _ = parse_cy.parse_packed(COMBINING[0], parse_cy.MODE_ALL, (), *tables[:2], False, tables[2])
+    assert tables[3] == 4 and tables[1] is None
+    key, _ = parse_cy.parse_packed(COMBINING[0], parse_cy.MODE_ALL, (), *tables)
     assert key == "A.I._DET is_VERB"
-    key, _ = parse_cy.parse_packed(b"in New York City today\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2], False,
-                                   tables[2])
+    key, _ = parse_cy.parse_packed(b"in New York City today\t1900,1,1", parse_cy.MODE_ALL, (), *tables)
     assert key == "in New-York-City today"
-    key, _ = parse_cy.parse_packed(b"Human Being x y\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2], False, tables[2])
+    key, _ = parse_cy.parse_packed(b"Human Being x y\t1900,1,1", parse_cy.MODE_ALL, (), *tables)
     assert key == "human-being XY"
-    key, _ = parse_cy.parse_packed(b"The Working Class in America\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2],
-                                   False, tables[2])
-    assert key == "The Working-Class in America"
     tables = parse_cy.multigram_tables(prepare_multigrams(PAIRS, True))
-    key, _ = parse_cy.parse_packed(b"The Working Class in America\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2],
-                                   True, tables[2])
+    assert tables[0] is None and tables[1]
+    key, _ = parse_cy.parse_packed(b"The Working Class in America\t1900,1,1", parse_cy.MODE_ALL, (), *tables)
     assert key == "The Working Class in America"
-    key, _ = parse_cy.parse_packed(b"the Middle Class\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2], True, tables[2])
+    key, _ = parse_cy.parse_packed(b"the Middle Class\t1900,1,1", parse_cy.MODE_ALL, (), *tables)
     assert key == "the Middle-Class"
+
+
+def test_folded_and_exact_sequences_in_one_list_match_python():
+    mixed = prepare_multigrams(["human being", "a . i . => A.I."], exact=["AI Lab => AI-Lab", "US Army"])
+    tables = parse_cy.multigram_tables(mixed)
+    assert tables[0] and tables[1] and tables[3] == 4
+    lines = [b"the AI Lab and the Human Being\t1900,1,1\n", b"the ai lab\t1900,1,1\n", b"US Army us army\t1900,1,1\n",
+             b"A . I . AI Lab\t1900,1,1\n", b"Us_PROPN Army_NOUN\t1900,1,1\n", b"caf\xc3\xa9 AI Lab\t1900,1,1\n"]
+    for raw in lines:
+        for mode, m in MODES.items():
+            pred = make_ngram_type_predicate(mode)
+            sfx = tuple(s.encode() for s in pred.suffixes)
+            got = parse_cy.parse_packed(raw, m, sfx, *tables)
+            assert got is not parse_cy.FALLBACK, raw
+            assert got == _reference(raw, pred, mixed), (raw, mode)
+    key, _ = parse_cy.parse_packed(lines[0], parse_cy.MODE_ALL, (), *tables)
+    assert key == "the AI-Lab and the Human-Being"
+    key, _ = parse_cy.parse_packed(lines[1], parse_cy.MODE_ALL, (), *tables)
+    assert key == "the ai lab"
 
 
 def test_non_ascii_pairs_fall_back_only_where_case_folding_needs_python():
@@ -211,7 +225,8 @@ def test_worker_combines_on_the_fast_path_like_python(tmp_path, monkeypatch):
         d = Path(tempfile.mkdtemp(prefix=f"{'fast' if fast else 'slow'}-{mode}-{cs}-", dir=tmp_path))
         msg, chunks, _, _, _ = worker_mod.process_and_ingest_file(
             "http://example/f.gz", 1, make_ngram_type_predicate(mode), spool_dir=str(d), chunk_entries=1000,
-            combined_multigrams=PAIRS | NON_ASCII_PAIRS, multigram_case_sensitive=cs)
+            combined_multigrams=None if cs else PAIRS | NON_ASCII_PAIRS,
+            combined_multigrams_case=PAIRS | NON_ASCII_PAIRS if cs else None)
         assert msg.startswith("SUCCESS"), msg
         return {k: v for c in chunks for k, v in read_chunk(c)}
 

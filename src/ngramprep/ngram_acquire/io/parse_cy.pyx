@@ -1,8 +1,8 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
 """Fast path for the acquisition parser.
 
-``parse_packed(raw, mode, suffixes, multigrams, firsts, case_sensitive,
-max_words)`` does, in one pass over the raw bytes of a line, what
+``parse_packed(raw, mode, suffixes, multigrams, exact, firsts, max_words)``
+does, in one pass over the raw bytes of a line, what
 ``parse_line`` + ``_pack_record`` do in Python: strip, split off the
 n-gram text, combine the word sequences in ``multigrams`` into hyphenated
 tokens, apply the tagged/untagged/all filter, parse the
@@ -10,13 +10,14 @@ tokens, apply the tagged/untagged/all filter, parse the
 uint64. It returns ``(key, packed)`` or ``None`` (line rejected).
 
 ``multigrams`` maps UTF-8 ``bytes`` sequences as ``prepare_multigrams``
-normalizes them (words joined by single spaces, lowercased unless
-``case_sensitive``) to the ``bytes`` token each becomes, or None for the
-default (the run's own tokens joined by hyphens); ``firsts`` is a 256-byte
+normalizes them (words joined by single spaces, lowercased: they match
+whatever the data's capitalization) to the ``bytes`` token each becomes, or
+None for the default (the run's own tokens joined by hyphens); ``exact``
+the same for sequences that must match as written; ``firsts`` is a 256-byte
 table with a 1 at the first byte of every entry, so that most tokens are
 dismissed by one lookup; ``max_words`` the longest entry. A sequence that
-would need Unicode case folding (a non-ASCII byte in a candidate token when
-matching ignores case) is handed back to Python, whose ``str.lower()`` is
+would need Unicode case folding (a non-ASCII byte in a candidate token that
+no exact entry matched) is handed back to Python, whose ``str.lower()`` is
 the reference.
 
 It is exact by construction: whenever a line contains anything whose Python
@@ -43,21 +44,28 @@ cdef uint64_t UINT64_MAX_DIV10 = 1844674407370955161ULL   # floor(2**64-1 / 10)
 
 
 def multigram_tables(multigrams):
-    """``(dict of UTF-8 bytes sequence -> bytes target or None, firsts,
-    max_words)`` for ``parse_packed`` from the sequences as
-    ``prepare_multigrams`` returns them (a plain set means every target is
-    the default); ``(None, None, 0)`` for none."""
+    """``(folded, exact, firsts, max_words)`` for ``parse_packed`` from a
+    ``Multigrams`` (or a plain set, all folded): two dicts of UTF-8 bytes
+    sequence -> bytes target or None, the folded one's keys lowercased; a
+    256-byte table with a 1 at the first byte of every entry (and its ASCII
+    lowercase), so most tokens are dismissed by one lookup; and the longest
+    entry. ``(None, None, None, 0)`` for none."""
     if not multigrams:
-        return None, None, 0
-    targets = multigrams if isinstance(multigrams, dict) else {m: None for m in multigrams}
-    encoded = {str(m).encode("utf-8"): (str(t).encode("utf-8") if t else None) for m, t in targets.items()}
+        return None, None, None, 0
+    exact_src = getattr(multigrams, "exact", None) or {}
+    folded_src = multigrams if isinstance(multigrams, dict) else {m: None for m in multigrams}
+    enc = lambda d: {str(m).encode("utf-8"): (str(t).encode("utf-8") if t else None) for m, t in d.items()}
+    folded, exact = enc(folded_src), enc(exact_src)
     firsts = bytearray(256)
     longest = 2
-    for m in encoded:
+    for m in list(folded) + list(exact):
         if m:
             firsts[m[0]] = 1
+            c = m[0]
+            if 0x41 <= c <= 0x5a:
+                firsts[c + 0x20] = 1
             longest = max(longest, m.count(b" ") + 1)
-    return encoded, bytes(firsts), longest
+    return folded or None, exact or None, bytes(firsts), longest
 
 
 cdef inline bint _is_ascii_space(uint8_t c) nogil:
@@ -137,26 +145,28 @@ cdef inline uint8_t _lower(uint8_t c) noexcept nogil:
 DEF MAX_TOKENS = 64
 
 
-cdef object _combine(const uint8_t* p, Py_ssize_t n, dict multigrams, const uint8_t* firsts, bint cs,
+cdef object _combine(const uint8_t* p, Py_ssize_t n, dict folded, dict exact, const uint8_t* firsts,
                      int max_words):
-    """Combine the sequences of ``multigrams`` in the n-gram text p[0:n]:
-    None when nothing matched (the text stands), the new text as bytes when
-    something did, FALLBACK when Python must judge (Unicode case folding, or
-    a line with more tokens than the fixed buffers hold). Mirrors
+    """Combine the sequences of ``folded`` (matched case-folded) and
+    ``exact`` (matched as written) in the n-gram text p[0:n]: None when
+    nothing matched (the text stands), the new text as bytes when something
+    did, FALLBACK when Python must judge (Unicode case folding, or a line
+    with more tokens than the fixed buffers hold). Mirrors
     ``_combine_multigrams_in_ngram``: tokens split on single spaces, a
     token's base is what precedes its last underscore, at each token the
-    longest matching sequence wins and becomes its target token (or the
-    run's own bases joined by hyphens), the first token's tag survives and
-    the others' are dropped."""
+    longest matching sequence wins (exact before folded at a length) and
+    becomes its target token (or the run's own bases joined by hyphens),
+    the first token's tag survives and the others' are dropped."""
     cdef Py_ssize_t ts[MAX_TOKENS]
     cdef Py_ssize_t te[MAX_TOKENS]
     cdef Py_ssize_t tu[MAX_TOKENS]          # end of each token's base (its last underscore, or its end)
     cdef Py_ssize_t ntok = 0, i, j, t, m, k, length, hit
     cdef uint8_t c
-    cdef bint matched = False, nonascii
-    cdef bytes cand, piece
+    cdef bint matched = False, nonascii, found
+    cdef bytes raw, low, piece
     cdef object target
-    cdef uint8_t* cb
+    cdef uint8_t* rb
+    cdef uint8_t* lb
     cdef list parts, pieces
 
     # token spans, as str.split(" ") makes them (empty tokens included)
@@ -182,40 +192,50 @@ cdef object _combine(const uint8_t* p, Py_ssize_t n, dict multigrams, const uint
     i = 0
     while i < ntok:
         hit = 0
+        target = None
         if i + 1 < ntok:
             # one lookup dismisses most tokens: the candidate's first byte
             c = p[ts[i]] if tu[i] > ts[i] else 0x20
-            if not cs:
-                c = _lower(c)
-            if firsts[c]:
+            if firsts[c] or firsts[_lower(c)]:
                 length = max_words if max_words < ntok - i else ntok - i
                 while length >= 2:
                     m = length - 1
                     for t in range(i, i + length):
                         m += tu[t] - ts[t]
-                    cand = PyBytes_FromStringAndSize(NULL, m)
-                    cb = <uint8_t*> PyBytes_AS_STRING(cand)
+                    raw = PyBytes_FromStringAndSize(NULL, m)
+                    low = PyBytes_FromStringAndSize(NULL, m)
+                    rb = <uint8_t*> PyBytes_AS_STRING(raw)
+                    lb = <uint8_t*> PyBytes_AS_STRING(low)
                     k = 0
                     nonascii = False
                     for t in range(i, i + length):
                         if t > i:
-                            cb[k] = 0x20
+                            rb[k] = 0x20
+                            lb[k] = 0x20
                             k += 1
                         for j in range(ts[t], tu[t]):
                             c = p[j]
                             if c >= 0x80:
                                 nonascii = True
-                            cb[k] = c if cs else _lower(c)
+                            rb[k] = c
+                            lb[k] = _lower(c)
                             k += 1
-                    if nonascii and not cs:
-                        return FALLBACK           # str.lower() may fold what ASCII lowering cannot
-                    if cand in multigrams:
+                    found = False
+                    if exact is not None and raw in exact:
+                        target = exact[raw]
+                        found = True
+                    elif folded is not None:
+                        if nonascii:
+                            return FALLBACK           # str.lower() may fold what ASCII lowering cannot
+                        if low in folded:
+                            target = folded[low]
+                            found = True
+                    if found:
                         hit = length
                         break
                     length -= 1
         if hit:
             matched = True
-            target = multigrams[cand]
             if target is None:
                 pieces = []
                 for t in range(i, i + hit):
@@ -231,12 +251,12 @@ cdef object _combine(const uint8_t* p, Py_ssize_t n, dict multigrams, const uint
     return b" ".join(parts)
 
 
-def parse_packed(bytes raw, int mode, tuple suffixes, dict multigrams=None, bytes firsts=None,
-                 bint case_sensitive=False, int max_words=2):
+def parse_packed(bytes raw, int mode, tuple suffixes, dict multigrams=None, dict exact=None, bytes firsts=None,
+                 int max_words=2):
     """See module docstring. ``suffixes`` are the tag suffixes as bytes
-    (``b"_NOUN"``, ...); ignored for ``MODE_ALL``. ``multigrams``,
-    ``firsts`` and ``max_words`` come from ``multigram_tables``; None for
-    no combining."""
+    (``b"_NOUN"``, ...); ignored for ``MODE_ALL``. ``multigrams`` (folded),
+    ``exact``, ``firsts`` and ``max_words`` come from ``multigram_tables``;
+    None for no combining."""
     cdef const uint8_t* buf = <const uint8_t*> PyBytes_AS_STRING(raw)
     cdef Py_ssize_t n = PyBytes_GET_SIZE(raw)
     cdef Py_ssize_t start = 0, end = n, i, tab
@@ -277,9 +297,8 @@ def parse_packed(bytes raw, int mode, tuple suffixes, dict multigrams=None, byte
     # --- combine word pairs, then filter the result (the Python order)
     tbuf = buf + start
     tlen = tab - start
-    if multigrams is not None:
-        combined = _combine(tbuf, tlen, multigrams, <const uint8_t*> PyBytes_AS_STRING(firsts), case_sensitive,
-                            max_words)
+    if multigrams is not None or exact is not None:
+        combined = _combine(tbuf, tlen, multigrams, exact, <const uint8_t*> PyBytes_AS_STRING(firsts), max_words)
         if combined is FALLBACK:
             return FALLBACK
         if combined is not None:
