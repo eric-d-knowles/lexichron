@@ -117,7 +117,9 @@ def test_lexichron_wrapper_runs_in_image_and_repulls_when_missing(env):
     wrapper = env["home"] / ".local" / "bin" / "lexichron"
 
     r = subprocess.run(["bash", str(wrapper), "acquire", "x.yaml"], env=env["env"], capture_output=True, text=True)
-    assert r.returncode == 0 and "exec: lexichron acquire x.yaml" in r.stdout
+    # the launcher binds whichever data roots this machine has (/projects on
+    # some nodes, none on others), so only the ends of the command are fixed
+    assert r.returncode == 0 and r.stdout.startswith("exec:") and r.stdout.strip().endswith("lexichron acquire x.yaml")
 
     img.unlink()                                             # simulate a purge
     r = subprocess.run(["bash", str(wrapper), "--version"], env=env["env"], capture_output=True, text=True)
