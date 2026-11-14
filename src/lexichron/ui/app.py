@@ -65,6 +65,7 @@ from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, r
                                       state_dir as _state_dir, write_user_defaults)
 from lexichron.ui.slurm import ARRAY_STAGES, array_size, stage_command, write_sbatch
 from ngramprep.ngram_acquire.db.build_path import build_db_path
+from ngramprep.ngram_acquire.io.parse import TARGET_ARROW, parse_multigram_entry
 from ngramprep.ngram_acquire.progress import read_progress
 
 __all__ = ["LexichronApp", "main", "SETTINGS_FILENAME"]
@@ -138,6 +139,8 @@ def _from_widget(field: Field, raw: Any) -> Any:
         return float(str(raw).strip())
     if field.kind == "grid":
         return list(raw) if isinstance(raw, (list, tuple)) else [raw]
+    if field.kind == "multigrams":
+        return list(raw) or None
     if field.kind == "list":
         items = [p.strip() for p in str(raw).split(",") if p.strip()]
         conv = []
@@ -455,6 +458,193 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
                       "ngram_size": int(str(size))})
 
 
+MULTIGRAM_WORDS = 5          # fields per sequence: the longest n-gram Google publishes
+
+
+def multigram_rows(entries: List[Any]) -> List[Tuple[List[str], str]]:
+    """Settings entries -> (words, target text) rows for the editor; a
+    target's hyphens are shown as the spaces the user typed."""
+    rows = []
+    for entry in entries or []:
+        words, target = parse_multigram_entry(entry)
+        rows.append((words, (target or "").replace("-", " ")))
+    return rows
+
+
+def multigram_entry(words: List[str], target: str) -> str:
+    """An editor row -> its settings entry: the words, and ``=> target``
+    when the target is not the default."""
+    words = [w for w in words if w]
+    text = " ".join(words)
+    target = " ".join(target.split())
+    if target and target != " ".join(words):
+        return f"{text} {TARGET_ARROW} {target}"
+    return text
+
+
+class MultigramRow(Horizontal):
+    """One sequence: five word boxes, an arrow, and the token it becomes,
+    which follows the words until the user edits it."""
+
+    def __init__(self, words: List[str], target: str, **kwargs) -> None:
+        super().__init__(classes="mg-row", **kwargs)
+        self._words = (list(words) + [""] * MULTIGRAM_WORDS)[:MULTIGRAM_WORDS]
+        self._target = target
+        self.auto = not target or target == " ".join(w for w in words if w)
+        self._filling = False
+
+    def compose(self) -> ComposeResult:
+        for i, w in enumerate(self._words):
+            yield Input(value=w, classes="mg-word", compact=True, placeholder=f"word {i + 1}" if i < 2 else "")
+        yield Static(TARGET_ARROW, classes="mg-arrow")
+        yield Input(value=self._target if not self.auto else self.joined(), classes="mg-target", compact=True,
+                    placeholder="(the words, hyphenated)")
+        yield Button("✕", classes="mg-remove", compact=True)
+
+    def joined(self) -> str:
+        return " ".join(self.words())
+
+    def words(self) -> List[str]:
+        return [w.value.strip() for w in self.query(".mg-word") if w.value.strip()]
+
+    def target(self) -> str:
+        return self.query_one(".mg-target", Input).value.strip()
+
+    @on(Input.Changed, ".mg-word")
+    def _word_changed(self) -> None:
+        if self.auto:
+            self._filling = True
+            self.query_one(".mg-target", Input).value = self.joined()
+            self._filling = False
+
+    @on(Input.Changed, ".mg-target")
+    def _target_changed(self) -> None:
+        if not self._filling:
+            self.auto = self.target() == self.joined()         # typing the default back re-arms the autofill
+
+    @on(Button.Pressed, ".mg-remove")
+    def _remove(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.remove()
+
+
+class MultigramEditor(ModalScreen[Optional[List[str]]]):
+    """The sequences Acquire combines into single tokens, a row each.
+    Dismisses with the settings entries, or None on Cancel."""
+
+    DEFAULT_CSS = """
+    MultigramEditor { align: center middle; }
+    MultigramEditor > Vertical { width: 110; height: auto; max-height: 90%; border: thick $accent;
+                                 background: $surface; padding: 1 2; }
+    MultigramEditor #mg-title { text-style: bold; color: $accent; }
+    MultigramEditor #mg-note, MultigramEditor #mg-error { color: $text-muted; margin: 1 0; height: auto; }
+    MultigramEditor #mg-error { color: $warning; }
+    MultigramEditor #mg-rows { height: auto; max-height: 24; }
+    MultigramEditor .mg-row { height: auto; margin-bottom: 1; }
+    MultigramEditor .mg-word { width: 1fr; margin-right: 1; }
+    MultigramEditor .mg-arrow { width: 4; content-align: center middle; }
+    MultigramEditor .mg-target { width: 2fr; margin-right: 1; }
+    MultigramEditor .mg-remove { min-width: 3; }
+    MultigramEditor #mg-buttons { height: auto; align-horizontal: right; }
+    MultigramEditor Button { margin-left: 1; }
+    """
+    BINDINGS = [("escape", "cancel", "Back")]
+
+    def __init__(self, entries: List[Any]) -> None:
+        super().__init__()
+        self.entries = list(entries or [])
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Combine multigrams", id="mg-title")
+            yield Static("Each row is a run of up to five tokens, as Google's files tokenize them (A.I. is "
+                         "A . I .), and the one token it becomes. The right-hand box follows the words, joined "
+                         "by hyphens, until you type something else: human being -> human-being, "
+                         "A . I . -> A.I. Capitalization in the data does not matter; the token is written as "
+                         "you give it here.", id="mg-note")
+            with VerticalScroll(id="mg-rows"):
+                for words, target in multigram_rows(self.entries) or [([], "")]:
+                    yield MultigramRow(words, target)
+            yield Static("", id="mg-error")
+            with Horizontal(id="mg-buttons"):
+                yield Button("Add a sequence", id="mg-add", compact=True)
+                yield Button("Cancel", id="mg-cancel")
+                yield Button("OK", id="mg-ok", variant="primary")
+
+    @on(Button.Pressed, "#mg-add")
+    def _add(self) -> None:
+        row = MultigramRow([], "")
+        self.query_one("#mg-rows").mount(row)
+        row.call_after_refresh(lambda: row.query(".mg-word").first().focus())   # its boxes exist after the mount
+
+    @on(Button.Pressed, "#mg-cancel")
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#mg-ok")
+    def _ok(self) -> None:
+        entries = []
+        for row in self.query(MultigramRow):
+            words = row.words()
+            if not words:
+                continue                                        # an empty row is nothing
+            if len(words) < 2:
+                self.query_one("#mg-error", Static).update(
+                    f"'{words[0]}' is one word: a sequence needs at least two tokens, or clear the row.")
+                return
+            entries.append(multigram_entry(words, row.target()))
+        self.dismiss(entries)
+
+
+class MultigramField(Horizontal):
+    """The Combine multigrams setting on the form: a summary and an Edit
+    button that opens :class:`MultigramEditor`. ``value`` is the list of
+    settings entries."""
+
+    class Changed(Message):
+        def __init__(self, field: "MultigramField") -> None:
+            super().__init__()
+            self.field = field
+
+    def __init__(self, entries: Optional[List[Any]], **kwargs) -> None:
+        super().__init__(classes="mg-field", **kwargs)
+        self._entries: List[str] = [str(e) for e in (entries or [])]
+
+    def compose(self) -> ComposeResult:
+        yield Button("Edit…", classes="mg-edit", compact=True)
+        yield Static(self.summary(), classes="mg-summary")
+
+    @property
+    def value(self) -> List[str]:
+        return list(self._entries)
+
+    def set_value(self, entries: Optional[List[Any]]) -> None:
+        self._entries = [str(e) for e in (entries or [])]
+        self.query_one(".mg-summary", Static).update(self.summary())
+
+    def summary(self) -> str:
+        if not self._entries:
+            return "(none)"
+        shown = []
+        for words, target in multigram_rows(self._entries):
+            shown.append(f"{' '.join(words)} -> {'-'.join(target.split()) if target else '-'.join(words)}")
+        text = "; ".join(shown)
+        n = len(self._entries)
+        head = f"{n} sequence{'s' if n != 1 else ''}: "
+        return head + (text if len(head) + len(text) <= 90 else text[:90 - len(head) - 1] + "…")
+
+    @on(Button.Pressed, ".mg-edit")
+    def _edit(self, event: Button.Pressed) -> None:
+        event.stop()
+
+        def done(entries: Optional[List[str]]) -> None:
+            if entries is not None:
+                self.set_value(entries)
+                self.post_message(self.Changed(self))
+
+        self.app.push_screen(MultigramEditor(self._entries), done)
+
+
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
@@ -485,6 +675,9 @@ class LexichronApp(App):
     .hint { height: 3; content-align: left middle; color: $text-muted; }
     .row FixedValue { width: 1fr; color: $text-muted; }
     .row .toggle-row { width: 1fr; height: 1; }
+    .row .mg-field { width: 1fr; height: 1; }
+    .mg-field .mg-edit { min-width: 8; margin-right: 1; }
+    .mg-field .mg-summary { width: 1fr; color: $text-muted; }
     .toggle-row .toggle { min-width: 6; margin-right: 1; }
     .toggle-row .toggle-add { width: 12; }
     .grid-summary { height: auto; padding: 0 1 0 22; color: $text-muted; }
@@ -867,6 +1060,8 @@ class LexichronApp(App):
                 if val is not Select.NULL and val not in f.choices:
                     opts.append((val, val))
                 w = Select(opts, value=val, allow_blank=True, id=wid, compact=True)
+            elif f.kind == "multigrams":
+                w = MultigramField(list(current) if isinstance(current, (list, tuple, set)) else [], id=wid)
             elif f.kind == "range":
                 lo, hi = ("", "")
                 if isinstance(current, (list, tuple)) and len(current) == 2:
@@ -1368,6 +1563,7 @@ class LexichronApp(App):
     @on(Select.Changed)
     @on(Switch.Changed)
     @on(ToggleRow.Changed)
+    @on(MultigramField.Changed)
     def _on_any_change(self, _event) -> None:
         if not self._populating:
             self._refresh_preview()
@@ -1528,6 +1724,8 @@ class LexichronApp(App):
                 lo, hi = str(value[0]), str(value[1])
             w.value = lo
             self.query_one(f"{wid}-end").value = hi
+        elif f.kind == "multigrams":
+            w.set_value(list(value) if isinstance(value, (list, tuple, set)) else [])
         else:
             w.value = _to_widget_text(value)
 

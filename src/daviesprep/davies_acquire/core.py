@@ -34,12 +34,12 @@ def process_single_file(
     zip_path: Path,
     year: int,
     worker_id: int = 0,
-    combined_bigrams: Optional[set] = None,
+    combined_multigrams: Optional[set] = None,
     genre_focus: Optional[List[str]] = None,
     bin_size: int = 1,
     corpus_path: Optional[Path] = None,
     chunk_on: str = "sentence",
-    bigram_case_sensitive: bool = False,
+    multigram_case_sensitive: bool = False,
 ) -> Tuple[str, int, int, Dict, Dict[str, int], Set[int]]:
     """
     Process a single text file: read, tokenize, accumulate sentence counts.
@@ -51,7 +51,7 @@ def process_single_file(
         zip_path: Path to zip file
         year: Year for this file
         worker_id: Worker identifier for process naming
-        combined_bigrams: Optional set of bigrams to combine with hyphens
+        combined_multigrams: Optional set of word sequences to combine with hyphens
                          (e.g., {"working class", "middle class"})
         genre_focus: Optional list of genres to include (e.g., ["fic", "mag"]).
                     If None, include all genres.
@@ -118,8 +118,8 @@ def process_single_file(
                 binned_year = (doc_year // bin_size) * bin_size
 
                 # Tokenize into sentences (with optional bigram combination)
-                for tokens in tokenize_sentences(text, combined_bigrams=combined_bigrams, chunk_on=chunk_on,
-                                                 bigram_case_sensitive=bigram_case_sensitive):
+                for tokens in tokenize_sentences(text, combined_multigrams=combined_multigrams, chunk_on=chunk_on,
+                                                 multigram_case_sensitive=multigram_case_sensitive):
                     sentence_str = ' '.join(tokens)
 
                     # Include genre in key: (genre, year, sentence_str)
@@ -211,11 +211,11 @@ def ingest_davies_corpus(
     workers: Optional[int] = None,
     write_batch_size: int = 100_000,
     compact_after: bool = False,
-    combined_bigrams: Optional[set] = None,
+    combined_multigrams: Optional[set] = None,
     genre_focus: Optional[List[str]] = None,
     bin_size: int = 1,
     chunk_on: str = "sentence",
-    bigram_case_sensitive: bool = False,
+    multigram_case_sensitive: bool = False,
 ) -> None:
     """
     Main pipeline: read Davies corpus text files and ingest into RocksDB.
@@ -246,11 +246,11 @@ def ingest_davies_corpus(
         workers: Number of concurrent workers (default: cpu_count - 1)
         write_batch_size: Number of sentences per batch write
         compact_after: If True, perform full compaction after ingestion
-        combined_bigrams: Optional set of bigrams to combine with hyphens during tokenization
+        combined_multigrams: Optional set of word sequences to combine with hyphens during tokenization
                          (e.g., {"working class", "middle class"}). Consecutive tokens matching
-                         these bigrams will be replaced with hyphenated versions (e.g., "working-class");
-                         a pair matches whatever its capitalization unless bigram_case_sensitive
-        bigram_case_sensitive: Match the pairs' case exactly
+                         these sequences will be replaced with hyphenated versions (e.g., "working-class");
+                         a sequence matches whatever its capitalization unless multigram_case_sensitive
+        multigram_case_sensitive: Match the sequences' case exactly
         genre_focus: Optional list of genres to ingest (e.g., ["fic", "mag"]). If None, ingest all
                     genres with genre-prefixed keys. If specified, only ingest those genres and use
                     year-only keys for direct training compatibility.
@@ -399,7 +399,7 @@ def ingest_davies_corpus(
             with ProcessPoolExecutor(max_workers=workers) as executor:
                 # Submit all files for processing with worker IDs
                 future_to_file = {
-                    executor.submit(process_single_file, text_file, year, worker_id, combined_bigrams, genre_focus, bin_size, corpus_path, chunk_on, bigram_case_sensitive): (text_file, year)
+                    executor.submit(process_single_file, text_file, year, worker_id, combined_multigrams, genre_focus, bin_size, corpus_path, chunk_on, multigram_case_sensitive): (text_file, year)
                     for worker_id, (text_file, year) in enumerate(file_year_pairs)
                 }
 

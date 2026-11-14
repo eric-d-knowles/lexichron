@@ -129,7 +129,7 @@ cpdef bytes process_tokens(
 
     always_include: Set of tokens (e.g., b"working-class", b"nuclear") that should
                     always be preserved in whitelist mode regardless of whether they're
-                    in the whitelist. Useful for combined bigrams or focal terms.
+                    in the whitelist. Useful for combined multigrams or focal terms.
     stats: optional array of STAT_SLOTS unsigned 64-bit counters (see STAT_*)
            that this call adds to: what became of each token and the n-gram.
     """

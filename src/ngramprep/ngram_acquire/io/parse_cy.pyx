@@ -1,20 +1,23 @@
 # cython: language_level=3, boundscheck=False, wraparound=False, cdivision=True
 """Fast path for the acquisition parser.
 
-``parse_packed(raw, mode, suffixes, bigrams, firsts, case_sensitive)`` does,
-in one pass over the raw bytes of a line, what ``parse_line`` +
-``_pack_record`` do in Python: strip, split off the n-gram text, combine the
-word pairs in ``bigrams`` into hyphenated tokens, apply the
-tagged/untagged/all filter, parse the ``year,frequency,document_count``
-triples and pack them as little-endian uint64. It returns ``(key, packed)``
-or ``None`` (line rejected).
+``parse_packed(raw, mode, suffixes, multigrams, firsts, case_sensitive,
+max_words)`` does, in one pass over the raw bytes of a line, what
+``parse_line`` + ``_pack_record`` do in Python: strip, split off the
+n-gram text, combine the word sequences in ``multigrams`` into hyphenated
+tokens, apply the tagged/untagged/all filter, parse the
+``year,frequency,document_count`` triples and pack them as little-endian
+uint64. It returns ``(key, packed)`` or ``None`` (line rejected).
 
-``bigrams`` is a frozenset of UTF-8 ``bytes`` pairs as ``prepare_bigrams``
-normalizes them (lowercased unless ``case_sensitive``), or None; ``firsts``
-is a 256-byte table with a 1 at the first byte of every entry, so that most
-tokens are dismissed by one lookup. A pair that would need Unicode case
-folding (a non-ASCII byte in a candidate token when matching ignores case)
-is handed back to Python, whose ``str.lower()`` is the reference.
+``multigrams`` maps UTF-8 ``bytes`` sequences as ``prepare_multigrams``
+normalizes them (words joined by single spaces, lowercased unless
+``case_sensitive``) to the ``bytes`` token each becomes, or None for the
+default (the run's own tokens joined by hyphens); ``firsts`` is a 256-byte
+table with a 1 at the first byte of every entry, so that most tokens are
+dismissed by one lookup; ``max_words`` the longest entry. A sequence that
+would need Unicode case folding (a non-ASCII byte in a candidate token when
+matching ignores case) is handed back to Python, whose ``str.lower()`` is
+the reference.
 
 It is exact by construction: whenever a line contains anything whose Python
 semantics are not reproduced here (non-ASCII whitespace at the edges, numbers
@@ -28,7 +31,7 @@ from cpython.unicode cimport PyUnicode_DecodeUTF8
 from libc.stdint cimport uint64_t, uint8_t
 from libc.string cimport memcmp
 
-__all__ = ["parse_packed", "bigram_tables", "FALLBACK", "MODE_ALL", "MODE_TAGGED", "MODE_UNTAGGED"]
+__all__ = ["parse_packed", "multigram_tables", "FALLBACK", "MODE_ALL", "MODE_TAGGED", "MODE_UNTAGGED"]
 
 MODE_ALL = 0
 MODE_TAGGED = 1
@@ -39,17 +42,22 @@ FALLBACK = object()          # "run the Python parser for this line"
 cdef uint64_t UINT64_MAX_DIV10 = 1844674407370955161ULL   # floor(2**64-1 / 10)
 
 
-def bigram_tables(bigrams):
-    """``(frozenset of UTF-8 bytes, firsts)`` for ``parse_packed`` from the
-    pairs as ``prepare_bigrams`` returns them; ``(None, None)`` for none."""
-    if not bigrams:
-        return None, None
-    encoded = frozenset(str(b).encode("utf-8") for b in bigrams)
+def multigram_tables(multigrams):
+    """``(dict of UTF-8 bytes sequence -> bytes target or None, firsts,
+    max_words)`` for ``parse_packed`` from the sequences as
+    ``prepare_multigrams`` returns them (a plain set means every target is
+    the default); ``(None, None, 0)`` for none."""
+    if not multigrams:
+        return None, None, 0
+    targets = multigrams if isinstance(multigrams, dict) else {m: None for m in multigrams}
+    encoded = {str(m).encode("utf-8"): (str(t).encode("utf-8") if t else None) for m, t in targets.items()}
     firsts = bytearray(256)
-    for b in encoded:
-        if b:
-            firsts[b[0]] = 1
-    return encoded, bytes(firsts)
+    longest = 2
+    for m in encoded:
+        if m:
+            firsts[m[0]] = 1
+            longest = max(longest, m.count(b" ") + 1)
+    return encoded, bytes(firsts), longest
 
 
 cdef inline bint _is_ascii_space(uint8_t c) nogil:
@@ -129,22 +137,27 @@ cdef inline uint8_t _lower(uint8_t c) noexcept nogil:
 DEF MAX_TOKENS = 64
 
 
-cdef object _combine(const uint8_t* p, Py_ssize_t n, frozenset bigrams, const uint8_t* firsts, bint cs):
-    """Combine the pairs of ``bigrams`` in the n-gram text p[0:n]: None when
-    nothing matched (the text stands), the new text as bytes when something
-    did, FALLBACK when Python must judge (Unicode case folding, or a line
-    with more tokens than the fixed buffers hold). Mirrors
-    ``_combine_bigrams_in_ngram``: tokens split on single spaces, a token's
-    base is what precedes its last underscore, the first token's tag
-    survives and the second's is dropped."""
+cdef object _combine(const uint8_t* p, Py_ssize_t n, dict multigrams, const uint8_t* firsts, bint cs,
+                     int max_words):
+    """Combine the sequences of ``multigrams`` in the n-gram text p[0:n]:
+    None when nothing matched (the text stands), the new text as bytes when
+    something did, FALLBACK when Python must judge (Unicode case folding, or
+    a line with more tokens than the fixed buffers hold). Mirrors
+    ``_combine_multigrams_in_ngram``: tokens split on single spaces, a
+    token's base is what precedes its last underscore, at each token the
+    longest matching sequence wins and becomes its target token (or the
+    run's own bases joined by hyphens), the first token's tag survives and
+    the others' are dropped."""
     cdef Py_ssize_t ts[MAX_TOKENS]
     cdef Py_ssize_t te[MAX_TOKENS]
-    cdef Py_ssize_t ntok = 0, i, j, s1, e1, s2, e2, u1, u2, m, k
+    cdef Py_ssize_t tu[MAX_TOKENS]          # end of each token's base (its last underscore, or its end)
+    cdef Py_ssize_t ntok = 0, i, j, t, m, k, length, hit
     cdef uint8_t c
     cdef bint matched = False, nonascii
-    cdef bytes cand
+    cdef bytes cand, piece
+    cdef object target
     cdef uint8_t* cb
-    cdef list parts
+    cdef list parts, pieces
 
     # token spans, as str.split(" ") makes them (empty tokens included)
     ts[0] = 0
@@ -158,56 +171,59 @@ cdef object _combine(const uint8_t* p, Py_ssize_t n, frozenset bigrams, const ui
                 ts[ntok] = i + 1
     if ntok < 2:
         return None
+    for t in range(ntok):
+        tu[t] = te[t]
+        for j in range(te[t] - 1, ts[t] - 1, -1):
+            if p[j] == 0x5f:
+                tu[t] = j
+                break
 
     parts = []
     i = 0
     while i < ntok:
+        hit = 0
         if i + 1 < ntok:
-            s1 = ts[i]; e1 = te[i]; s2 = ts[i + 1]; e2 = te[i + 1]
-            # the bases: up to the last underscore, when there is one
-            u1 = e1
-            for j in range(e1 - 1, s1 - 1, -1):
-                if p[j] == 0x5f:
-                    u1 = j
-                    break
-            u2 = e2
-            for j in range(e2 - 1, s2 - 1, -1):
-                if p[j] == 0x5f:
-                    u2 = j
-                    break
             # one lookup dismisses most tokens: the candidate's first byte
-            c = p[s1] if u1 > s1 else 0x20
+            c = p[ts[i]] if tu[i] > ts[i] else 0x20
             if not cs:
                 c = _lower(c)
             if firsts[c]:
-                m = (u1 - s1) + 1 + (u2 - s2)
-                cand = PyBytes_FromStringAndSize(NULL, m)
-                cb = <uint8_t*> PyBytes_AS_STRING(cand)
-                k = 0
-                nonascii = False
-                for j in range(s1, u1):
-                    c = p[j]
-                    if c >= 0x80:
-                        nonascii = True
-                    cb[k] = c if cs else _lower(c)
-                    k += 1
-                cb[k] = 0x20
-                k += 1
-                for j in range(s2, u2):
-                    c = p[j]
-                    if c >= 0x80:
-                        nonascii = True
-                    cb[k] = c if cs else _lower(c)
-                    k += 1
-                if nonascii and not cs:
-                    return FALLBACK           # str.lower() may fold what ASCII lowering cannot
-                if cand in bigrams:
-                    matched = True
-                    parts.append(PyBytes_FromStringAndSize(<const char*> (p + s1), u1 - s1) + b"-"
-                                 + PyBytes_FromStringAndSize(<const char*> (p + s2), u2 - s2)
-                                 + PyBytes_FromStringAndSize(<const char*> (p + u1), e1 - u1))
-                    i += 2
-                    continue
+                length = max_words if max_words < ntok - i else ntok - i
+                while length >= 2:
+                    m = length - 1
+                    for t in range(i, i + length):
+                        m += tu[t] - ts[t]
+                    cand = PyBytes_FromStringAndSize(NULL, m)
+                    cb = <uint8_t*> PyBytes_AS_STRING(cand)
+                    k = 0
+                    nonascii = False
+                    for t in range(i, i + length):
+                        if t > i:
+                            cb[k] = 0x20
+                            k += 1
+                        for j in range(ts[t], tu[t]):
+                            c = p[j]
+                            if c >= 0x80:
+                                nonascii = True
+                            cb[k] = c if cs else _lower(c)
+                            k += 1
+                    if nonascii and not cs:
+                        return FALLBACK           # str.lower() may fold what ASCII lowering cannot
+                    if cand in multigrams:
+                        hit = length
+                        break
+                    length -= 1
+        if hit:
+            matched = True
+            target = multigrams[cand]
+            if target is None:
+                pieces = []
+                for t in range(i, i + hit):
+                    pieces.append(PyBytes_FromStringAndSize(<const char*> (p + ts[t]), tu[t] - ts[t]))
+                target = b"-".join(pieces)
+            parts.append(<bytes> target + PyBytes_FromStringAndSize(<const char*> (p + tu[i]), te[i] - tu[i]))
+            i += hit
+            continue
         parts.append(PyBytes_FromStringAndSize(<const char*> (p + ts[i]), te[i] - ts[i]))
         i += 1
     if not matched:
@@ -215,11 +231,12 @@ cdef object _combine(const uint8_t* p, Py_ssize_t n, frozenset bigrams, const ui
     return b" ".join(parts)
 
 
-def parse_packed(bytes raw, int mode, tuple suffixes, frozenset bigrams=None, bytes firsts=None,
-                 bint case_sensitive=False):
+def parse_packed(bytes raw, int mode, tuple suffixes, dict multigrams=None, bytes firsts=None,
+                 bint case_sensitive=False, int max_words=2):
     """See module docstring. ``suffixes`` are the tag suffixes as bytes
-    (``b"_NOUN"``, ...); ignored for ``MODE_ALL``. ``bigrams`` and
-    ``firsts`` come from ``bigram_tables``; both None for no combining."""
+    (``b"_NOUN"``, ...); ignored for ``MODE_ALL``. ``multigrams``,
+    ``firsts`` and ``max_words`` come from ``multigram_tables``; None for
+    no combining."""
     cdef const uint8_t* buf = <const uint8_t*> PyBytes_AS_STRING(raw)
     cdef Py_ssize_t n = PyBytes_GET_SIZE(raw)
     cdef Py_ssize_t start = 0, end = n, i, tab
@@ -260,8 +277,9 @@ def parse_packed(bytes raw, int mode, tuple suffixes, frozenset bigrams=None, by
     # --- combine word pairs, then filter the result (the Python order)
     tbuf = buf + start
     tlen = tab - start
-    if bigrams is not None:
-        combined = _combine(tbuf, tlen, bigrams, <const uint8_t*> PyBytes_AS_STRING(firsts), case_sensitive)
+    if multigrams is not None:
+        combined = _combine(tbuf, tlen, multigrams, <const uint8_t*> PyBytes_AS_STRING(firsts), case_sensitive,
+                            max_words)
         if combined is FALLBACK:
             return FALLBACK
         if combined is not None:

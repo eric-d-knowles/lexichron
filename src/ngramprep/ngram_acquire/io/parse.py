@@ -2,89 +2,137 @@
 from __future__ import annotations
 
 import logging
-from typing import Callable, List, Optional, Tuple, TypedDict
+from typing import Callable, Dict, List, Optional, Tuple, TypedDict
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["YearFreq", "NgramRecord", "parse_line", "prepare_bigrams"]
+__all__ = ["YearFreq", "NgramRecord", "parse_line", "prepare_multigrams", "parse_multigram_entry",
+           "Multigrams", "TARGET_ARROW"]
 
 
-def prepare_bigrams(bigrams, case_sensitive: bool = False) -> Optional[frozenset]:
-    """The set of word pairs to combine, as the parser wants it: each entry
-    two words joined by one space, lowercased unless matching is
-    case-sensitive. None for no combining. An entry that is not two words
-    could never match, so it is refused rather than silently ignored."""
-    if not bigrams:
+class Multigrams(dict):
+    """The word sequences to combine, as :func:`prepare_multigrams` returns
+    them: a dict from "w1 w2 ..." (the sequence, normalized) to the token
+    that replaces it, or None for the default (the sequence's own tokens
+    joined by hyphens, in the case they had). It also knows the longest
+    sequence's length, so the per-line scan knows how far to look."""
+    max_words: int = 2
+
+    def __init__(self, entries=(), max_words: int = 2):
+        super().__init__(entries)
+        self.max_words = max_words
+
+
+TARGET_ARROW = "=>"
+
+
+def parse_multigram_entry(entry) -> Tuple[List[str], Optional[str]]:
+    """One settings entry -> (words, target). An entry is a string of words
+    separated by spaces, optionally followed by ``=> target``: the token
+    the sequence becomes. Spaces in the target become hyphens (it must be
+    one token); a blank target means the default. A pair or list
+    ``(words, target)`` is accepted too."""
+    if isinstance(entry, (list, tuple)) and len(entry) == 2 and isinstance(entry[0], (list, tuple)):
+        words, target = [str(w) for w in entry[0]], entry[1]
+    else:
+        text = str(entry)
+        left, arrow, right = text.partition(TARGET_ARROW)
+        words = left.split()
+        target = right if arrow else None
+    if target is not None:
+        target = "-".join(str(target).split()) or None
+    return words, target
+
+
+def prepare_multigrams(multigrams, case_sensitive: bool = False) -> Optional[Multigrams]:
+    """The word sequences to combine, as the parser wants them: each entry's
+    words joined by single spaces, lowercased unless matching is
+    case-sensitive, mapped to the token they become (None: the default).
+    None for no entries. A one-word entry could never match, so it is
+    refused rather than silently ignored."""
+    if not multigrams:
         return None
-    out = set()
-    for entry in bigrams:
-        words = str(entry).split()
-        if len(words) != 2:
-            raise ValueError(f"a combined bigram must be two words separated by a space, not {entry!r}")
-        pair = " ".join(words)
-        out.add(pair if case_sensitive else pair.lower())
-    return frozenset(out)
+    if isinstance(multigrams, Multigrams):
+        return multigrams
+    out: Dict[str, Optional[str]] = {}
+    longest = 2
+    for entry in multigrams:
+        words, target = parse_multigram_entry(entry)
+        if len(words) < 2:
+            raise ValueError(f"a combined multigram must be two or more words separated by spaces, not {entry!r}")
+        phrase = " ".join(words)
+        out[phrase if case_sensitive else phrase.lower()] = target
+        longest = max(longest, len(words))
+    return Multigrams(out, longest)
 
 
-def _combine_bigrams_in_ngram(ngram_text: str, combined_bigrams, case_sensitive: bool = False) -> str:
+prepare_bigrams = prepare_multigrams          # the earlier name
+
+
+def _max_words(multigrams) -> int:
+    n = getattr(multigrams, "max_words", None)
+    if n:
+        return int(n)
+    return max((len(str(e).split(" ")) for e in multigrams), default=2)
+
+
+def _combine_multigrams_in_ngram(ngram_text: str, multigrams, case_sensitive: bool = False) -> str:
     """
-    Replace consecutive token pairs matching combined_bigrams with hyphenated versions.
+    Replace runs of tokens matching an entry of ``multigrams`` with one token.
 
     Scans the n-gram tokens (split on single spaces, as the tagged/untagged
-    filter does) from left to right, looking for consecutive pairs that match
-    entries in combined_bigrams. When found, replaces the pair with a
-    hyphenated version. For POS-tagged data, strips tags before matching but
-    preserves the first token's tag in the output. Matching ignores case
-    unless ``case_sensitive``; the output keeps the tokens' own case, so a
-    later lowercasing (the filter stage) folds the variants together and a
-    project that keeps case keeps it. ``combined_bigrams`` is as
-    :func:`prepare_bigrams` returns it (lowercased when matching ignores
-    case).
-
-    Args:
-        ngram_text: Space-separated n-gram tokens (e.g., "the working class in america")
-                   or POS-tagged tokens (e.g., "the_DET working_VERB class_NOUN in_ADP america_PROPN")
-        combined_bigrams: Set of bigrams to combine (e.g., {"working class"})
-        case_sensitive: Match the pair's case exactly
-
-    Returns:
-        Modified n-gram text with bigrams hyphenated (e.g., "the working-class in america")
-        or with POS tags (e.g., "the_DET working-class_VERB in_ADP america_PROPN")
+    filter does) from left to right; at each token the longest matching
+    sequence wins, and the scan continues after it. The run becomes the
+    entry's target token when it has one, else its own tokens joined by
+    hyphens in the case they had. For POS-tagged data, strips tags before
+    matching but preserves the first token's tag in the output. Matching
+    ignores case unless ``case_sensitive``. ``multigrams`` is as
+    :func:`prepare_multigrams` returns it (lowercased when matching ignores
+    case); a plain set of sequences means every target is the default.
 
     Examples:
-        >>> _combine_bigrams_in_ngram("the working class in america", {"working class"})
+        >>> _combine_multigrams_in_ngram("the working class in america", {"working class"})
         'the working-class in america'
-        >>> _combine_bigrams_in_ngram("The Working Class", {"working class"})
+        >>> _combine_multigrams_in_ngram("The Working Class", {"working class"})
         'The Working-Class'
-        >>> _combine_bigrams_in_ngram("lower class working class", {"lower class", "working class"})
-        'lower-class working-class'
-        >>> _combine_bigrams_in_ngram("the_DET working_VERB class_NOUN", {"working class"})
+        >>> _combine_multigrams_in_ngram("in New York City today", {"new york", "new york city"})
+        'in New-York-City today'
+        >>> _combine_multigrams_in_ngram("the_DET working_VERB class_NOUN", {"working class"})
         'the_DET working-class_VERB'
+        >>> _combine_multigrams_in_ngram("A_DET ._. I_PRON ._.", {"a . i .": "A.I."})
+        'A.I._DET'
     """
     tokens = ngram_text.split(" ")
-    i = 0
+    n = len(tokens)
+    if n < 2:
+        return ngram_text
+    longest = _max_words(multigrams)
+    targets = multigrams if isinstance(multigrams, dict) else {}
+    # the base forms, without the POS tag an underscore introduces
+    bases = [t.rsplit('_', 1)[0] if '_' in t else t for t in tokens]
+    keys = bases if case_sensitive else [b.lower() for b in bases]
     result_tokens = []
-    while i < len(tokens):
-        if i + 1 < len(tokens):
-            token1 = tokens[i]
-            token2 = tokens[i + 1]
-            # the base forms, without the POS tag an underscore introduces
-            base1 = token1.rsplit('_', 1)[0] if '_' in token1 else token1
-            base2 = token2.rsplit('_', 1)[0] if '_' in token2 else token2
-            bigram = f"{base1} {base2}"
-            if not case_sensitive:
-                bigram = bigram.lower()
-            if bigram in combined_bigrams:
-                # the first token's tag survives; the second's is dropped
-                if '_' in token1:
-                    result_tokens.append(f"{base1}-{base2}_{token1.rsplit('_', 1)[1]}")
-                else:
-                    result_tokens.append(f"{base1}-{base2}")
-                i += 2
-                continue
-        result_tokens.append(tokens[i])
-        i += 1
+    i = 0
+    while i < n:
+        hit = 0
+        for length in range(min(longest, n - i), 1, -1):
+            key = " ".join(keys[i:i + length])
+            if key in multigrams:
+                hit = length
+                break
+        if hit:
+            first = tokens[i]
+            tag = "_" + first.rsplit('_', 1)[1] if '_' in first else ""     # the first token's tag survives
+            target = targets.get(key)
+            result_tokens.append((target if target else "-".join(bases[i:i + hit])) + tag)
+            i += hit
+        else:
+            result_tokens.append(tokens[i])
+            i += 1
     return " ".join(result_tokens)
+
+
+_combine_bigrams_in_ngram = _combine_multigrams_in_ngram      # the earlier name
 
 
 class YearFreq(TypedDict):
@@ -103,8 +151,8 @@ def parse_line(
         line: str,
         *,
         filter_pred: Optional[Callable[[str], bool]] = None,
-        combined_bigrams: Optional[set] = None,
-        bigram_case_sensitive: bool = False,
+        combined_multigrams: Optional[set] = None,
+        multigram_case_sensitive: bool = False,
 ) -> Tuple[Optional[str], Optional[NgramRecord]]:
     """
     Parse Google Ngrams line format into structured data.
@@ -115,11 +163,11 @@ def parse_line(
         line: Raw line from ngrams file
         filter_pred: Optional predicate to filter n-grams by text
                      (applied before parsing frequency data)
-        combined_bigrams: Optional set of bigrams to combine with hyphens
-                         (e.g., {"working class", "middle class"})
+        combined_multigrams: Optional set of word sequences to combine with hyphens
+                         (e.g., {"working class", "new york city"})
                          When found within an n-gram, consecutive tokens matching
-                         a bigram will be replaced with a hyphenated version,
-                         reducing the n-gram size by 1.
+                         a listed sequence are replaced with one hyphenated token,
+                         reducing the n-gram size by the sequence's length less 1.
 
     Returns:
         (ngram_text, record) if valid and passes filter, else (None, None)
@@ -128,7 +176,7 @@ def parse_line(
         - Returns (None, None) for empty/malformed lines or filtered n-grams
         - Skips malformed frequency tuples silently
         - Requires at least one valid frequency tuple to succeed
-        - If combined_bigrams is provided, matching consecutive token pairs
+        - If combined_multigrams is provided, matching runs of tokens
           within the n-gram will be hyphenated (e.g., "the working class in america"
           becomes "the working-class in america")
 
@@ -138,7 +186,7 @@ def parse_line(
             {'year': 2000, 'frequency': 100, 'document_count': 50},
             {'year': 2001, 'frequency': 150, 'document_count': 60}
         ]})
-        >>> parse_line("the working class in america\\t2000,100,50", combined_bigrams={"working class"})
+        >>> parse_line("the working class in america\\t2000,100,50", combined_multigrams={"working class"})
         ('the working-class in america', {'frequencies': [{'year': 2000, 'frequency': 100, 'document_count': 50}]})
     """
     s = line.strip()
@@ -152,9 +200,9 @@ def parse_line(
 
     ngram_text, freq_blob = parts
 
-    # Apply combined bigrams transformation: collapse matching consecutive tokens
-    if combined_bigrams is not None:
-        ngram_text = _combine_bigrams_in_ngram(ngram_text, combined_bigrams, bigram_case_sensitive)
+    # Combine the listed word sequences into single hyphenated tokens
+    if combined_multigrams is not None:
+        ngram_text = _combine_multigrams_in_ngram(ngram_text, combined_multigrams, multigram_case_sensitive)
 
     # Apply filter before parsing frequency data (optimization)
     if filter_pred is not None and not filter_pred(ngram_text):

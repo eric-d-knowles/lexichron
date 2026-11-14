@@ -9,7 +9,7 @@ import pytest
 
 parse_cy = pytest.importorskip("ngramprep.ngram_acquire.io.parse_cy")
 
-from ngramprep.ngram_acquire.io.parse import parse_line, prepare_bigrams  # noqa: E402
+from ngramprep.ngram_acquire.io.parse import parse_line, prepare_multigrams  # noqa: E402
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate  # noqa: E402
 from ngramprep.ngram_acquire import worker as worker_mod  # noqa: E402
 from ngramprep.ngram_acquire.worker import _pack_record  # noqa: E402
@@ -17,12 +17,12 @@ from ngramprep.ngram_acquire.worker import _pack_record  # noqa: E402
 MODES = {"all": parse_cy.MODE_ALL, "tagged": parse_cy.MODE_TAGGED, "untagged": parse_cy.MODE_UNTAGGED}
 
 
-def _reference(raw: bytes, pred, bigrams=None, cs=False):
+def _reference(raw: bytes, pred, multigrams=None, cs=False):
     """What the Python path produces for this raw line (None = rejected,
     'raises' = an exception the worker would log and skip)."""
     try:
-        key, rec = parse_line(raw.decode("utf-8"), filter_pred=pred, combined_bigrams=bigrams,
-                              bigram_case_sensitive=cs)
+        key, rec = parse_line(raw.decode("utf-8"), filter_pred=pred, combined_multigrams=multigrams,
+                              multigram_case_sensitive=cs)
         if not (key and rec):
             return None
         return key, _pack_record(rec)
@@ -30,20 +30,20 @@ def _reference(raw: bytes, pred, bigrams=None, cs=False):
         return "raises"
 
 
-def _check(raw: bytes, bigrams=None, cs=False):
+def _check(raw: bytes, multigrams=None, cs=False):
     """Fast path output equals the reference, or is FALLBACK. Returns the
     number of fallbacks (0 or 1) so tests can assert on it."""
     fb = 0
-    prepared = prepare_bigrams(bigrams, cs)
-    tables = parse_cy.bigram_tables(prepared)
+    prepared = prepare_multigrams(multigrams, cs)
+    tables = parse_cy.multigram_tables(prepared)
     for mode, m in MODES.items():
         pred = make_ngram_type_predicate(mode)
         sfx = tuple(s.encode() for s in pred.suffixes)
-        got = parse_cy.parse_packed(raw, m, sfx, tables[0], tables[1], cs)
+        got = parse_cy.parse_packed(raw, m, sfx, tables[0], tables[1], cs, tables[2])
         if got is parse_cy.FALLBACK:
             fb = 1
             continue
-        assert got == _reference(raw, pred, prepared, cs), (raw, mode, bigrams, cs)
+        assert got == _reference(raw, pred, prepared, cs), (raw, mode, multigrams, cs)
     return fb
 
 
@@ -109,8 +109,18 @@ def test_random_lines_match():
         _check(line.encode("utf-8"))
 
 
-PAIRS = {"working class", "Middle Class", "new york"}
+PAIRS = {"working class", "Middle Class", "new york", "new york city", "a b c d", "a . i . => A.I.",
+         "human being => human being", "x y => XY"}
 COMBINING = [
+    b"A_DET ._. I_PRON ._. is_VERB\t1900,1,1\n",                      # a target with the first tag
+    b"the a . i . boom\t1900,1,1\n",
+    b"A . I .\t1900,1,1\n",
+    b"Human Being\t1900,1,1\n", b"x y z\t1900,1,1\n", b"X_NOUN Y_NOUN\t1900,1,1\n",
+    b"in New York City today\t1900,1,1\n",                             # the longest sequence wins
+    b"in_ADP New_PROPN York_PROPN City_PROPN\t1900,1,1\n",
+    b"York City New York\t1900,1,1\n",
+    b"a b c d\t1900,1,1\n", b"a b c\t1900,1,1\n", b"x a b c d\t1900,1,1\n",
+    b"New York City New York\t1900,1,1\n",
     b"the working class in america\t1900,1,1\n",
     b"The Working Class in America\t1900,1,1\n",                       # capitalized: combines, keeps its case
     b"WORKING CLASS\t1900,1,1\n",
@@ -142,13 +152,23 @@ def test_combining_matches_python_without_fallback():
         assert _check(raw, PAIRS) == 0, raw
         assert _check(raw, PAIRS, cs=True) == 0, raw
     # a capitalized pair combines by default and not under the switch
-    tables = parse_cy.bigram_tables(prepare_bigrams(PAIRS))
-    key, _ = parse_cy.parse_packed(COMBINING[1], parse_cy.MODE_ALL, (), tables[0], tables[1], False)
+    tables = parse_cy.multigram_tables(prepare_multigrams(PAIRS))
+    assert tables[2] == 4
+    key, _ = parse_cy.parse_packed(COMBINING[0], parse_cy.MODE_ALL, (), *tables[:2], False, tables[2])
+    assert key == "A.I._DET is_VERB"
+    key, _ = parse_cy.parse_packed(b"in New York City today\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2], False,
+                                   tables[2])
+    assert key == "in New-York-City today"
+    key, _ = parse_cy.parse_packed(b"Human Being x y\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2], False, tables[2])
+    assert key == "human-being XY"
+    key, _ = parse_cy.parse_packed(b"The Working Class in America\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2],
+                                   False, tables[2])
     assert key == "The Working-Class in America"
-    tables = parse_cy.bigram_tables(prepare_bigrams(PAIRS, True))
-    key, _ = parse_cy.parse_packed(COMBINING[1], parse_cy.MODE_ALL, (), tables[0], tables[1], True)
+    tables = parse_cy.multigram_tables(prepare_multigrams(PAIRS, True))
+    key, _ = parse_cy.parse_packed(b"The Working Class in America\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2],
+                                   True, tables[2])
     assert key == "The Working Class in America"
-    key, _ = parse_cy.parse_packed(b"the Middle Class\t1900,1,1", parse_cy.MODE_ALL, (), tables[0], tables[1], True)
+    key, _ = parse_cy.parse_packed(b"the Middle Class\t1900,1,1", parse_cy.MODE_ALL, (), *tables[:2], True, tables[2])
     assert key == "the Middle-Class"
 
 
@@ -165,7 +185,8 @@ def test_random_lines_with_pairs_match():
     rnd = random.Random(11)
     words = ["the", "The", "working", "Working", "class", "Class", "CLASS", "middle", "x_NOUN", "class_NOUN",
              "Working_NOUN", "café", "_NOUN", "a_b_c", ""]
-    pairs = {"working class", "middle class", "class class", "the working"}
+    pairs = {"working class", "middle class => MC", "class class", "the working", "the working class => twc",
+             "working class class", "a_b_c class"}
     for _ in range(4000):
         toks = [rnd.choice(words) for _ in range(rnd.randint(1, 6))]
         line = " ".join(toks) + "\t" + f"{rnd.randint(1500, 2019)},{rnd.randint(0, 10**6)},{rnd.randint(0, 10**4)}"
@@ -190,7 +211,7 @@ def test_worker_combines_on_the_fast_path_like_python(tmp_path, monkeypatch):
         d = Path(tempfile.mkdtemp(prefix=f"{'fast' if fast else 'slow'}-{mode}-{cs}-", dir=tmp_path))
         msg, chunks, _, _, _ = worker_mod.process_and_ingest_file(
             "http://example/f.gz", 1, make_ngram_type_predicate(mode), spool_dir=str(d), chunk_entries=1000,
-            combined_bigrams=PAIRS | NON_ASCII_PAIRS, bigram_case_sensitive=cs)
+            combined_multigrams=PAIRS | NON_ASCII_PAIRS, multigram_case_sensitive=cs)
         assert msg.startswith("SUCCESS"), msg
         return {k: v for c in chunks for k, v in read_chunk(c)}
 
@@ -200,6 +221,8 @@ def test_worker_combines_on_the_fast_path_like_python(tmp_path, monkeypatch):
             assert out == run(False, mode, cs), (mode, cs)
     keys = {k.decode("utf-8") for k in run(True, "all", False)}
     assert "The Working-Class in America" in keys and "Caf\u00e9-Society" in keys and "CAF\u00c9-SOCIETY" in keys
+    assert "in New-York-City today" in keys and "in_ADP New-York-City_PROPN" in keys
+    assert "A.I._DET is_VERB" in keys and "the A.I. boom" in keys
     keys = {k.decode("utf-8") for k in run(True, "all", True)}
     assert "The Working Class in America" in keys and "the working-class in america" in keys
 

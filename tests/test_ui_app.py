@@ -1260,3 +1260,88 @@ def test_table_cells_align_negative_numbers_with_positive_ones():
     assert _aligned("–", 4) == "   –"
     assert _aligned("doctor", 8) == "doctor  "
     assert _aligned("-", 4) == "-   "                     # a bare dash is a label
+
+
+def test_multigram_editor_fills_the_target_and_writes_entries(tmp_path):
+    """The Combine multigrams setting is a summary with an Edit button; the
+    editor's target box follows the words until typed in; OK gives the
+    settings entries and the resolved call follows."""
+    from textual.widgets import Input, Static
+    from lexichron.ui.app import MultigramEditor, MultigramField, MultigramRow, multigram_entry
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text("corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: /data/\n"
+                    "acquire:\n  combined_multigrams: ['a . i . => A.I.', working class]\n")
+    assert multigram_entry(["human", "being"], "human being") == "human being"
+    assert multigram_entry(["human", "-", "being"], "human being") == "human - being => human being"
+    assert multigram_entry(["a", ".", "i", "."], "A.I.") == "a . i . => A.I."
+
+    async def scenario():
+        app = LexichronApp(str(proj), "acquire")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            field = app.query_one("#f-acquire-combined_multigrams", MultigramField)
+            assert field.value == ["a . i . => A.I.", "working class"]
+            assert "2 sequences: a . i . -> A.I.; working class -> working-class" in field.summary()
+            call = str(app.query_one("#call").content)                        # a set: order is not fixed
+            assert "combined_multigrams={" in call and "'a . i . => A.I.'" in call and "'working class'" in call
+            # the editor opens on the entries; the target follows the words until edited
+            app.push_screen(MultigramEditor(field.value))
+            await pilot.pause()
+            rows = list(app.screen.query(MultigramRow))
+            assert len(rows) == 2 and rows[0].words() == ["a", ".", "i", "."] and rows[0].target() == "A.I."
+            assert not rows[0].auto and rows[1].auto and rows[1].target() == "working class"
+            words = list(rows[1].query(".mg-word"))
+            words[1].value = "Class"
+            words[2].value = "Hero"
+            await pilot.pause()
+            assert rows[1].target() == "working Class Hero"
+            rows[1].query_one(".mg-target", Input).value = "working-class hero"
+            await pilot.pause()
+            assert not rows[1].auto
+            words[2].value = ""
+            await pilot.pause()
+            assert rows[1].target() == "working-class hero"                 # typed targets stay put
+            app.screen._add()
+            await pilot.pause()
+            rows = list(app.screen.query(MultigramRow))
+            assert len(rows) == 3
+            new_words = list(rows[2].query(".mg-word"))
+            new_words[0].value = "human"
+            await pilot.pause()
+            app.screen._ok()
+            await pilot.pause()
+            assert "one word" in str(app.screen.query_one("#mg-error", Static).content)
+            new_words[1].value = "being"
+            await pilot.pause()
+            app.screen._ok()
+            await pilot.pause()
+            # the editor's result lands in the field through its callback
+            assert not isinstance(app.screen, MultigramEditor)
+        _assert_clean(app)
+
+    asyncio.run(scenario())
+
+
+def test_multigram_field_takes_the_editor_result(tmp_path):
+    from lexichron.ui.app import MultigramField
+    proj = tmp_path / "lexichron.yaml"
+    proj.write_text("corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: /data/\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "acquire")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            field = app.query_one("#f-acquire-combined_multigrams", MultigramField)
+            assert field.value == [] and field.summary() == "(none)"
+            field.set_value(["human being", "a . i . => A.I."])
+            field.post_message(MultigramField.Changed(field))
+            await pilot.pause()
+            call = str(app.query_one("#call").content)
+            assert "combined_multigrams={" in call and "'human being'" in call and "'a . i . => A.I.'" in call
+            field.set_value([])
+            field.post_message(MultigramField.Changed(field))
+            await pilot.pause()
+            assert "combined_multigrams" not in str(app.query_one("#call").content)
+        _assert_clean(app)
+
+    asyncio.run(scenario())

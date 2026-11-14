@@ -102,16 +102,20 @@ def test_failed_shard_is_reported_not_marked(monkeypatch, tmp_path):
     assert PROCESSED_PREFIX + b"1-00001-of-00002.gz" not in db.data
 
 
-def test_pair_list_is_refused_for_unigrams_before_anything_runs(tmp_path):
-    """A 1-gram line holds one token, so a pair list can never match: the
-    entry point says so at once, before discovering files or creating the
-    database (no network, nothing on disk)."""
+def test_sequence_list_is_refused_where_it_cannot_apply_before_anything_runs(tmp_path):
+    """A 1-gram line holds one token, and a sequence longer than the n-grams
+    never fits in one line, so such lists can never match: the entry point
+    says so at once, before discovering files or creating the database (no
+    network, nothing on disk)."""
     import pytest
     from ngramprep.ngram_acquire.core import download_and_ingest_to_rocksdb
     with pytest.raises(ValueError, match="1-grams"):
         download_and_ingest_to_rocksdb(ngram_size=1, repo_release_id="20200217", repo_corpus_id="eng",
-                                       db_path_stub=str(tmp_path), combined_bigrams={"human being"})
-    with pytest.raises(ValueError, match="two words"):
+                                       db_path_stub=str(tmp_path), combined_multigrams={"human being"})
+    with pytest.raises(ValueError, match="two or more words"):
         download_and_ingest_to_rocksdb(ngram_size=2, repo_release_id="20200217", repo_corpus_id="eng",
-                                       db_path_stub=str(tmp_path), combined_bigrams={"human-being"})
+                                       db_path_stub=str(tmp_path), combined_multigrams={"human-being"})
+    with pytest.raises(ValueError, match="3 words, which cannot occur in a 2-gram"):
+        download_and_ingest_to_rocksdb(ngram_size=2, repo_release_id="20200217", repo_corpus_id="eng",
+                                       db_path_stub=str(tmp_path), combined_multigrams={"new york city", "new york"})
     assert not list(tmp_path.iterdir())

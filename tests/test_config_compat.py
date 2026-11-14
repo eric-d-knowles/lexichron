@@ -63,3 +63,16 @@ def test_dropped_filter_keys_are_ignored(tmp_path):
         """))
     cfg = load_project(p)
     assert cfg["filter"] == {"min_len": 4}
+
+
+def test_renamed_acquire_keys_still_load(tmp_path):
+    """combined_bigrams became combined_multigrams (and its case switch
+    followed) when the setting grew to sequences of any length: a settings
+    file from before loads under the new names."""
+    from lexichron.config import load_project
+    path = tmp_path / "lexichron.yaml"
+    path.write_text("acquire:\n  combined_bigrams: [working class]\n  bigram_case_sensitive: true\n  workers: 4\n")
+    cfg = load_project(path)
+    assert cfg["acquire"] == {"combined_multigrams": ["working class"], "multigram_case_sensitive": True, "workers": 4}
+    path.write_text("acquire:\n  combined_bigrams: [old]\n  combined_multigrams: [new]\n")
+    assert load_project(path)["acquire"] == {"combined_multigrams": ["new"]}      # the new name wins

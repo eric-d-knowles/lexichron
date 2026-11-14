@@ -12,15 +12,15 @@ from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 import requests
 
 from ngramprep.ngram_acquire.io.download import stream_download_with_retries
-from ngramprep.ngram_acquire.io.parse import parse_line, prepare_bigrams
+from ngramprep.ngram_acquire.io.parse import parse_line, prepare_multigrams
 from ngramprep.ngram_acquire.spool import ChunkWriter
 
 try:                                   # compiled fast path (see io/parse_cy.pyx)
-    from ngramprep.ngram_acquire.io.parse_cy import (FALLBACK as _FALLBACK, bigram_tables as _bigram_tables,
+    from ngramprep.ngram_acquire.io.parse_cy import (FALLBACK as _FALLBACK, multigram_tables as _multigram_tables,
                                                      parse_packed as _parse_packed)
 except ImportError:                    # pragma: no cover - built without the extension
     _parse_packed = None
-    _bigram_tables = None
+    _multigram_tables = None
     _FALLBACK = object()
 
 _FAST_MODES = {"all": 0, "tagged": 1, "untagged": 2}
@@ -70,8 +70,8 @@ def process_and_ingest_file(
     log_file_path: Optional[str] = None,
     *,
     session: Optional[requests.Session] = None,
-    combined_bigrams: Optional[set] = None,
-    bigram_case_sensitive: bool = False,
+    combined_multigrams: Optional[set] = None,
+    multigram_case_sensitive: bool = False,
     max_attempts: int = 3,
     spool_dir: Optional[str] = None,
     chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
@@ -91,9 +91,9 @@ def process_and_ingest_file(
         filter_pred: Optional predicate to filter ngrams by text
         log_file_path: Optional path to log file for worker output
         session: Optional requests.Session for connection pooling
-        combined_bigrams: Optional set of bigrams to combine with hyphens
-        bigram_case_sensitive: Match those pairs' case exactly (default: a
-            pair matches whatever its capitalization; the tokens keep theirs)
+        combined_multigrams: Optional set of word sequences to combine with hyphens
+        multigram_case_sensitive: Match those sequences' case exactly (default: a
+            sequence matches whatever its capitalization; the tokens keep theirs)
         max_attempts: How many times to attempt the whole download-and-parse
             of this file. A connection dropped part-way through a stream is
             retried from the beginning, discarding partial results (including
@@ -159,13 +159,13 @@ def process_and_ingest_file(
     file_tag = f"{worker_id:05d}_{filename}"
 
     # Use the compiled parser when the filter is one it knows; it hands
-    # anything unusual back to parse_line. The pairs to combine are normalized
-    # once here (the entry point did it already; this is idempotent).
-    combined_bigrams = prepare_bigrams(combined_bigrams, bigram_case_sensitive)
+    # anything unusual back to parse_line. The sequences to combine are
+    # normalized once here (the entry point did it already; this is idempotent).
+    combined_multigrams = prepare_multigrams(combined_multigrams, multigram_case_sensitive)
     fast_mode = _FAST_MODES.get(getattr(filter_pred, "ngram_type", None))
     fast = _parse_packed is not None and fast_mode is not None
     fast_suffixes = tuple(s.encode("ascii") for s in getattr(filter_pred, "suffixes", ())) if fast else ()
-    fast_bigrams, fast_firsts = _bigram_tables(combined_bigrams) if fast else (None, None)
+    fast_multigrams, fast_firsts, fast_words = _multigram_tables(combined_multigrams) if fast else (None, None, 0)
     # Tell the parent (which reports progress) that a worker has this file.
     try:
         open(os.path.join(spool_root, f"{file_tag}.started"), "w").close()
@@ -202,8 +202,8 @@ def process_and_ingest_file(
                                 continue
                             lines_processed += 1
                             if fast:
-                                hit = _parse_packed(raw, fast_mode, fast_suffixes, fast_bigrams, fast_firsts,
-                                                    bigram_case_sensitive)
+                                hit = _parse_packed(raw, fast_mode, fast_suffixes, fast_multigrams, fast_firsts,
+                                                    multigram_case_sensitive, fast_words)
                                 if hit is not _FALLBACK:
                                     if hit is not None:
                                         writer.add(hit[0], hit[1])
@@ -212,12 +212,12 @@ def process_and_ingest_file(
                                 key, rec = parse_line(
                                     raw.decode("utf-8"),
                                     filter_pred=filter_pred,
-                                    combined_bigrams=combined_bigrams,
-                                    bigram_case_sensitive=bigram_case_sensitive,
+                                    combined_multigrams=combined_multigrams,
+                                    multigram_case_sensitive=multigram_case_sensitive,
                                 )
                                 if key and rec:
                                     # Repeated keys within a chunk (e.g. tagged
-                                    # variants of a combined bigram) are summed
+                                    # variants of a combined multigram) are summed
                                     # by the writer; across chunks, by the DB.
                                     writer.add(key, _pack_record(rec))
                             except UnicodeDecodeError as exc:

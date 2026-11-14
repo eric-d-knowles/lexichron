@@ -26,7 +26,7 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
-            "compact_after_ingest", "bigram_case_sensitive",
+            "compact_after_ingest", "multigram_case_sensitive",
             # filter
             "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path",
@@ -64,7 +64,7 @@ GRID_AXES = ("vector_size", "window", "min_count", "epochs", "approach", "weight
 # Preferred order within a section (what to get, then how); anything not listed
 # follows in signature order.
 ORDER = ["release", "language", "ngram_size", "db_path_stub",
-         "ngram_type", "combined_bigrams", "overwrite_db", "file_range",
+         "ngram_type", "combined_multigrams", "overwrite_db", "file_range",
          # filter
          "lowercase", "lemmatize", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
          "min_context_tokens", "bin_size", "vocabulary", "no_vocabulary", "always_include",
@@ -96,8 +96,8 @@ LABELS: Dict[str, str] = {
     "file_range": "File range",
     "workers": "Workers",
     "overwrite_db": "Start fresh",
-    "combined_bigrams": "Combine bigrams",
-    "bigram_case_sensitive": "Match bigram case",
+    "combined_multigrams": "Combine multigrams",
+    "multigram_case_sensitive": "Match multigram case",
     "random_seed": "Shuffle seed",
     "open_type": "Database profile",
     "compact_after_ingest": "Compact when done",
@@ -182,12 +182,14 @@ HELP: Dict[str, str] = {
     "workers": ("Parallel download/parse workers. Blank = one per CPU, minus one. Slurm jobs use "
                 "the job's CPU count automatically."),
     "overwrite_db": "Delete an existing database first. Off = resume it, skipping files already done.",
-    "combined_bigrams": ("Word pairs to treat as one hyphenated token, comma-separated: "
-                         "working class, middle class  ->  working-class, middle-class. A pair matches whatever "
-                         "its capitalization in the data; the combined token keeps the capitalization it had. "
-                         "Only for 2-grams and larger: a 1-gram line holds one token."),
-    "bigram_case_sensitive": ("Combine a pair only when its capitalization matches the list exactly "
-                              "(off: Working Class and working class both combine)."),
+    "combined_multigrams": ("Word sequences to turn into one token as the files are read: Edit opens a window "
+                            "with a row per sequence, up to five words, and the token they become (blank: the words "
+                            "joined by hyphens). working class -> working-class; A . I . -> A.I. Where sequences "
+                            "overlap the longest wins. A sequence matches whatever its capitalization in the data. "
+                            "Only for 2-grams and larger, and no sequence longer than the n-grams. In the settings "
+                            "file: 'new york city => New York City', or just 'working class'."),
+    "multigram_case_sensitive": ("Combine a sequence only when its capitalization matches the list exactly "
+                                 "(off: Working Class and working class both combine)."),
     "random_seed": "Seed for shuffling the download order (blank = no shuffle).",
     "open_type": "RocksDB profile. Leave at write:packed24 unless you know why.",
     "compact_after_ingest": "Compact the database when done (recommended).",
@@ -284,7 +286,7 @@ HELP: Dict[str, str] = {
 @dataclass
 class Field:
     name: str                 # key in the settings file
-    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range" | "grid"
+    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range" | "grid" | "multigrams"
     default: Any = None
     required: bool = False
     choices: Optional[List[str]] = None
@@ -336,6 +338,8 @@ def _kind_for(annotation: Any, default: Any, name: str, stage: str = "") -> str:
         return "choice"
     if name.endswith("_range") or name == "years":
         return "range"
+    if name == "combined_multigrams":
+        return "multigrams"
     if name.endswith("_dataset"):
         return "path"
     if name == "vocabulary":

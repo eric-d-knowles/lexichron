@@ -29,7 +29,7 @@ def write_batch_to_db(
     Data entries are written with ``merge`` rather than ``put``, so that a key
     which already exists in the database (for example the same n-gram arriving
     from two shard files, or two n-grams that collapse onto one key through
-    ``combined_bigrams``) has its per-year counts summed by the database's
+    ``combined_multigrams``) has its per-year counts summed by the database's
     packed24 merge operator instead of being overwritten.
 
     Args:

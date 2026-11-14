@@ -21,7 +21,7 @@ from ngramprep.ngram_acquire.executor import process_files
 from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES
 from ngramprep.ngram_acquire.reporter import print_pipeline_header, print_final_summary
-from ngramprep.ngram_acquire.io.parse import prepare_bigrams
+from ngramprep.ngram_acquire.io.parse import prepare_multigrams
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
 from ngramprep.ngram_acquire.utils.cleanup import safe_db_cleanup
 from ngramprep.ngram_acquire.db.build_path import build_db_path
@@ -59,8 +59,8 @@ def download_and_ingest_to_rocksdb(
         open_type: str = "write:packed24",
         compact_after_ingest: bool = True,
         archive_path_stub: Optional[str] = None,
-        combined_bigrams: Optional[set] = None,
-        bigram_case_sensitive: bool = False,
+        combined_multigrams: Optional[set] = None,
+        multigram_case_sensitive: bool = False,
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         spool_dir: Optional[str] = None,
         progress_path: Optional[str] = None,
@@ -98,11 +98,12 @@ def download_and_ingest_to_rocksdb(
             compaction is what folds those files together and applies pending
             merges; skip it only for a quick partial run.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
-        combined_bigrams: Optional set of bigrams to combine with hyphens (e.g., {"working class", "middle class"}).
-            A pair matches whatever its capitalization in the data ("Working Class", "working class"),
-            and the combined token keeps the capitalization it had, so the filter stage's lowercasing
-            folds the variants together.
-        bigram_case_sensitive: Match the pairs' case exactly instead (only "working class" as written).
+        combined_multigrams: Optional set of word sequences to combine into one hyphenated token
+            (e.g., {"working class", "new york city"}): two or more words each; the longest match
+            at a position wins. A sequence matches whatever its capitalization in the data
+            ("Working Class", "working class"), and the combined token keeps the capitalization it
+            had, so the filter stage's lowercasing folds the variants together.
+        multigram_case_sensitive: Match the sequences' case exactly instead (only "working class" as written).
         chunk_entries: Entries per spooled chunk. Workers stream parsed entries
             to chunk files on disk instead of holding a whole shard in memory;
             peak memory is roughly (workers + 1) x one chunk of packed values.
@@ -129,13 +130,21 @@ def download_and_ingest_to_rocksdb(
 
     start_time = datetime.now()
 
-    # The pair list is checked before anything is downloaded or created: an
-    # entry that is not two words could never match, and a 1-gram file has
-    # one token per line, so there is never a pair to combine.
-    combined_bigrams = prepare_bigrams(combined_bigrams, bigram_case_sensitive)
-    if combined_bigrams and int(ngram_size) == 1:
-        raise ValueError("combined_bigrams cannot apply to 1-grams: each line holds one token, so no pair "
-                         "ever occurs. Combine pairs when acquiring 2-grams or larger, or clear the list.")
+    # The sequence list is checked before anything is downloaded or created:
+    # an entry of one word could never match, and an entry longer than the
+    # n-grams being acquired never occurs in one line (a 1-gram file has one
+    # token per line, so no list applies there).
+    combined_multigrams = prepare_multigrams(combined_multigrams, multigram_case_sensitive)
+    if combined_multigrams:
+        n = int(ngram_size)
+        if n == 1:
+            raise ValueError("combined_multigrams cannot apply to 1-grams: each line holds one token, so no "
+                             "sequence ever occurs. Combine sequences when acquiring 2-grams or larger, or clear "
+                             "the list.")
+        too_long = sorted(m for m in combined_multigrams if m.count(" ") + 1 > n)
+        if too_long:
+            raise ValueError(f"combined_multigrams: {too_long[0]!r} has {too_long[0].count(' ') + 1} words, which "
+                             f"cannot occur in a {n}-gram; drop it or acquire longer n-grams")
 
     # Build full database path from stub
     db_path = build_db_path(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
@@ -241,8 +250,8 @@ def download_and_ingest_to_rocksdb(
             workers=workers,
             db=db,
             filter_pred=filter_pred,
-            combined_bigrams=combined_bigrams,
-            bigram_case_sensitive=bigram_case_sensitive,
+            combined_multigrams=combined_multigrams,
+            multigram_case_sensitive=multigram_case_sensitive,
             spool_dir=spool_dir,
             chunk_entries=chunk_entries,
             progress=progress,

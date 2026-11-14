@@ -52,7 +52,7 @@ def test_worker_sums_colliding_tagged_variants(monkeypatch, tmp_path):
     msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
         "http://example/3-00000-of-00001.gz", 1,
         filter_pred=None, log_file_path=None,
-        combined_bigrams={"working class"}, spool_dir=str(tmp_path),
+        combined_multigrams={"working class"}, spool_dir=str(tmp_path),
     )
 
     assert msg.startswith("SUCCESS")

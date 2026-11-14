@@ -66,6 +66,11 @@ _MOVED_KEYS = {("acquire", "ngram_size"): "corpus", ("filter", "ngram_size"): "c
 # is now the only one), so files written by earlier versions still run.
 _DROPPED_KEYS = {("filter", "smart_partitioning"), ("filter", "samples_per_worker"), ("filter", "work_units")}
 
+# Keys renamed within their section, as (section, old key) -> new key: the
+# setting is the same, the name grew with what it does.
+_RENAMED_KEYS = {("acquire", "combined_bigrams"): "combined_multigrams",
+                 ("acquire", "bigram_case_sensitive"): "multigram_case_sensitive"}
+
 
 def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
     for (old_section, key), new_section in _MOVED_KEYS.items():
@@ -75,6 +80,10 @@ def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
             target = data.setdefault(new_section, None) or {}
             target.setdefault(key, value)
             data[new_section] = target
+    for (section_name, old_key), new_key in _RENAMED_KEYS.items():
+        section = data.get(section_name)
+        if isinstance(section, dict) and old_key in section:
+            section.setdefault(new_key, section.pop(old_key))
     for section_name, key in _DROPPED_KEYS:
         section = data.get(section_name)
         if isinstance(section, dict):
