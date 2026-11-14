@@ -21,6 +21,7 @@ __all__ = ["Field", "Section", "stage_sections", "SLURM_FIELDS", "parse_args_doc
 
 # Settings that are not meaningful in a form (set by the CLI / runtime).
 HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write:packed24 is the only sensible value
+          "always_include_case",                                 # filter: edited with always_include in one window
           "train_fn",                                            # tune, train: a test hook
           "array_task", "array_count"}                           # set by the batch script (Submit: Jobs)
 
@@ -212,7 +213,11 @@ HELP: Dict[str, str] = {
     "no_vocabulary": "Filter 2-5-grams with the rule filters alone, without a vocabulary. Rarely wanted: the result is far larger.",
     "pivot": "Write the database keyed by year then n-gram (what training reads) instead of by n-gram (what the vocabulary is built from). Blank: off for unigrams, on for longer n-grams.",
     "vocabulary_top_n": "Use only the first N tokens of the vocabulary file.",
-    "always_include": "Comma-separated tokens kept even if not in the vocabulary (e.g. he, she, his, her).",
+    "always_include": ("Tokens kept whatever the other rules say (the vocabulary, letters only, length, stopwords): "
+                       "Edit opens a window with a row per token. A token is matched by its spelling in the data, "
+                       "whatever its capitalization unless the row says Match case (AI keeps AI and not ai). "
+                       "Kept tokens are still lowercased and lemmatized like the rest, so list every spelling you "
+                       "want (woman does not keep women). Tokens the acquire run combined are kept automatically."),
     "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams, off for longer n-grams.",
     "output_vocabulary_top_n": "How many of the most frequent tokens the vocabulary keeps.",
     "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
@@ -286,7 +291,7 @@ HELP: Dict[str, str] = {
 @dataclass
 class Field:
     name: str                 # key in the settings file
-    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range" | "grid" | "multigrams"
+    kind: str                 # "text" | "int" | "float" | "bool" | "optbool" | "choice" | "list" | "path" | "range" | "grid" | "multigrams" | "keeplist"
     default: Any = None
     required: bool = False
     choices: Optional[List[str]] = None
@@ -340,6 +345,8 @@ def _kind_for(annotation: Any, default: Any, name: str, stage: str = "") -> str:
         return "range"
     if name == "combined_multigrams":
         return "multigrams"
+    if name == "always_include":
+        return "keeplist"
     if name.endswith("_dataset"):
         return "path"
     if name == "vocabulary":

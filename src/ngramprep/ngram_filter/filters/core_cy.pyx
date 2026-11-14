@@ -119,6 +119,7 @@ cpdef bytes process_tokens(
     object lemma_gen = None,
     object whitelist = None,
     object always_include = None,
+    object always_include_case = None,
     bytearray outbuf = None,
     unsigned long long[::1] stats = None
 ):
@@ -127,9 +128,15 @@ cpdef bytes process_tokens(
       tokenize -> split POS (Google) -> lower -> whitelist -> alpha -> shorts -> stops -> lemmas
     Returns b"" if all tokens become <UNK>.
 
-    always_include: Set of tokens (e.g., b"working-class", b"nuclear") that should
-                    always be preserved in whitelist mode regardless of whether they're
-                    in the whitelist. Useful for combined multigrams or focal terms.
+    always_include: tokens kept whatever the rules say, matched against the
+                    token's spelling in the data before any normalization,
+                    case-folded (the set holds lowercase bytes; the token is
+                    compared lowercased the same way the pipeline lowercases).
+                    A kept token is still lowercased and lemmatized like any
+                    other; it only skips the rules that replace tokens by
+                    <UNK>: the vocabulary, alphabetic, length and stopword checks.
+    always_include_case: the same, but the spelling must match exactly
+                    (b"AI" protects AI and not ai).
     stats: optional array of STAT_SLOTS unsigned 64-bit counters (see STAT_*)
            that this call adds to: what became of each token and the n-gram.
     """
@@ -146,7 +153,9 @@ cpdef bytes process_tokens(
     cdef bint do_lower  = opt_lower
     cdef bint do_lemmas = (opt_lemmas and lemma_gen is not None)
     cdef bint do_whitelist = (whitelist is not None)
-    cdef bint do_always_include = (always_include is not None)
+    cdef bint do_always = (always_include is not None)
+    cdef bint do_always_case = (always_include_case is not None)
+    cdef bint protected
     cdef bint do_alpha  = opt_alpha
     cdef bint do_shorts = opt_shorts
     cdef bint do_stops  = (opt_stops and stop_set is not None)
@@ -204,6 +213,14 @@ cpdef bytes process_tokens(
         else:  # if there wasn't a last underscore...
             base_b = tok_b  # the base token is just the original token
 
+        # The always-keep lists see the spelling in the data, before anything
+        # is done to it: exactly, or case-folded as the pipeline folds
+        protected = False
+        if do_always_case and base_b in always_include_case:
+            protected = True
+        elif do_always and base_b.lower() in always_include:
+            protected = True
+
         # Normalize token first (always needed)
         if do_lower:
             base_b = base_b.lower()
@@ -220,14 +237,13 @@ cpdef bytes process_tokens(
         else:
             normalized_token = base_b
 
-        # BRANCH: whitelist vs. normal filtering
+        # BRANCH: protected, whitelist, or normal filtering
         reason = -1
-        if do_whitelist:
+        if protected:
+            out_token = normalized_token          # an always-keep token skips every rule
+        elif do_whitelist:
             # Whitelist path: simple check, no other filters
-            # Exception: always-include tokens are preserved even if not in whitelist
             if normalized_token in whitelist:
-                out_token = normalized_token
-            elif do_always_include and normalized_token in always_include:
                 out_token = normalized_token
             else:
                 out_token = SENTINEL_B

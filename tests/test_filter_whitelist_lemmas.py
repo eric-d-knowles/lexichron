@@ -57,7 +57,26 @@ def test_whitelist_lookup_without_lemmatizer_matches_surface_forms():
     assert proc(b"the women of the") == b"the <UNK> of the"      # the mismatch option 1 fixes
 
 
-def test_always_include_survives_in_whitelist_mode():
-    proc = build_processor(FilterConfig(whitelist=WHITELIST, lemma_gen=FakeLemmatizer(),
-                                        always_include={b"he", b"working-class"}, min_context_tokens=1))
+def test_always_keep_matches_the_spelling_in_the_data_and_skips_every_rule():
+    """An always-keep entry is a spelling: it protects the token whose
+    surface form matches, case-folded by default, exactly from the case
+    list, and the protected token is then normalized like the rest."""
+    proc = build_processor(FilterConfig(whitelist=WHITELIST, lemma_gen=FakeLemmatizer(), lowercase=True,
+                                        always_include={b"he", b"working-class", b"women"}, min_context_tokens=1))
     assert proc(b"he is working-class") == b"he <UNK> working-class"
+    assert proc(b"He_PRON IS Working-Class_NOUN") == b"he <UNK> working-class"    # any case; then lowercased
+    assert proc(b"women fathers") == b"woman <UNK>"               # kept by spelling, then lemmatized; not via lemma
+    assert proc(b"woman") == b"woman"                             # in the whitelist anyway
+    # the normal path: the rules that would drop it are skipped too
+    proc = build_processor(FilterConfig(lowercase=True, alpha_only=True, filter_short=True, min_len=3,
+                                        filter_stops=True, stop_set={"the", "is"}, lemma_gen=None,
+                                        always_include={"A.I.", "the", "he"}, min_context_tokens=1))
+    assert proc(b"The A.I. is here") == b"the a.i. <UNK> here"    # A.I. passes alpha; 'the' passes stopwords; 'is' does not
+    assert proc(b"he saw a.i.") == b"he saw a.i."                 # 'he' passes the length rule; a.i. matches case-folded
+    # the case list protects one spelling only
+    proc = build_processor(FilterConfig(lowercase=True, alpha_only=True, filter_short=True, min_len=3,
+                                        always_include_case={"AI"}, min_context_tokens=1))
+    assert proc(b"AI ai Ai") == b"ai <UNK> <UNK>"                 # AI kept (then lowercased); ai and Ai fall to min_len
+    proc = build_processor(FilterConfig(lowercase=False, alpha_only=True, filter_short=True, min_len=3,
+                                        always_include_case={"AI"}, always_include={"he"}, min_context_tokens=1))
+    assert proc(b"AI He") == b"AI He"                             # no lowercasing: kept as they were

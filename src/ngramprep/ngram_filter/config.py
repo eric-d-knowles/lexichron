@@ -30,8 +30,11 @@ class FilterConfig:
     whitelist_top_n: Optional[int] = None
     whitelist: Optional[Set[bytes]] = None
 
-    # Always-include tokens configuration (tokens to preserve regardless of whitelist)
-    always_include: Optional[AbstractSet[Union[str, bytes]]] = None  # Set of tokens to always include (e.g., "working-class", "nuclear")
+    # Always-keep tokens: spellings kept whatever the rules say, matched on the
+    # token as it appears in the data, case-folded (always_include) or exactly
+    # (always_include_case); e.g. {"working-class", "he"} and {"AI"}
+    always_include: Optional[AbstractSet[Union[str, bytes]]] = None
+    always_include_case: Optional[AbstractSet[Union[str, bytes]]] = None
 
     # Year binning configuration
     bin_size: int = 1  # Aggregate years into bins (1 = annual data, 5 = 5-year bins, etc.)

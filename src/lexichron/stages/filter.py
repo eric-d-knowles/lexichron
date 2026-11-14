@@ -5,7 +5,7 @@ from typing import List, Optional, Tuple
 
 from lexichron.resources import available_cpus
 
-__all__ = ["filter_ngrams", "text_language_for"]
+__all__ = ["filter_ngrams", "text_language_for", "combined_tokens_from_acquire"]
 
 # Google Books corpus id -> spaCy language code (stopwords and lemmatizer).
 _CORPUS_LANGUAGE = {
@@ -39,6 +39,7 @@ def filter_ngrams(
     no_vocabulary: bool = False,
     vocabulary_top_n: Optional[int] = None,
     always_include: Optional[List[str]] = None,
+    always_include_case: Optional[List[str]] = None,
     output_vocabulary: Optional[bool] = None,
     output_vocabulary_top_n: Optional[int] = 30_000,
     output_vocabulary_year_range: Optional[Tuple[int, int]] = None,
@@ -85,8 +86,17 @@ def filter_ngrams(
         no_vocabulary: Filter longer n-grams with the rule filters alone, with
             no vocabulary. Rarely wanted: the result is far larger.
         vocabulary_top_n: Use only the first N tokens of the vocabulary file
-        always_include: Tokens kept even if not in the vocabulary (e.g. focal
-            terms the unigram stage dropped as stopwords: he, she, ...)
+        always_include: Spellings kept whatever the other rules say, matched
+            against the token as it appears in the data whatever its
+            capitalization (he keeps He and HE; working-class keeps
+            Working-Class). A kept token is still lowercased and lemmatized
+            like any other; it only skips the vocabulary, alphabetic, length
+            and stopword rules, so list every spelling you want kept (woman
+            does not keep women). Tokens the acquire run combined
+            (combined_multigrams) are added automatically from the raw
+            database's provenance record
+        always_include_case: Spellings kept only when their capitalization
+            matches exactly (AI keeps AI and not ai)
         output_vocabulary: Write a vocabulary file from the result
             (<database>/whitelist.txt). Default: on for unigrams, off otherwise
         output_vocabulary_top_n: Keep the N most frequent tokens
@@ -147,16 +157,23 @@ def filter_ngrams(
         from ngramprep.ngram_filter.lemmatizer import CachedSpacyLemmatizer
         lemma_gen = CachedSpacyLemmatizer(language=lang)
 
+    paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
+    keep = [str(t) for t in (always_include or []) if str(t).strip()]
+    handed = [t for t in combined_tokens_from_acquire(paths["src_db"]) if t not in keep]
+    if handed:
+        print(f"Always keep:  {', '.join(handed)} (combined by the acquire run that made the raw database)")
+        keep += handed
+    keep_case = [str(t) for t in (always_include_case or []) if str(t).strip()]
     filter_config = FilterConfig(
         lowercase=lowercase, alpha_only=alpha_only, ascii_alpha_only=ascii_only,
         filter_short=min_len > 1, filter_stops=drop_stopwords and stop_set is not None,
         apply_lemmatization=lemmatize, min_len=int(min_len), min_context_tokens=int(min_context_tokens),
         stop_set=stop_set, stop_words_language=lang, lemma_gen=lemma_gen,
         whitelist_path=vocabulary, whitelist_top_n=vocabulary_top_n,
-        always_include=set(always_include) if always_include else None,
+        always_include=set(keep) if keep else None,
+        always_include_case=set(keep_case) if keep_case else None,
         bin_size=int(bin_size),
     )
-    paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     pipeline_config = PipelineConfig(
         src_db=paths["src_db"], tmp_dir=paths["tmp_dir"],
         num_workers=workers or max(1, available_cpus() - 1),
@@ -172,3 +189,25 @@ def filter_ngrams(
     return build_processed_db(filter_config=filter_config, pipeline_config=pipeline_config,
                               progress_path=progress_path, spool_dir=spool_dir,
                               chunk_entries=int(chunk_entries))
+
+
+def combined_tokens_from_acquire(src_db) -> List[str]:
+    """The tokens the acquire run that made ``src_db`` built from word
+    sequences (its combined_multigrams), read from the database's provenance
+    record: each entry's target, or its words joined by hyphens. Empty when
+    the database has no record or the run combined nothing. The filter
+    stage keeps these automatically, since nothing else could: a unigram
+    vocabulary cannot contain them and the alphabetic rule would drop them."""
+    from lexichron.provenance import read_provenance
+    from ngramprep.ngram_acquire.io.parse import parse_multigram_entry
+    record = read_provenance(src_db) or {}
+    out: List[str] = []
+    for entry in (record.get("settings") or {}).get("combined_multigrams") or []:
+        try:
+            words, target = parse_multigram_entry(entry)
+        except Exception:
+            continue
+        token = target or "-".join(words)
+        if token and token not in out:
+            out.append(token)
+    return out

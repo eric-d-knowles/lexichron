@@ -192,7 +192,8 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     else:
         current_text = f"{len(current)} {unit} in flight"
     inputs = doc.get("inputs") or {}
-    labels = {"source": "Source", "vocabulary": "Vocabulary", "always_include": "Always keep"}
+    labels = {"source": "Source", "vocabulary": "Vocabulary", "always_include": "Always keep",
+              "always_include_case": "Always keep (match case)"}
     inputs_text = "  ·  ".join(f"{labels.get(k, k)}: {v}" for k, v in inputs.items() if v)
     if doc.get("stage") == "filter" and "vocabulary" in inputs and not inputs.get("vocabulary"):
         inputs_text += "  ·  Vocabulary: none (rule filters only)"

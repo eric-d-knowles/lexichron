@@ -1345,3 +1345,59 @@ def test_multigram_field_takes_the_editor_result(tmp_path):
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_always_keep_editor_splits_the_two_lists_and_shows_handed_over_tokens(tmp_path):
+    """The Always keep field is one editor over two settings, always_include
+    and always_include_case, and shows the tokens the acquire run combined."""
+    import json
+    from textual.widgets import Static
+    from lexichron.ui.app import KeepListEditor, KeepListField, KeepRow
+    corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
+    raw = corpus / "5grams.db"
+    raw.mkdir(parents=True)
+    (raw / "lexichron.json").write_text(json.dumps({"format": 1, "stage": "acquire",
+                                                    "settings": {"combined_multigrams": ["a . i . => A.I."]}}))
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+                    "filter:\n  always_include: [he, she]\n  always_include_case: [AI]\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "filter")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            field = app.query_one("#f-filter-always_include", KeepListField)
+            assert field.value == [("he", False), ("she", False), ("AI", True)]
+            assert field.lists() == (["he", "she"], ["AI"])
+            assert field.handed == ["A.I."]
+            assert "3 tokens: he, she, AI (case); plus from Acquire: A.I." in field.summary()
+            call = str(app.query_one("#call").content)
+            assert "always_include=['he', 'she']" in call and "always_include_case=['AI']" in call
+            # the editor: rows for each, with its switch; a space is refused; OK splits the lists again
+            app.push_screen(KeepListEditor(field.value, field.handed))
+            await pilot.pause()
+            rows = list(app.screen.query(KeepRow))
+            assert [r.entry() for r in rows] == [("he", False), ("she", False), ("AI", True)]
+            assert "A.I." in str(app.screen.query_one("#keep-note", Static).content)
+            rows[1].query_one(".keep-token").value = "working class"
+            await pilot.pause()
+            app.screen._ok()
+            await pilot.pause()
+            assert "has a space" in str(app.screen.query_one("#keep-error", Static).content)
+            rows[1].query_one(".keep-token").value = "working-class"
+            rows[0].query_one(".keep-case").value = True
+            await pilot.pause()
+            app.screen._ok()
+            await pilot.pause()
+            assert not isinstance(app.screen, KeepListEditor)
+            # the field took the result through its callback and the settings follow
+            field.set_value(["working-class"], ["he", "AI"])
+            field.post_message(KeepListField.Changed(field))
+            await pilot.pause()
+            call = str(app.query_one("#call").content)
+            assert "always_include=['working-class']" in call and "always_include_case=['he', 'AI']" in call
+        _assert_clean(app)
+
+    asyncio.run(scenario())

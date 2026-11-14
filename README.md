@@ -52,7 +52,7 @@ Alternatively, you can click "Cite this repository" in the GitHub sidebar for ad
 - **Filtering:** Any combination of case normalization, stopword removal, short-word removal, non-alphabetic token removal, and lemmatization. Discarded tokens are replaced with `<UNK>`.
 - **Whitelists:** Write the top-N most frequent unigrams, optionally spell-checked, and use the list to filter longer n-grams. With case normalization, spell-checking also drops proper nouns ("Jackson", "Einstein"). A year range restricts the list to tokens present in every year of the range.
 - **Multigram combining:** Turn chosen word sequences into single tokens as the files are read: "working class" → "working-class", "new york city" → "new-york-city", or a token of your own naming, so "A . I ." (how Google tokenizes "A.I.") becomes "A.I.". The UI's *Combine multigrams* editor takes up to five tokens per sequence and the token they become, filled in for you as the words joined by hyphens until you type something else; in the settings file an entry is `working class` or `a . i . => A.I.`. A sequence matches whatever its capitalization in the data; where sequences overlap the longest wins; a switch restores exact matching.
-- **Token immunity:** Name tokens that are always kept regardless of the filtering rules, such as domain terms, proper nouns, or specific multiword expressions.
+- **Token immunity:** Name tokens that are always kept regardless of the filtering rules, such as domain terms, proper nouns, or combined multiword expressions, matched by their spelling in the data with or without regard to case. Tokens combined at acquisition are kept automatically.
 - **Pivoting:** Reorganize n-gram data from one record per n-gram to one record per n-gram-year:
   - BEFORE: `n-gram → (year1, count1, volumes1) (year2, count2, volumes2) ... (yearn, countn, volumesn)`
   - AFTER:
@@ -445,13 +445,24 @@ each time:
    frequent lemmas, optionally only those present in every year of
    `output_vocabulary_year_range` and optionally spell-checked.
 2. **Longer n-grams** use that whitelist (by default this corpus's own; a
-   token is kept only if its lemma is in it, and `always_include` keeps
-   focal tokens the unigram stage would have dropped as stopwords: *he*,
-   *she*, ...) and write `<n>grams_pivoted.db` directly: keyed by year then
+   token is kept only if its lemma is in it) and write `<n>grams_pivoted.db` directly: keyed by year then
    n-gram, one record per (year, n-gram), which is what training reads.
    Filtering and pivoting are one pass over the raw database; raw spellings
    that collapse onto one n-gram are summed by the database's merge
    operator. (*Pivot by year* off writes an n-gram-keyed database instead.)
+
+*Always keep* (`always_include`, and `always_include_case` for spellings whose
+capitalization must match) names tokens kept whatever the other rules say: the
+vocabulary, letters only, length and stopwords. An entry is a spelling and is
+matched against the token as it appears in the data, case-folded unless it is
+on the case list, so `he` keeps *He* and *HE*, and `AI` on the case list keeps
+*AI* but not *ai*. A kept token is then lowercased and lemmatized like any
+other; it only skips the rules that would drop it, so list every spelling you
+want kept (`woman` does not keep *women*). Tokens the acquire run built from
+word sequences (`combined_multigrams`, say `A.I.` and `working-class`) are kept
+without being listed, read from the raw database's provenance record; the UI
+shows them beside the list. In the UI the setting is an editor with a row per
+token and a *Match case* switch.
 
 The work is split into key ranges balanced by data volume (from the source
 database's own file metadata, so there is no pre-scan), worker processes

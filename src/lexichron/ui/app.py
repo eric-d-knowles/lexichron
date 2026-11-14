@@ -645,6 +645,164 @@ class MultigramField(Horizontal):
         self.app.push_screen(MultigramEditor(self._entries), done)
 
 
+class KeepRow(Horizontal):
+    """One always-keep entry: the spelling, and whether its case must match."""
+
+    def __init__(self, token: str, match_case: bool, **kwargs) -> None:
+        super().__init__(classes="keep-row", **kwargs)
+        self._token, self._case = token, match_case
+
+    def compose(self) -> ComposeResult:
+        yield Input(value=self._token, classes="keep-token", compact=True, placeholder="token as spelled in the data")
+        yield Switch(value=self._case, classes="keep-case")
+        yield Label("Match case", classes="keep-case-label")
+        yield Button("✕", classes="keep-remove", compact=True)
+
+    def entry(self) -> Tuple[str, bool]:
+        return self.query_one(".keep-token", Input).value.strip(), bool(self.query_one(".keep-case", Switch).value)
+
+    @on(Button.Pressed, ".keep-remove")
+    def _remove(self, event: Button.Pressed) -> None:
+        event.stop()
+        self.remove()
+
+
+class KeepListEditor(ModalScreen[Optional[List[Tuple[str, bool]]]]):
+    """The tokens Filter keeps whatever its rules say, a row each. Dismisses
+    with (token, match case) pairs, or None on Cancel."""
+
+    DEFAULT_CSS = """
+    KeepListEditor { align: center middle; }
+    KeepListEditor > Vertical { width: 90; height: auto; max-height: 90%; border: thick $accent;
+                                background: $surface; padding: 1 2; }
+    KeepListEditor #keep-title { text-style: bold; color: $accent; }
+    KeepListEditor #keep-note, KeepListEditor #keep-error { color: $text-muted; margin: 1 0; height: auto; }
+    KeepListEditor #keep-error { color: $warning; }
+    KeepListEditor #keep-rows { height: auto; max-height: 24; }
+    KeepListEditor .keep-row { height: auto; margin-bottom: 1; }
+    KeepListEditor .keep-token { width: 1fr; margin-right: 2; }
+    KeepListEditor .keep-case-label { width: 12; padding-left: 1; }
+    KeepListEditor .keep-remove { min-width: 3; }
+    KeepListEditor #keep-buttons { height: auto; align-horizontal: right; }
+    KeepListEditor Button { margin-left: 1; }
+    """
+    BINDINGS = [("escape", "cancel", "Back")]
+
+    def __init__(self, entries: List[Tuple[str, bool]], handed: Optional[List[str]] = None) -> None:
+        super().__init__()
+        self.entries = list(entries or [])
+        self.handed = list(handed or [])
+
+    def compose(self) -> ComposeResult:
+        with Vertical():
+            yield Static("Always keep", id="keep-title")
+            note = ("A token on this list is kept whatever the other rules say: the vocabulary, letters only, "
+                    "length and stopwords. It is matched by its spelling in the data, whatever its capitalization "
+                    "unless Match case is on (AI keeps AI and not ai), and is then lowercased and lemmatized like "
+                    "the rest, so list every spelling you want kept: woman does not keep women.")
+            if self.handed:
+                note += (f" Kept without listing, from the acquire run that combined them: "
+                         f"{', '.join(self.handed)}.")
+            yield Static(note, id="keep-note")
+            with VerticalScroll(id="keep-rows"):
+                for token, match_case in self.entries or [("", False)]:
+                    yield KeepRow(token, match_case)
+            yield Static("", id="keep-error")
+            with Horizontal(id="keep-buttons"):
+                yield Button("Add a token", id="keep-add", compact=True)
+                yield Button("Cancel", id="keep-cancel")
+                yield Button("OK", id="keep-ok", variant="primary")
+
+    @on(Button.Pressed, "#keep-add")
+    def _add(self) -> None:
+        row = KeepRow("", False)
+        self.query_one("#keep-rows").mount(row)
+        row.call_after_refresh(lambda: row.query_one(".keep-token", Input).focus())
+
+    @on(Button.Pressed, "#keep-cancel")
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#keep-ok")
+    def _ok(self) -> None:
+        entries: List[Tuple[str, bool]] = []
+        for row in self.query(KeepRow):
+            token, match_case = row.entry()
+            if not token:
+                continue
+            if " " in token:
+                self.query_one("#keep-error", Static).update(
+                    f"'{token}' has a space: a token is one word (combine words at the Acquire stage).")
+                return
+            if (token, match_case) not in entries:
+                entries.append((token, match_case))
+        self.dismiss(entries)
+
+
+class KeepListField(Horizontal):
+    """The Always keep setting on the form: a summary and an Edit button
+    that opens :class:`KeepListEditor`. ``value`` is the list of (token,
+    match case) pairs; ``lists()`` splits it into the two settings."""
+
+    class Changed(Message):
+        def __init__(self, field: "KeepListField") -> None:
+            super().__init__()
+            self.field = field
+
+    def __init__(self, plain: Optional[List[Any]], exact: Optional[List[Any]], **kwargs) -> None:
+        super().__init__(classes="keep-field", **kwargs)
+        self._entries: List[Tuple[str, bool]] = []
+        self.handed: List[str] = []
+        self._fill(plain, exact)
+
+    def _fill(self, plain, exact) -> None:
+        self._entries = [(str(t), False) for t in (plain or [])] + [(str(t), True) for t in (exact or [])]
+
+    def compose(self) -> ComposeResult:
+        yield Button("Edit…", classes="keep-edit", compact=True)
+        yield Static(self.summary(), classes="keep-summary")
+
+    @property
+    def value(self) -> List[Tuple[str, bool]]:
+        return list(self._entries)
+
+    def lists(self) -> Tuple[List[str], List[str]]:
+        """(always_include, always_include_case)."""
+        return [t for t, c in self._entries if not c], [t for t, c in self._entries if c]
+
+    def set_value(self, plain: Optional[List[Any]], exact: Optional[List[Any]]) -> None:
+        self._fill(plain, exact)
+        self.query_one(".keep-summary", Static).update(self.summary())
+
+    def set_handed(self, tokens: List[str]) -> None:
+        if tokens != self.handed:
+            self.handed = list(tokens)
+            self.query_one(".keep-summary", Static).update(self.summary())
+
+    def summary(self) -> str:
+        parts = [t + (" (case)" if c else "") for t, c in self._entries]
+        if not parts and not self.handed:
+            return "(none)"
+        n = len(parts)
+        head = f"{n} token{'s' if n != 1 else ''}: " if parts else ""
+        text = head + ", ".join(parts)
+        if self.handed:
+            text += ("; " if parts else "") + f"plus from Acquire: {', '.join(self.handed)}"
+        return text if len(text) <= 90 else text[:89] + "…"
+
+    @on(Button.Pressed, ".keep-edit")
+    def _edit(self, event: Button.Pressed) -> None:
+        event.stop()
+
+        def done(entries: Optional[List[Tuple[str, bool]]]) -> None:
+            if entries is not None:
+                self._entries = list(entries)
+                self.query_one(".keep-summary", Static).update(self.summary())
+                self.post_message(self.Changed(self))
+
+        self.app.push_screen(KeepListEditor(self._entries, self.handed), done)
+
+
 class LexichronApp(App):
     TITLE = f"lexichron {__version__}"
     CSS = """
@@ -675,7 +833,9 @@ class LexichronApp(App):
     .hint { height: 3; content-align: left middle; color: $text-muted; }
     .row FixedValue { width: 1fr; color: $text-muted; }
     .row .toggle-row { width: 1fr; height: 1; }
-    .row .mg-field { width: 1fr; height: 1; }
+    .row .mg-field, .row .keep-field { width: 1fr; height: 1; }
+    .keep-field .keep-edit { min-width: 8; margin-right: 1; }
+    .keep-field .keep-summary { width: 1fr; color: $text-muted; }
     .mg-field .mg-edit { min-width: 8; margin-right: 1; }
     .mg-field .mg-summary { width: 1fr; color: $text-muted; }
     .toggle-row .toggle { min-width: 6; margin-right: 1; }
@@ -1062,6 +1222,10 @@ class LexichronApp(App):
                 w = Select(opts, value=val, allow_blank=True, id=wid, compact=True)
             elif f.kind == "multigrams":
                 w = MultigramField(list(current) if isinstance(current, (list, tuple, set)) else [], id=wid)
+            elif f.kind == "keeplist":
+                exact = (self.config.get(section) or {}).get("always_include_case")
+                w = KeepListField(list(current) if isinstance(current, (list, tuple, set)) else [],
+                                  list(exact) if isinstance(exact, (list, tuple, set)) else [], id=wid)
             elif f.kind == "range":
                 lo, hi = ("", "")
                 if isinstance(current, (list, tuple)) and len(current) == 2:
@@ -1203,6 +1367,13 @@ class LexichronApp(App):
                 continue
             for f in sec.fields:
                 w = self.query_one(f"#f-{sec.name}-{f.name}")
+                if f.kind == "keeplist":                       # one widget, two settings
+                    plain, exact = w.lists()
+                    if plain:
+                        vals["always_include"] = plain
+                    if exact:
+                        vals["always_include_case"] = exact
+                    continue
                 try:
                     if f.kind == "range":
                         v = _range_from_widgets(w.value, self.query_one(f"#f-{sec.name}-{f.name}-end").value)
@@ -1254,6 +1425,22 @@ class LexichronApp(App):
             self._refresh_train_summary(kwargs)
         if self.stage == "measure":
             self._refresh_measure_summary(kwargs)
+        if self.stage == "filter":
+            self._refresh_handed_tokens(kwargs)
+
+    def _refresh_handed_tokens(self, kwargs: Dict[str, Any]) -> None:
+        """Tell the Always keep field which tokens the acquire run combined,
+        read from the raw database's provenance record, so the form shows
+        what Filter keeps without being told."""
+        try:
+            from lexichron.stages.filter import combined_tokens_from_acquire
+            raw = build_db_path(str(kwargs["db_path_stub"]), int(kwargs["ngram_size"]),
+                                str(kwargs["repo_release_id"]), str(kwargs["repo_corpus_id"]))
+            handed = combined_tokens_from_acquire(raw)
+        except (KeyError, TypeError, ValueError):
+            handed = []
+        for w in self.query(KeepListField):
+            w.set_handed(handed)
 
     def _refresh_measure_summary(self, kwargs: Dict[str, Any]) -> None:
         """Under the measure form: what would be measured, in one line."""
@@ -1564,6 +1751,7 @@ class LexichronApp(App):
     @on(Switch.Changed)
     @on(ToggleRow.Changed)
     @on(MultigramField.Changed)
+    @on(KeepListField.Changed)
     def _on_any_change(self, _event) -> None:
         if not self._populating:
             self._refresh_preview()
@@ -1693,7 +1881,10 @@ class LexichronApp(App):
                     continue
                 vals = cfg.get(sec.name) or {}
                 for f in sec.fields:
-                    self._set_field_widget(sec.name, f, vals.get(f.name, f.default))
+                    if f.kind == "keeplist":                   # two settings, one widget
+                        self._set_field_widget(sec.name, f, (vals.get("always_include"), vals.get("always_include_case")))
+                    else:
+                        self._set_field_widget(sec.name, f, vals.get(f.name, f.default))
         finally:
             self._populating = False
         if getattr(self, "_submit_ready", False):
@@ -1726,6 +1917,10 @@ class LexichronApp(App):
             self.query_one(f"{wid}-end").value = hi
         elif f.kind == "multigrams":
             w.set_value(list(value) if isinstance(value, (list, tuple, set)) else [])
+        elif f.kind == "keeplist":
+            plain, exact = value if isinstance(value, tuple) and len(value) == 2 else (value, None)
+            w.set_value(list(plain) if isinstance(plain, (list, tuple, set)) else [],
+                        list(exact) if isinstance(exact, (list, tuple, set)) else [])
         else:
             w.value = _to_widget_text(value)
 

@@ -49,7 +49,10 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
     Returns None to drop the ngram.
     """
     stop_set_b = _to_bytes_set(cfg.stop_set)
-    always_include_b = _to_bytes_set(cfg.always_include)
+    # the always-keep lists are matched on the token's spelling: the
+    # case-folded list is held lowercased (bytes.lower, as the pipeline folds)
+    always_include_b = {b.lower() for b in _to_bytes_set(cfg.always_include)} if cfg.always_include else None
+    always_include_case_b = _to_bytes_set(cfg.always_include_case) if cfg.always_include_case else None
 
     outbuf = bytearray()  # reused per-processor
     import array
@@ -76,6 +79,7 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
             lemma_gen=cfg.lemma_gen,
             whitelist=cfg.whitelist,
             always_include=always_include_b,
+            always_include_case=always_include_case_b,
             outbuf=outbuf,
             stats=stats,
         )

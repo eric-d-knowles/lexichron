@@ -129,3 +129,30 @@ def test_multigrams_are_filtered_and_pivoted_in_one_pass(rocks, no_spacy, tmp_pa
     # asking for a vocabulary from a pivoted output is refused
     with pytest.raises(ValueError):
         stage.filter_ngrams(2, "20200217", "eng", str(stub), output_vocabulary=True, spool_dir=str(tmp_path))
+
+
+def test_filter_keeps_what_the_acquire_run_combined(rocks, no_spacy, tmp_path):
+    """The raw database's provenance record names the acquire run's combined
+    sequences; their tokens are kept without being listed, case-folded."""
+    import json
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    db = fake_rocks.open(str(paths["src_db"]), mode="rw", create_if_missing=True)
+    import struct
+    with db.write_batch() as wb:
+        for key in (b"A.I.", b"a.i.", b"Working-Class", b"cats", b"xyzzy"):
+            wb.put(key, struct.pack("<3Q", 1990, 3, 1))
+    db.close()
+    (paths["src_db"] / "lexichron.json").write_text(json.dumps({
+        "format": 1, "stage": "acquire",
+        "settings": {"combined_multigrams": ["a . i . => A.I.", "working class"]}}))
+    assert stage.combined_tokens_from_acquire(paths["src_db"]) == ["A.I.", "working-class"]
+    vocab = tmp_path / "vocab.txt"
+    vocab.write_text("cat\t100\n")
+    out = stage.filter_ngrams(1, "20200217", "eng", str(stub), vocabulary=str(vocab), workers=2, mode="restart",
+                              output_vocabulary=False, spool_dir=str(tmp_path), always_include_case=["xyzzy"])
+    data = fake_rocks.dump(out)
+    # A.I. and a.i. both match the handed-over spelling case-folded and are lowercased; Working-Class likewise;
+    # cats -> cat is in the vocabulary; xyzzy is kept by the case list
+    assert set(data) == {b"a.i.", b"working-class", b"cat", b"xyzzy"}
+    assert stage.combined_tokens_from_acquire(tmp_path / "nowhere") == []

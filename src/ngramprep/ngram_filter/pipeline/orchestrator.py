@@ -98,7 +98,10 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
                                 inputs={"source": pc.src_db, "vocabulary": vocab or None,
                                         "always_include": ", ".join(sorted(
                                             x.decode() if isinstance(x, bytes) else str(x)
-                                            for x in (filter_config.always_include or ()))) or None})
+                                            for x in (filter_config.always_include or ()))) or None,
+                                        "always_include_case": ", ".join(sorted(
+                                            x.decode() if isinstance(x, bytes) else str(x)
+                                            for x in (filter_config.always_include_case or ()))) or None})
     num_units = pc.num_initial_work_units or max(4 * pc.num_workers, 64)
 
     # The pivoted output is many times the size of its input (one record per
@@ -160,6 +163,7 @@ def build_processed_db(
     whitelist_min_count: int = 1,
     whitelist_top_n: Optional[int] = None,
     always_include: Optional[Set[str]] = None,
+    always_include_case: Optional[Set[str]] = None,
     bin_size: int = 1,
     min_context_tokens: int = 2,
     # Pipeline execution parameters
@@ -207,7 +211,8 @@ def build_processed_db(
         whitelist_path: Input whitelist (tokens not in it become <UNK>)
         whitelist_min_count: Minimum count for whitelist tokens
         whitelist_top_n: Limit the whitelist to its top N tokens
-        always_include: Tokens kept regardless of the whitelist
+        always_include: Spellings kept whatever the rules say, matched case-folded
+        always_include_case: The same, matched exactly
         bin_size: Aggregate years into bins (1 = annual)
         min_context_tokens: Reject n-grams with fewer non-<UNK> tokens than this
         num_workers: Worker processes (default: CPUs - 1)
@@ -238,6 +243,7 @@ def build_processed_db(
             whitelist_path=whitelist_path, whitelist_min_count=whitelist_min_count,
             whitelist_top_n=whitelist_top_n,
             always_include=_to_bytes_set(always_include) if always_include else None,
+            always_include_case=_to_bytes_set(always_include_case) if always_include_case else None,
             bin_size=bin_size, min_context_tokens=min_context_tokens,
         )
 
