@@ -104,7 +104,7 @@ def print_final_summary(
     print(f"Fully processed files:       {ok}")
     print(f"Failed files:                {bad}")
     print(f"Total entries written:       {written:,}")
-    print(f"Write batches flushed:       {batches}")
+    print(f"Ingest operations:           {batches}")
     print(f"Uncompressed data processed: {format_bytes(uncompressed_bytes)}")
     print(f"Processing throughput:       {mb_per_sec:.2f} MB/sec")
     print()

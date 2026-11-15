@@ -233,10 +233,12 @@ def test_sst_output_with_one_to_many_mapper(rocks, tmp_path):
     assert _unpack(data[struct.pack(">I", 2000) + b"word7"]) == [(2000, 2, 2)]
     assert res.kept == 400 and res.scanned == 404                 # 200 raw keys x 2 spellings kept; drops skipped
     assert res.produced == 600                                    # -> 1 + 2 year records each
-    # each unit arrived as ONE file (its parts merged by the worker), so the
-    # destination has as many ingested files as units, not as chunks
+    # each unit arrived as ONE data file (its parts merged by the worker), so
+    # the destination has as many of them as units, not as chunks; the unit's
+    # marker rides in the same ingest call as a second, one-key file, so that
+    # records and marker are in the database together or not at all
     store = fake_rocks._REGISTRY[str(dst)]
-    assert 0 < store.ingests <= len(fake_rocks.markers(dst)) and store.ingested_files == store.ingests
+    assert 0 < store.ingests <= len(fake_rocks.markers(dst)) and store.ingested_files == 2 * store.ingests
     assert not [p for p in tmp_path.rglob("*.sst*")]              # parts and merged files were consumed
     assert sum(d["entries"] for d in fake_rocks.markers(dst).values()) <= 600   # entries per unit, after merging
 

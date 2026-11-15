@@ -20,9 +20,10 @@ acquire:
   overwrite_db: false
   random_seed: 321
   open_type: write:packed24
-  compact_after_ingest: false
-  # chunk_entries: 200000     # entries per spooled chunk; lower on small allocations
-  # spool_dir: /tmp            # where chunks are spooled (node-local disk is ideal)
+  # chunk_entries: 200000     # entries a worker holds in memory at a time; lower on small allocations
+  # spool_dir: /tmp            # where each file's records are written before the database takes them (node-local disk is ideal)
+  # verify_counts: true        # after compaction, check the database's counts against the files' own totals
+  # allow_unparsed_lines: false   # true = accept lines whose counts cannot be read in full (they are counted either way)
   # file_range: [0, 10]        # process only files 0-9 (for a quick test)
   # combined_bigrams: [human being, human beings]   # hyphenated into single tokens
 

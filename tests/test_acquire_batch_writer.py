@@ -69,3 +69,63 @@ def test_discard_removes_chunks(tmp_path):
     paths = _chunks(tmp_path, "f", [("a", b"x")], 10)
     ChunkIngestor.discard(paths)
     assert not list(tmp_path.iterdir())
+
+
+# ---- SST files: the marker rides in the same ingest call ----------------------
+
+def _sst(tmp_path, tag, entries, monkeypatch):
+    import fake_rocks
+    from ngramprep.common_db import api
+    from ngramprep.ngram_acquire.spool import SstChunkWriter
+    monkeypatch.setattr(api, "rs", fake_rocks)
+    w = SstChunkWriter(tmp_path, tag, 100, merge_packed_records)
+    for k, v in entries:
+        w.add(k, v)
+    return w.finish()
+
+
+def _val(*triplets):
+    flat = [x for t in triplets for x in t]
+    return struct.pack(f"<{len(flat)}Q", *flat)
+
+
+def test_sst_shard_and_its_marker_arrive_in_one_ingest_call(tmp_path, monkeypatch):
+    import fake_rocks
+    db = fake_rocks.DB(str(tmp_path / "db"))
+    calls = []
+    real = db.ingest
+    db.ingest = lambda paths, move=True, **kw: (calls.append([p.rsplit("/", 1)[-1] for p in paths]), real(paths, move=move))[1]
+    ing = ChunkIngestor(db)
+    paths = _sst(tmp_path, "f1", [(b"a", _val((1990, 1, 1))), (b"b", _val((1990, 2, 1)))], monkeypatch)
+
+    written = ing.ingest_file("f1.gz", paths, uncompressed_bytes=99, entries=2,
+                              extra={"match_total": 3, "volume_total": 2})
+
+    assert written == 2 and ing.get_stats() == (2, 1)
+    assert calls == [["f1.00000.sst", "f1.00000.sst.marker.sst"]]        # one call: records and marker together
+    assert db.flushes == 0                                    # nothing went through a memtable
+    assert db.data[b"a"] == _val((1990, 1, 1))
+    assert processed_stats(db, "f1.gz") == {"entries": 2, "bytes": 99, "chunks": 1, "match_total": 3, "volume_total": 2}
+    assert not list(tmp_path.glob("*.sst"))                   # moved into the database
+
+
+def test_failed_sst_ingest_marks_nothing_and_leaves_no_marker_file(tmp_path, monkeypatch):
+    import pytest
+    import fake_rocks
+    db = fake_rocks.DB(str(tmp_path / "db"))
+    def boom(paths, move=True, **kw): raise RuntimeError("disk gone")
+    db.ingest = boom
+    ing = ChunkIngestor(db)
+    paths = _sst(tmp_path, "f1", [(b"a", _val((1990, 1, 1)))], monkeypatch)
+    with pytest.raises(RuntimeError, match="disk gone"):
+        ing.ingest_file("f1.gz", paths, entries=1)
+    assert db.data == {} and ing.files_completed == 0
+    assert not list(tmp_path.glob("*.marker.sst"))            # the caller discards the data file
+
+
+def test_shard_without_records_is_marked_through_a_batch(tmp_path):
+    import fake_rocks
+    db = fake_rocks.DB(str(tmp_path / "db"))
+    ing = ChunkIngestor(db)
+    assert ing.ingest_file("empty.gz", [], entries=0, extra={"match_total": 0, "volume_total": 0}) == 0
+    assert processed_stats(db, "empty.gz")["entries"] == 0 and db.flushes == 1

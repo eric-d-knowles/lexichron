@@ -7,7 +7,8 @@ does, in one pass over the raw bytes of a line, what
 n-gram text, combine the word sequences in ``multigrams`` into hyphenated
 tokens, apply the tagged/untagged/all filter, parse the
 ``year,frequency,document_count`` triples and pack them as little-endian
-uint64. It returns ``(key, packed)`` or ``None`` (line rejected).
+uint64. It returns ``(key, packed)`` or ``None`` (a blank line, or one the
+filter rejects).
 
 ``multigrams`` maps UTF-8 ``bytes`` sequences as ``prepare_multigrams``
 normalizes them (words joined by single spaces, lowercased: they match
@@ -24,7 +25,10 @@ It is exact by construction: whenever a line contains anything whose Python
 semantics are not reproduced here (non-ASCII whitespace at the edges, numbers
 that ``int()`` would accept but a plain digit scan would not, an undecodable
 n-gram, ...), it returns the ``FALLBACK`` sentinel and the caller runs the
-original Python code for that line. The differential test in
+original Python code for that line. The same goes for a line with content
+that cannot be read (no counts, or a count entry that is not three whole
+numbers): the Python parser is the one that counts those, so that a run can
+report every line whose counts it could not take in full. The differential test in
 ``tests/test_acquire_parse_cy.py`` checks the two agree on everything else.
 """
 from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AS_STRING, PyBytes_GET_SIZE
@@ -284,7 +288,7 @@ def parse_packed(bytes raw, int mode, tuple suffixes, dict multigrams=None, dict
             tab = i
             break
     if tab < 0:
-        return None                    # no frequency data
+        return FALLBACK                # no counts at all: Python reports the line
     # (tab == start cannot happen: a leading tab was stripped)
 
     try:
@@ -341,20 +345,22 @@ def parse_packed(bytes raw, int mode, tuple suffixes, dict multigrams=None, dict
                 rc = _scan_field(buf + f1 + 1, f2 - f1 - 1, &vals[1])
             if rc == 1:
                 rc = _scan_field(buf + f2 + 1, q - f2 - 1, &vals[2])
-            if rc < 0:
-                return FALLBACK
-            if rc == 1:
-                if ntrip == cap:
-                    cap *= 2
-                    packed = packed[: ntrip * 24] + PyBytes_FromStringAndSize(NULL, (cap - ntrip) * 24)
-                    out = <uint8_t*> PyBytes_AS_STRING(packed)
-                _put_le64(out + ntrip * 24, vals[0])
-                _put_le64(out + ntrip * 24 + 8, vals[1])
-                _put_le64(out + ntrip * 24 + 16, vals[2])
-                ntrip += 1
+            if rc != 1:
+                return FALLBACK            # a number int() may judge differently, or rejects:
+                                           # Python parses the line and reports what it left out
+            if ntrip == cap:
+                cap *= 2
+                packed = packed[: ntrip * 24] + PyBytes_FromStringAndSize(NULL, (cap - ntrip) * 24)
+                out = <uint8_t*> PyBytes_AS_STRING(packed)
+            _put_le64(out + ntrip * 24, vals[0])
+            _put_le64(out + ntrip * 24 + 8, vals[1])
+            _put_le64(out + ntrip * 24 + 16, vals[2])
+            ntrip += 1
+        else:
+            return FALLBACK                # not year,frequency,documents: likewise
         p = q + 1
 
     if ntrip == 0:
-        return None
+        return FALLBACK
 
     return key, packed[: ntrip * 24]

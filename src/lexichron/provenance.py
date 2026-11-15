@@ -57,6 +57,18 @@ def build_record(stage: str, settings: Dict[str, Any], doc: Dict[str, Any]) -> D
                    "lines_read": int(corpus.get("lines", counters.get("lines", 0))),
                    "uncompressed_bytes": float(corpus.get("bytes", doc.get("uncompressed_bytes", 0))),
                    "inserted": int(corpus.get("entries", counters.get("inserted", 0)))}
+        # The count check (ngramprep.ngram_acquire.verify): its status, and
+        # the totals of the ledger and of the database it was compared with.
+        verification = doc.get("verification") or {}
+        if verification.get("status"):
+            ledger, found = verification.get("ledger") or {}, verification.get("database") or {}
+            figures["counts"] = {"status": verification["status"],
+                                 "occurrences": found.get("match_total", ledger.get("match_total")),
+                                 "volume_counts": found.get("volume_total", ledger.get("volume_total")),
+                                 "ledger_occurrences": ledger.get("match_total"),
+                                 "ledger_volume_counts": ledger.get("volume_total"),
+                                 "lines_not_read_in_full": int(ledger.get("problem_lines", 0)),
+                                 "values_reordered": int(ledger.get("reordered", 0))}
     else:
         figures = {k: v for k, v in counters.items()}
         figures.setdefault("work_units", int(doc.get("files_total", 0)))
@@ -187,6 +199,18 @@ def format_provenance(p: Dict[str, Any]) -> List[str]:
     if p.get("stage") == "acquire":
         lines.append(f"Figures: {fig.get('files', 0):,} files, {fig.get('lines_read', 0):,} lines read, "
                      f"{_fmt_bytes(fig.get('uncompressed_bytes', 0))} parsed, {fig.get('inserted', 0):,} inserted")
+        counts = fig.get("counts") or {}
+        if counts.get("status"):
+            text = {"verified": "verified against the files' own totals",
+                    "mismatch": "DO NOT MATCH the files' totals",
+                    "unverifiable": "not verifiable (some files predate the count ledger)",
+                    "skipped": "not checked (verify_counts was off)"}.get(counts["status"], counts["status"])
+            line = f"Counts: {text}"
+            if counts.get("occurrences") is not None:
+                line += f"; {int(counts['occurrences']):,} occurrences"
+            if counts.get("lines_not_read_in_full"):
+                line += f"; {int(counts['lines_not_read_in_full']):,} lines not read in full"
+            lines.append(line)
     else:
         parts = [f"{fig.get('scanned', 0):,} scanned", f"{fig.get('kept', 0):,} kept"]
         if fig.get("produced", 0) > fig.get("kept", 0):

@@ -134,9 +134,13 @@ def randomize_file_order(
 
 def processed_totals(file_urls: List[str], db: rs.DB) -> Dict[str, int]:
     """What the already-processed files among ``file_urls`` contributed to the
-    database: ``{"files", "entries", "bytes", "unsized"}``. ``unsized`` counts
-    files whose marker predates per-file figures (their size is unknown)."""
-    totals = {"files": 0, "entries": 0, "bytes": 0, "lines": 0, "unsized": 0}
+    database: ``{"files", "entries", "bytes", "lines", "unsized"}``, and the
+    count ledger's figures ``{"empty_files", "match_total", "volume_total",
+    "problem_lines", "reordered", "unledgered"}``. ``unsized`` counts files
+    whose marker predates per-file figures (their size is unknown), and
+    ``unledgered`` those whose marker predates the ledger (no totals)."""
+    totals = {"files": 0, "entries": 0, "bytes": 0, "lines": 0, "unsized": 0, "empty_files": 0,
+              "match_total": 0, "volume_total": 0, "problem_lines": 0, "reordered": 0, "unledgered": 0}
     for url in file_urls:
         stats = processed_stats(db, PurePosixPath(url).name)
         if stats is None:
@@ -146,6 +150,12 @@ def processed_totals(file_urls: List[str], db: rs.DB) -> Dict[str, int]:
             totals["entries"] += int(stats.get("entries", 0))
             totals["bytes"] += int(stats.get("bytes", 0))
             totals["lines"] += int(stats.get("lines", 0))
+            totals["empty_files"] += int(stats.get("entries", 0)) == 0
         else:
             totals["unsized"] += 1
+        if "match_total" in stats:
+            for name in ("match_total", "volume_total", "problem_lines", "reordered"):
+                totals[name] += int(stats.get(name, 0))
+        else:
+            totals["unledgered"] += 1
     return totals

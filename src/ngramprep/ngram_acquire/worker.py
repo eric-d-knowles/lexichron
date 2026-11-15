@@ -6,14 +6,15 @@ import logging
 import os
 import struct
 from contextlib import closing
+from time import monotonic as _monotonic
 from pathlib import PurePosixPath
 from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import requests
 
 from ngramprep.ngram_acquire.io.download import stream_download_with_retries
-from ngramprep.ngram_acquire.io.parse import parse_line, prepare_multigrams
-from ngramprep.ngram_acquire.spool import ChunkWriter
+from ngramprep.ngram_acquire.io.parse import parse_line_checked, prepare_multigrams
+from ngramprep.ngram_acquire.spool import CheckedChunkWriter, CheckedSstChunkWriter
 
 try:                                   # compiled fast path (see io/parse_cy.pyx)
     from ngramprep.ngram_acquire.io.parse_cy import (FALLBACK as _FALLBACK, multigram_tables as _multigram_tables,
@@ -51,7 +52,22 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["process_and_ingest_file", "merge_packed_records", "DEFAULT_CHUNK_ENTRIES"]
+__all__ = ["process_and_ingest_file", "merge_packed_records", "DEFAULT_CHUNK_ENTRIES", "SPOOL_FORMATS"]
+
+# How a worker hands a shard to the parent: "sst" writes sorted RocksDB files
+# of merge operands that the parent adopts with one metadata operation;
+# "chunk" writes plain record files that the parent replays through a write
+# batch. Both carry the same records; "chunk" is the older path, kept as the
+# reference the SST path is tested against.
+SPOOL_FORMATS = ("sst", "chunk")
+
+# A worker says how far it is into its file this often, by rewriting the
+# marker file the parent already watches (see ``_report``).
+_REPORT_EVERY_S = 3.0
+
+# Unreadable lines are logged with their content up to this many per shard;
+# the count is always complete.
+_PROBLEM_LINES_LOGGED = 20
 
 # Entries per spooled chunk. Bounds worker memory to roughly one chunk of
 # packed values (a few hundred MB for unigrams, far less for 5-grams).
@@ -75,15 +91,23 @@ def process_and_ingest_file(
     max_attempts: int = 3,
     spool_dir: Optional[str] = None,
     chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
-) -> Tuple[str, List[str], int, int]:
+    spool_format: str = "sst",
+) -> Tuple[str, List[str], int, int, int, Dict[str, int]]:
     """
     Download, decompress, parse a gzipped ngram file, and spool it to chunks.
 
     Downloads the file from the given URL, decompresses it line-by-line,
     parses each line, packs the frequencies into compact binary form, and
-    writes the entries to chunk files in ``spool_dir`` (see
+    writes the entries to files in ``spool_dir`` (see
     :mod:`ngramprep.ngram_acquire.spool`). The worker holds at most one
-    chunk in memory; the parent process ingests the chunk files afterwards.
+    chunk in memory; the parent process ingests the files afterwards.
+
+    Every value is checked on its way to the spool (years strictly
+    ascending, which the merge operator assumes), the frequencies and
+    document counts of everything kept are totalled, and lines with content
+    that could not be read are counted: the figures come back in ``stats``
+    and are stored with the shard's marker, where the run's verification
+    reads them.
 
     Args:
         url: Download URL for the gzipped ngram file
@@ -100,13 +124,21 @@ def process_and_ingest_file(
             chunk files written so far).
         spool_dir: Directory for chunk files (default: the system temp dir).
         chunk_entries: Entries per chunk file.
+        spool_format: ``"sst"`` (one sorted SST file of merge operands for
+            the shard) or ``"chunk"`` (plain chunk files); see ``SPOOL_FORMATS``.
 
     Returns:
-        Tuple of (status_message, chunk_paths, uncompressed_bytes, entries)
+        Tuple of (status_message, chunk_paths, uncompressed_bytes, entries,
+        lines, stats)
         - status_message: Success or error message
-        - chunk_paths: Chunk files holding this file's entries, in order
+        - chunk_paths: Files holding this file's entries, in order
         - uncompressed_bytes: Total bytes of uncompressed data processed
-        - entries: Number of distinct keys written across the chunks
+        - entries: Number of distinct keys written across the files
+        - lines: Raw lines read
+        - stats: ``match_total`` and ``volume_total`` (the frequencies and
+          document counts of every kept line, summed), ``problem_lines``
+          (lines with content that could not be read) and ``reordered``
+          (values whose years had to be put in order)
 
     Packing Format:
         Values are packed as little-endian uint64 triplets per year:
@@ -145,6 +177,10 @@ def process_and_ingest_file(
         except Exception:
             pass
 
+    if spool_format not in SPOOL_FORMATS:
+        raise ValueError(f"spool_format must be one of {SPOOL_FORMATS}, got {spool_format!r}")
+    writer_class = CheckedSstChunkWriter if spool_format == "sst" else CheckedChunkWriter
+
     filename = PurePosixPath(url).name
     pid = os.getpid()
 
@@ -168,17 +204,19 @@ def process_and_ingest_file(
     fast_folded, fast_exact, fast_firsts, fast_words = _multigram_tables(combined_multigrams) if fast \
         else (None, None, None, 0)
     # Tell the parent (which reports progress) that a worker has this file.
-    try:
-        open(os.path.join(spool_root, f"{file_tag}.started"), "w").close()
-    except OSError:
-        pass
+    started_path = os.path.join(spool_root, f"{file_tag}.started")
+    _report(started_path, 0, None)
 
     try:
         last_error = ""
         for attempt in range(1, max_attempts + 1):
-            writer = ChunkWriter(spool_root, file_tag, chunk_entries, merge_packed_records)
+            writer = writer_class(spool_root, file_tag, chunk_entries, merge_packed_records)
             uncompressed_bytes = 0
             lines_processed = 0
+            problem_lines = 0
+            if attempt > 1:
+                _report(started_path, 0, None)          # the file starts over: so does its count
+            last_report = _monotonic()
             try:
                 resp = stream_download_with_retries(url, session=sess)
                 with closing(resp):
@@ -199,7 +237,12 @@ def process_and_ingest_file(
                     with gzip.GzipFile(fileobj=resp.raw, mode="rb") as gz:
                         for nread, raw in _iter_lines(gz):
                             if raw is None:
+                                # Once per block of decompressed data (about 1 MB):
+                                # the place to look at the clock, not once per line.
                                 uncompressed_bytes += nread
+                                if _monotonic() - last_report >= _REPORT_EVERY_S:
+                                    last_report = _monotonic()
+                                    _report(started_path, lines_processed, resp)
                                 continue
                             lines_processed += 1
                             if fast:
@@ -209,44 +252,66 @@ def process_and_ingest_file(
                                     if hit is not None:
                                         writer.add(hit[0], hit[1])
                                     continue
+                            # Anything the fast path does not take is parsed here,
+                            # including every line with content that cannot be
+                            # read: those are counted, never dropped in silence.
+                            problem = None
+                            key = packed = None
                             try:
-                                key, rec = parse_line(
+                                key, rec, unreadable = parse_line_checked(
                                     raw.decode("utf-8"),
                                     filter_pred=filter_pred,
                                     combined_multigrams=combined_multigrams,
                                 )
                                 if key and rec:
-                                    # Repeated keys within a chunk (e.g. tagged
-                                    # variants of a combined multigram) are summed
-                                    # by the writer; across chunks, by the DB.
-                                    writer.add(key, _pack_record(rec))
+                                    packed = _pack_record(rec)
+                                if unreadable:
+                                    problem = "counts that are not year,frequency,documents"
                             except UnicodeDecodeError as exc:
-                                worker_logger.warning(
-                                    "Worker %s (PID %s): Unicode error in %s line %s: %s",
-                                    worker_id, pid, filename, lines_processed, exc
-                                )
-                            except Exception as exc:
-                                worker_logger.warning(
-                                    "Worker %s (PID %s): Error processing line %s from %s: %s",
-                                    worker_id, pid, lines_processed, filename, exc
-                                )
+                                problem = f"not UTF-8 ({exc})"
+                            except (ValueError, struct.error) as exc:
+                                # e.g. a count too large for the packed format
+                                key = packed = None
+                                problem = f"{type(exc).__name__}: {exc}"
+                            if packed:
+                                # Repeated keys within a chunk (e.g. tagged
+                                # variants of a combined multigram) are summed
+                                # by the writer; across chunks, by the DB.
+                                # Outside the try: an error from the writer is
+                                # the shard's, not this line's.
+                                writer.add(key, packed)
+                            if problem:
+                                problem_lines += 1
+                                if problem_lines <= _PROBLEM_LINES_LOGGED:
+                                    worker_logger.warning(
+                                        "Worker %s (PID %s): %s line %s could not be read in full (%s): %r",
+                                        worker_id, pid, filename, lines_processed, problem, raw[:200]
+                                    )
+
+                    _check_complete(resp, content_length, filename)
+                    _report(started_path, lines_processed, resp)     # the whole file, while it waits to be ingested
 
                 chunk_paths = writer.finish()
                 entries = writer.entries_total
                 # Tell the parent's progress reporter this file is parsed, even
                 # before the parent gets round to collecting the result.
                 try:
-                    os.replace(os.path.join(spool_root, f"{file_tag}.started"),
-                               os.path.join(spool_root, f"{file_tag}.parsed"))
+                    os.replace(started_path, os.path.join(spool_root, f"{file_tag}.parsed"))
                 except OSError:
                     pass
+                stats = {"match_total": writer.match_total, "volume_total": writer.volume_total,
+                         "problem_lines": problem_lines, "reordered": writer.reordered}
                 msg = (
                     f"SUCCESS: {filename} - {lines_processed:,} lines, "
                     f"{entries:,} entries in {len(chunk_paths)} chunks, "
                     f"{uncompressed_bytes:,} uncompressed bytes"
                 )
+                if problem_lines:
+                    msg += f", {problem_lines:,} lines not read in full"
+                if writer.reordered:
+                    msg += f", {writer.reordered:,} values put in year order"
                 worker_logger.info("Worker %s (PID %s): %s", worker_id, pid, msg)
-                return msg, chunk_paths, uncompressed_bytes, entries, lines_processed
+                return msg, chunk_paths, uncompressed_bytes, entries, lines_processed, stats
 
             except requests.Timeout as exc:
                 writer.discard()
@@ -254,7 +319,8 @@ def process_and_ingest_file(
                 detail = str(exc)
             except (requests.RequestException, EOFError, OSError, gzip.BadGzipFile) as exc:
                 # Includes connections dropped mid-stream, which surface from
-                # inside the gzip loop rather than from the initial request.
+                # inside the gzip loop rather than from the initial request,
+                # and a body shorter than the server announced.
                 writer.discard()
                 last_error = f"NETWORK_ERROR: {filename}"
                 detail = f"{type(exc).__name__}: {exc}"
@@ -269,12 +335,19 @@ def process_and_ingest_file(
                     "Worker %s (PID %s): %s - giving up after %d attempts (%s)",
                     worker_id, pid, last_error, max_attempts, detail
                 )
-        return last_error, [], 0, 0, 0
+        return last_error, [], 0, 0, 0, {}
 
     except Exception as exc:
+        # Anything else (a value that cannot be spooled, a full disk the
+        # writer could not recover from) fails the shard: nothing of it has
+        # been published, so nothing of it is ingested.
+        try:
+            writer.discard()
+        except Exception:
+            pass
         msg = f"ERROR: {filename} - {exc}"
         worker_logger.error("Worker %s (PID %s): Error - %s: %s", worker_id, pid, filename, exc)
-        return msg, [], 0, 0, 0
+        return msg, [], 0, 0, 0, {}
 
     finally:
         if own_session:
@@ -282,6 +355,39 @@ def process_and_ingest_file(
                 sess.close()
             except Exception:
                 pass
+
+
+def _report(marker_path: str, lines: int, resp) -> None:
+    """Write "<lines read> <compressed bytes received>" into the worker's
+    marker file, for the parent's progress display (throughput while files
+    are still being read, and progress weighed by size). Advisory: a failure
+    to write it is ignored, and the parent ignores a marker it cannot read."""
+    try:
+        received = int(resp.raw.tell()) if resp is not None else 0
+    except (AttributeError, OSError, TypeError, ValueError):
+        received = 0
+    try:
+        with open(marker_path, "w") as fh:
+            fh.write(f"{int(lines)} {received}")
+    except OSError:
+        pass
+
+
+def _check_complete(resp, content_length, filename: str) -> None:
+    """Raise if fewer compressed bytes arrived than the server announced.
+
+    A gzip stream cut short already fails (no end-of-stream marker, or a bad
+    checksum), and so does a body the HTTP layer knows to be incomplete; this
+    compares the two counts directly where both are known, so that a shard is
+    never taken as whole on the strength of the decompressor alone.
+    """
+    try:
+        expected = int(content_length)
+        received = int(resp.raw.tell())
+    except (TypeError, ValueError, AttributeError, OSError):
+        return                                 # no announced length, or a body that does not count
+    if received < expected:
+        raise OSError(f"{filename}: received {received:,} of {expected:,} compressed bytes")
 
 
 def merge_packed_records(a: bytes, b: bytes) -> bytes:

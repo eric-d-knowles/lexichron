@@ -24,11 +24,13 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write
           "always_include_case",                                 # filter: edited with always_include in one window
           "combined_multigrams_case",                            # acquire: edited with combined_multigrams likewise
           "train_fn",                                            # tune, train: a test hook
-          "array_task", "array_count"}                           # set by the batch script (Submit: Jobs)
+          "array_task", "array_count",                           # set by the batch script (Submit: Jobs)
+          "spool_format",                                        # acquire: "chunk" is the reference path, for tests
+          "acquire.compact_after_ingest"}                        # acquire always compacts; the key still loads
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
-            "compact_after_ingest",
+            "compact_after_ingest", "verify_counts", "allow_unparsed_lines",
             # filter
             "text_language",
             "vocabulary_top_n", "output_vocabulary_spell_check", "progress_path",
@@ -104,6 +106,8 @@ LABELS: Dict[str, str] = {
     "compact_after_ingest": "Compact when done",
     "chunk_entries": "Chunk size",
     "spool_dir": "Spool directory",
+    "verify_counts": "Verify counts",
+    "allow_unparsed_lines": "Accept unreadable lines",
     # filter
     "text_language": "Text language",
     "lowercase": "Lowercase",
@@ -194,7 +198,14 @@ HELP: Dict[str, str] = {
     "open_type": "RocksDB profile. Leave at write:packed24 unless you know why.",
     "compact_after_ingest": "Compact the database when done (recommended).",
     "chunk_entries": "Entries per spooled chunk. Lower on small allocations, raise on large nodes.",
-    "spool_dir": "Where workers write chunk files (blank = $TMPDIR; node-local disk is ideal).",
+    "spool_dir": ("Where workers write each file's records before the database takes them (blank = $TMPDIR; "
+                  "node-local disk is ideal)."),
+    "verify_counts": ("After compaction, read the whole database once and check that its counts equal the "
+                      "totals every file recorded as it was read. A file taken in twice, a lost record or a "
+                      "wrong sum fails the run. Leave on."),
+    "allow_unparsed_lines": ("A line whose counts cannot be read in full is logged and counted, and its n-gram "
+                             "is undercounted. Off = a run that met any such line finishes, then fails and says "
+                             "how many. On = accept them (the number is still recorded)."),
     "archive_path_stub": "If set, compress the finished database into this directory (.tar.zst).",
     # filter
     "text_language": "Language for stopwords and lemmatization (spaCy code). Default: from the corpus.",
@@ -387,7 +398,7 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
     corpus = Section("corpus")
     stage_sec = Section(stage)
     for pname, p in sig.parameters.items():
-        if pname in HIDDEN:
+        if pname in HIDDEN or f"{stage}.{pname}" in HIDDEN:
             continue
         ann = hints.get(pname, p.annotation)
         default = None if p.default is inspect.Parameter.empty else p.default

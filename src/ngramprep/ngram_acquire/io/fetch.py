@@ -13,7 +13,18 @@ from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["fetch_file_urls"]
+__all__ = ["fetch_file_urls", "FileListing"]
+
+
+class FileListing(list):
+    """The file URLs of a listing, in order, with what the listing said of
+    their sizes: ``sizes`` maps a file's name to its size in bytes (the
+    compressed size, for a bucket listing) where the listing gave one. An
+    HTML index page gives none. It is a plain list for every other purpose."""
+
+    def __init__(self, urls=(), sizes=None) -> None:
+        super().__init__(urls)
+        self.sizes = dict(sizes or {})
 
 # Suppress BeautifulSoup warning about parsing XML with HTML parser
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
@@ -26,7 +37,7 @@ def fetch_file_urls(
         max_retries: int = 3,
         delay: float = 1.0,
         backoff: float = 2.0,
-) -> list[str]:
+) -> "FileListing":
     """
     Fetch file URLs from a repository listing matching a pattern.
 
@@ -42,12 +53,16 @@ def fetch_file_urls(
         backoff: Multiplier for exponential backoff
 
     Returns:
-        Sorted list of absolute URLs matching the pattern
+        Sorted list of absolute URLs matching the pattern, as a
+        :class:`FileListing`: its ``sizes`` holds each file's size where the
+        listing states it (a bucket listing does), which lets a run weigh its
+        progress by how much there is to download rather than by file count
 
     Raises:
         RuntimeError: After all retries exhausted
     """
     all_found: list[str] = []
+    sizes: dict[str, int] = {}
     marker = None
     page_num = 0
 
@@ -102,6 +117,14 @@ def fetch_file_urls(
                         filename = PurePosixPath(key_text).name
                         # Reconstruct full URL: key is relative path like "ngrams/books/..."
                         abs_url = f"https://storage.googleapis.com/books/{key_text}"
+                        # <Contents><Key>..</Key>..<Size>bytes</Size></Contents>
+                        parent = tag.parent
+                        size_tag = parent.find("size") if parent is not None and parent.name == "contents" else None
+                        if size_tag is not None and file_pattern.match(filename):
+                            try:
+                                sizes[filename] = int(size_tag.get_text(strip=True))
+                            except ValueError:
+                                pass
 
                     # Match pattern against filename only
                     if file_pattern.match(filename):
@@ -167,4 +190,4 @@ def fetch_file_urls(
     all_found = sorted(set(all_found), key=lambda u: PurePosixPath(u).name)
 
     logger.info("Fetched %d total matching files across %d pages", len(all_found), page_num)
-    return all_found
+    return FileListing(all_found, sizes)

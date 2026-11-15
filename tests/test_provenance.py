@@ -98,3 +98,22 @@ def test_no_record_for_an_unfinished_run(tmp_path):
     (tmp_path / "p.json").write_text(json.dumps({"stage": "filter", "state": "running", "db_path": str(tmp_path)}))
     assert provenance.record_run("filter", {}, str(tmp_path / "p.json")) is None
     assert provenance.read_provenance(tmp_path) is None
+
+
+def test_acquire_record_carries_the_count_verification():
+    """What the run's check of its own arithmetic found is part of the
+    database's record: the status, the totals, and any lines not read."""
+    doc = {"state": "done", "db_path": "/x/5grams.db", "files_total": 3, "counters": {"lines": 10, "inserted": 9},
+           "verification": {"status": "verified",
+                            "ledger": {"match_total": 1234, "volume_total": 99, "problem_lines": 2, "reordered": 1},
+                            "database": {"records": 9, "match_total": 1234, "volume_total": 99}}}
+    record = provenance.build_record("acquire", {"ngram_type": "tagged"}, doc)
+    assert record["figures"]["counts"] == {"status": "verified", "occurrences": 1234, "volume_counts": 99,
+                                           "ledger_occurrences": 1234, "ledger_volume_counts": 99,
+                                           "lines_not_read_in_full": 2, "values_reordered": 1}
+    text = "\n".join(provenance.format_provenance(record))
+    assert "Counts: verified against the files' own totals; 1,234 occurrences; 2 lines not read in full" in text
+    # a record written before the check existed says nothing about counts
+    del doc["verification"]
+    old = provenance.build_record("acquire", {}, doc)
+    assert "counts" not in old["figures"] and "Counts:" not in "\n".join(provenance.format_provenance(old))

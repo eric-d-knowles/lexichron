@@ -11,11 +11,20 @@ Document::
     {
       "stage": "acquire", "state": "running" | "done" | "failed",
       "inputs": {"source": ..., "vocabulary": ...},   # what the run reads (stage-specific)
-      "phase": "ingesting" | "compacting" | "archiving",   # what a running job is doing
+      "phase": "ingesting" | "compacting" | "verifying" | "archiving",   # what a running job is doing
       "phase_started": "...",
+      "steps": ["ingesting", "compacting", "verifying"],   # the phases this run goes through, in order
+                                            # (a stage that declares them: see set_plan)
+      "phase_times": {"ingesting": {"started": "...", "finished": "..." | null}, ...},
       "started": "...", "updated": "...", "finished": "..." | null,
       "files_total": 14, "files_done": 3, "files_failed": 0, "files_skipped": 0,
       "entries_written": 4914496, "uncompressed_bytes": 4731..., "chunks": 25,
+      "bytes_total": 2.1e12 | null,         # size of the files this run has to fetch, where the
+      "bytes_done": 8.4e11,                 # listing gave sizes, and of those finished (or failed)
+      "in_flight": {"lines": 7300000, "bytes": 3.1e9},   # what workers report of unfinished files
+      "failed_files": [{"file": "...", "message": "..."}],
+      "checks": {"verify_counts": true, "allow_unparsed_lines": false},   # acquire: what the run will check
+      "verification": {...},                # acquire: the count check's outcome (ngram_acquire.verify)
       "current": ["1-00003-of-00014.gz", "1-00004-of-00014.gz"],  # in flight
       "phases": {"queued": 40, "parsing": 36, "parsed": 3, "ingesting": 1},
       "ingesting": "1-00003-of-00014.gz" | null,
@@ -76,6 +85,7 @@ class ProgressReporter:
         self._active: set = set()          # told to us directly (no marker file)
         self._ingesting: Optional[str] = None
         self._prior: Dict[str, int] = {"files": 0, "entries": 0, "bytes": 0, "unsized": 0}
+        self._sizes: Dict[str, int] = {}
         self.doc: Dict[str, Any] = {
             "stage": stage, "state": "running",
             "phase": "ingesting", "phase_started": _now(),
@@ -109,6 +119,33 @@ class ProgressReporter:
         self.doc["files_total"] = files_total
         self.doc["files_skipped"] = files_skipped
         self._prior = dict(prior or {"files": 0, "entries": 0, "bytes": 0, "unsized": 0})
+        self._write(force=True)
+
+    def set_plan(self, steps: Iterable[str]) -> None:
+        """Declare the phases this run goes through, in order, so that a
+        reader can say "step 2 of 3" and what is still to come. The first is
+        the phase the run is in now. With a plan, a long phase that ends
+        stays the current phase until the next one starts."""
+        self.doc["steps"] = [str(s) for s in steps]
+        self.doc["phase_times"] = {self.doc["phase"]: {"started": self.doc["phase_started"], "finished": None}}
+        self._write(force=True)
+
+    def set_sizes(self, sizes: Dict[str, int], filenames: Iterable[str]) -> None:
+        """Sizes in bytes of the files this run has to fetch (as the listing
+        gave them; compressed). Progress and time remaining are then weighed
+        by size: files differ by orders of magnitude in what they hold, so a
+        count of files says little. Left unset when any size is unknown."""
+        names = list(filenames)
+        self._sizes = {n: int(sizes[n]) for n in names if n in sizes}
+        self.doc["bytes_total"] = sum(self._sizes.values()) if names and len(self._sizes) == len(names) else None
+        self.doc["bytes_done"] = 0
+        self._write(force=True)
+
+    def set_checks(self, **checks: Any) -> None:
+        """What the run will check of its own work (acquire: verify_counts,
+        allow_unparsed_lines), so that a reader can say what is pending and
+        what a problem met along the way will lead to."""
+        self.doc["checks"] = dict(checks)
         self._write(force=True)
 
     def file_started(self, filename: str) -> None:
@@ -149,17 +186,31 @@ class ProgressReporter:
         self.doc["uncompressed_bytes"] += uncompressed_bytes
         for k, v in (counters or {}).items():
             self.doc["counters"][k] = self.doc["counters"].get(k, 0) + int(v)
+        if "bytes_done" in self.doc:
+            self.doc["bytes_done"] += self._sizes.get(filename, 0)
         self._write(force=True)
 
     def file_failed(self, filename: str, message: str) -> None:
         self._drop_current(filename)
         self.doc["files_failed"] += 1
         self.doc["message"] = message
+        failed = self.doc.setdefault("failed_files", [])
+        if len(failed) < 50:                       # the count is in files_failed; the log has them all
+            failed.append({"file": filename, "message": message})
+        if "bytes_done" in self.doc:
+            self.doc["bytes_done"] += self._sizes.get(filename, 0)
         self._write(force=True)
 
     def set_phase(self, phase: str) -> None:
+        now = _now()
+        times = self.doc.get("phase_times")
+        if times is not None:
+            previous = times.get(self.doc.get("phase"))
+            if previous and self.doc.get("phase") != phase and not previous.get("finished"):
+                previous["finished"] = now
+            times.setdefault(phase, {"started": now, "finished": None})
         self.doc["phase"] = phase
-        self.doc["phase_started"] = _now()
+        self.doc["phase_started"] = now
         self._write(force=True)
 
     @contextmanager
@@ -184,7 +235,13 @@ class ProgressReporter:
         finally:
             stop.set()
             t.join(timeout=5)
-            self.set_phase("ingesting" if self.doc["state"] == "running" else self.doc["phase"])
+            if phase in (self.doc.get("steps") or ()):
+                # A planned step: it is over, and the run is between steps
+                # until the next one starts (or the run finishes).
+                self.doc["phase_times"].setdefault(phase, {"started": self.doc["phase_started"]})["finished"] = _now()
+                self._write(force=True)
+            else:
+                self.set_phase("ingesting" if self.doc["state"] == "running" else self.doc["phase"])
 
     def set_database(self, db, *, compacted: bool, bookkeeping: int = 0) -> None:
         """Record the destination's data-record count and size. After a full
@@ -200,6 +257,19 @@ class ProgressReporter:
             return
         self.doc["database"] = {"records": max(int(records) - int(bookkeeping), 0) if records else None,
                                 "bytes": int(size) if size else None, "compacted": bool(compacted)}
+        self._write(force=True)
+
+    def refresh(self) -> None:
+        """Rewrite the document with nothing new from the caller: what the
+        workers report of files in flight, and a fresh ``updated`` time. For
+        a parent that is waiting on work that takes minutes per unit."""
+        self._write()
+
+    def set_verification(self, verification: Dict[str, Any]) -> None:
+        """Record the outcome of the count verification (see
+        :mod:`ngramprep.ngram_acquire.verify`): its status, the ledger's
+        totals and what the scan of the database found."""
+        self.doc["verification"] = verification
         self._write(force=True)
 
     def finish(self, state: str = "done", message: str = "") -> None:
@@ -222,27 +292,46 @@ class ProgressReporter:
             self._ingesting = None
 
     def _marker_files(self) -> tuple:
-        """(started, parsed): files whose worker has touched <idx>_<file>.started,
-        and those it has since renamed to .parsed."""
+        """(started, parsed, reports): files whose worker has touched
+        <idx>_<file>.started, those it has since renamed to .parsed, and what
+        each marker says of the work so far. A worker may write
+        "<lines read> <bytes downloaded>" into its marker as it goes; a
+        marker that is empty, or caught half-written, reports nothing."""
         started: set = set()
         parsed: set = set()
+        reports: Dict[str, tuple] = {}
         if not self.spool_dir:
-            return started, parsed
+            return started, parsed, reports
         try:
             with os.scandir(self.spool_dir) as it:
                 for entry in it:
                     name = entry.name
                     if name.endswith(".started"):
-                        started.add(name[:-len(".started")].split("_", 1)[-1])
+                        unit = name[:-len(".started")].split("_", 1)[-1]
+                        started.add(unit)
                     elif name.endswith(".parsed"):
-                        parsed.add(name[:-len(".parsed")].split("_", 1)[-1])
+                        unit = name[:-len(".parsed")].split("_", 1)[-1]
+                        parsed.add(unit)
+                    else:
+                        continue
+                    try:
+                        with open(entry.path, "r") as fh:
+                            fields = fh.read(64).split()
+                        if len(fields) == 2:
+                            reports[unit] = (int(fields[0]), int(fields[1]))
+                    except (OSError, ValueError):
+                        pass
         except OSError:
             pass
-        return started, parsed
+        return started, parsed, reports
 
     def _update_phases(self) -> None:
         current = list(self.doc["current"])
-        started, worker_parsed = self._marker_files()
+        started, worker_parsed, reports = self._marker_files()
+        # Only files still in flight: a finished file's figures are in the
+        # counters, and its marker may outlive it by a moment.
+        self.doc["in_flight"] = {"lines": sum(reports[f][0] for f in current if f in reports),
+                                 "bytes": sum(reports[f][1] for f in current if f in reports)}
         ingesting = {self._ingesting} if self._ingesting else set()
         parsed = {f for f in current if f in self._parsed or f in worker_parsed} - ingesting
         parsing = {f for f in current if f in started or f in self._active} - parsed - ingesting
@@ -257,6 +346,12 @@ class ProgressReporter:
             "lines": self._prior.get("lines", 0) + int(self.doc["counters"].get("lines", 0)),
             "unsized": self._prior["unsized"],
         }
+        # Acquisition's ledger, over every job that has added to the database.
+        for name in ("empty_files", "match_total", "volume_total", "problem_lines", "reordered"):
+            if name in self.doc["counters"] or name in self._prior:
+                self.doc["corpus"][name] = int(self._prior.get(name, 0)) + int(self.doc["counters"].get(name, 0))
+        if self._prior.get("unledgered"):
+            self.doc["corpus"]["unledgered"] = int(self._prior["unledgered"])
 
     def _write(self, force: bool = False) -> None:
         if not self.path:

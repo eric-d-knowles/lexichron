@@ -56,6 +56,18 @@ ORDINARY = [
     b"x_.\t2000,1,1\n",                                              # '.' tag
     b"caf\xc3\xa9 na\xc3\xafve\t2000,1,1\n",                         # UTF-8 in the middle
     b"\xc3\xbcber alles\t2000,1,1\n",                                # non-ASCII first char (not whitespace)
+    b"\n", b"", b"   \n",
+    b"word\t2000,1,1\t\n",                                           # trailing tab stripped
+    b"\r\nword\t2000,1,1\r\n",
+    b"word\t18446744073709551615,1,1\n",                             # max uint64
+    b"word\t0,0,0\n",
+    b"word\t2000,1,1 \n",                                            # trailing space stripped
+]
+
+# Lines with content that cannot be read: no counts at all, or a count entry
+# that is not three whole numbers. The fast path hands every one of them to
+# the Python parser, which keeps what it can and reports the line.
+UNREADABLE = [
     b"word\t2000,1,1\t\t2001,2,2\n",                                 # empty entry between tabs
     b"word\t2000,1\t2001,2,2\n",                                     # 2-field entry skipped
     b"word\t2000,1,1,1\t2001,2,2\n",                                 # 4-field entry skipped
@@ -64,13 +76,8 @@ ORDINARY = [
     b"word\t,,\n",
     b"word\t2000,,1\n",
     b"word\n",                                                       # no tab
-    b"\n", b"", b"   \n", b"\t2000,1,1\n", b" \t2000,1,1\n",
-    b"word\t2000,1,1\t\n",                                           # trailing tab stripped
-    b"\r\nword\t2000,1,1\r\n",
-    b"word\t18446744073709551615,1,1\n",                             # max uint64
-    b"word\t0,0,0\n",
-    b"word\t2000,1,1 \n",                                            # trailing space stripped
     b"word\t2000,1,1\tx\n",                                          # junk entry skipped
+    b"\t2000,1,1\n", b" \t2000,1,1\n",                               # the n-gram is blank: no tab is left
 ]
 
 UNUSUAL = [
@@ -88,6 +95,22 @@ UNUSUAL = [
 def test_ordinary_lines_match_without_fallback():
     for raw in ORDINARY:
         assert _check(raw) == 0, raw
+
+
+def test_unreadable_lines_are_handed_to_python_which_reports_them():
+    from ngramprep.ngram_acquire.io.parse import parse_line_checked
+    for raw in UNREADABLE:
+        assert _check(raw) == 1, raw                        # never decided by the fast path alone
+        key, rec, problem = parse_line_checked(raw.decode("utf-8"))
+        assert problem, raw
+        assert (key, rec) == parse_line(raw.decode("utf-8")), raw
+    for raw in ORDINARY:
+        assert parse_line_checked(raw.decode("utf-8"))[2] is False, raw
+    # a line the filter rejects is never a problem, whatever its counts look like
+    pred = make_ngram_type_predicate("tagged")
+    assert parse_line_checked("plain word\t2000,x,1", filter_pred=pred) == (None, None, False)
+    assert parse_line_checked("word_NOUN\t2000,x,1", filter_pred=pred) == (None, None, True)
+    assert parse_line_checked("word_NOUN\t2000,x,1\t2001,2,2", filter_pred=pred)[2] is True
 
 
 def test_unusual_lines_fall_back_or_match():
@@ -209,7 +232,7 @@ def test_random_lines_with_pairs_match():
 
 
 def test_worker_combines_on_the_fast_path_like_python(tmp_path, monkeypatch):
-    lines = ORDINARY + COMBINING + NON_ASCII_LINES
+    lines = ORDINARY + UNREADABLE + COMBINING + NON_ASCII_LINES
     payload = gzip.compress(b"".join(lines))
 
     class Resp:
@@ -223,8 +246,9 @@ def test_worker_combines_on_the_fast_path_like_python(tmp_path, monkeypatch):
         monkeypatch.setattr(worker_mod, "_parse_packed", parse_cy.parse_packed if fast else None)
         import tempfile
         d = Path(tempfile.mkdtemp(prefix=f"{'fast' if fast else 'slow'}-{mode}-{cs}-", dir=tmp_path))
-        msg, chunks, _, _, _ = worker_mod.process_and_ingest_file(
+        msg, chunks, _, _, _, _ = worker_mod.process_and_ingest_file(
             "http://example/f.gz", 1, make_ngram_type_predicate(mode), spool_dir=str(d), chunk_entries=1000,
+            spool_format="chunk",
             combined_multigrams=None if cs else PAIRS | NON_ASCII_PAIRS,
             combined_multigrams_case=PAIRS | NON_ASCII_PAIRS if cs else None)
         assert msg.startswith("SUCCESS"), msg
@@ -244,7 +268,7 @@ def test_worker_combines_on_the_fast_path_like_python(tmp_path, monkeypatch):
 
 def test_worker_uses_fast_path_and_matches_python(tmp_path, monkeypatch):
     """Whole-worker check: same chunks with the fast path on and off."""
-    lines = ORDINARY + UNUSUAL + [b"z_NOUN q_VERB\t1999,5,5\n"] * 3
+    lines = ORDINARY + UNREADABLE + UNUSUAL + [b"z_NOUN q_VERB\t1999,5,5\n"] * 3
     payload = gzip.compress(b"".join(lines))
 
     class Resp:
@@ -258,14 +282,16 @@ def test_worker_uses_fast_path_and_matches_python(tmp_path, monkeypatch):
         monkeypatch.setattr(worker_mod, "_parse_packed", parse_cy.parse_packed if fast else None)
         d = tmp_path / f"{'fast' if fast else 'slow'}-{mode}"
         d.mkdir()
-        msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
-            "http://example/f.gz", 1, make_ngram_type_predicate(mode), spool_dir=str(d), chunk_entries=1000)
+        msg, chunks, nbytes, entries, _lines, stats = worker_mod.process_and_ingest_file(
+            "http://example/f.gz", 1, make_ngram_type_predicate(mode), spool_dir=str(d), chunk_entries=1000,
+            spool_format="chunk")
         assert msg.startswith("SUCCESS"), msg
         out = {}
         for c in chunks:
             for k, v in read_chunk(c):
                 out[k] = v
-        return out, nbytes, entries
+        # the ledger figures (totals, unreadable lines, reordered values) agree too
+        return out, nbytes, entries, stats
 
     for mode in MODES:
         assert run(True, mode) == run(False, mode), mode

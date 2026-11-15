@@ -7,7 +7,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional, Tuple, Type
 
 from ngramprep.ngram_acquire.coordinator import (
@@ -19,7 +19,8 @@ from ngramprep.ngram_acquire.coordinator import (
 )
 from ngramprep.ngram_acquire.executor import process_files
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES
+from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES, SPOOL_FORMATS
+from ngramprep.ngram_acquire.verify import verify_database, describe_verification
 from ngramprep.ngram_acquire.reporter import print_pipeline_header, print_final_summary
 from ngramprep.ngram_acquire.io.parse import prepare_multigrams
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
@@ -37,7 +38,9 @@ __all__ = ["download_and_ingest_to_rocksdb", "AcquisitionError"]
 
 class AcquisitionError(RuntimeError):
     """Raised when one or more files could not be acquired. Completed files
-    are persisted; re-running with overwrite_db=False retries only the rest."""
+    are persisted; re-running with overwrite_db=False retries only the rest.
+    Also raised when the finished database fails its checks: the counts do
+    not equal what the files contributed, or lines could not be read."""
 
 try:
     import setproctitle as _setproctitle
@@ -64,6 +67,9 @@ def download_and_ingest_to_rocksdb(
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         spool_dir: Optional[str] = None,
         progress_path: Optional[str] = None,
+        verify_counts: bool = True,
+        allow_unparsed_lines: bool = False,
+        spool_format: str = "sst",
 ) -> None:
     """
     Main pipeline: discover, download, parse, and ingest ngram files into RocksDB.
@@ -72,10 +78,12 @@ def download_and_ingest_to_rocksdb(
     1. Builds database path from stub and parameters
     2. Discovers available files from repository
     3. Opens/creates RocksDB with specified profile
-    4. Downloads and processes files concurrently
-    5. Writes batched results to database
-    6. Optionally performs post-ingestion compaction
-    7. Optionally archives (compresses) database to specified directory
+    4. Downloads and processes files concurrently; each worker hands its
+       file over as one sorted SST file
+    5. Adopts each file into the database together with its marker
+    6. Compacts the database
+    7. Verifies the counts in the database against what the files contributed
+    8. Optionally archives (compresses) database to specified directory
 
     Args:
         ngram_size: N-gram size (1-5)
@@ -92,11 +100,12 @@ def download_and_ingest_to_rocksdb(
         write_batch_size: Deprecated; chunk_entries now governs batch size.
         open_type: RocksDB profile; "write:packed24" (default) is the bulk-ingest
             profile with the merge operator the pipeline relies on.
-        compact_after_ingest: If True (default), perform full compaction after
-            ingestion. Each processed file is flushed to its own SST file for
-            durability and auto-compaction is off in the write profile, so
-            compaction is what folds those files together and applies pending
-            merges; skip it only for a quick partial run.
+        compact_after_ingest: Ignored: a run that acquired every file always
+            compacts. Each file arrives as its own SST file and
+            auto-compaction is off in the write profile, so compaction is
+            what folds those files together and sums the counts of n-grams
+            that arrived from more than one file; an uncompacted database is
+            an unfinished one. Kept so that older settings files still load.
         archive_path_stub: Optional archive stub directory. Creates structured path: {archive_path_stub}/{release}/{corpus}/{n}gram_files/{n}grams.db.tar.zst
         combined_multigrams: Optional set of word sequences to combine into one token as the files are
             read: an entry is two or more words, optionally followed by "=> target", the token the run
@@ -114,10 +123,33 @@ def download_and_ingest_to_rocksdb(
         progress_path: If given, a JSON progress document is kept up to date
             at this path for other processes to read (see
             :mod:`ngramprep.ngram_acquire.progress`).
+        verify_counts: Check the finished database against the run's ledger
+            (default True). Every file's marker records the total
+            occurrences and volume counts of the lines kept from it; after
+            compaction the whole database is read once, in parallel, and
+            must hold exactly the sum of those totals, with every value's
+            years in order. A file ingested twice, a lost record or a wrong
+            sum all show up as a difference, and the run fails. The pass
+            reads the database once; turn it off only to save that time on a
+            database you will check another way.
+        allow_unparsed_lines: A line whose counts cannot be read in full
+            (an entry that is not year,frequency,documents in whole numbers)
+            is counted, logged and left out, so its n-gram is undercounted.
+            By default a run that met any such line finishes its work and
+            then fails, naming how many; set this to accept them. The number
+            is recorded with the database either way.
+        spool_format: How workers hand a file to the parent: ``"sst"``
+            (default), one sorted SST file that the parent adopts with a
+            metadata operation, or ``"chunk"``, record files that the parent
+            replays through a write batch. Both produce the same database;
+            ``"chunk"`` is the older path, kept as the reference.
 
     Raises:
-        AcquisitionError: If any file failed after retries. The summary is
-            printed first; completed files remain in the database.
+        AcquisitionError: If any file failed after retries (the summary is
+            printed first; completed files remain in the database), if the
+            compaction failed, if the counts in the database do not match
+            the ledger, or if lines could not be read and
+            ``allow_unparsed_lines`` is off.
     """
     logger.info("Starting N-gram processing pipeline")
 
@@ -129,6 +161,11 @@ def download_and_ingest_to_rocksdb(
             pass
 
     start_time = datetime.now()
+
+    if spool_format not in SPOOL_FORMATS:
+        raise ValueError(f"spool_format must be one of {SPOOL_FORMATS}, got {spool_format!r}")
+    if not compact_after_ingest:
+        print("Note: compact_after_ingest is ignored; a complete acquisition is always compacted.")
 
     # The sequence list is checked before anything is downloaded or created:
     # an entry of one word could never match, and an entry longer than the
@@ -165,6 +202,11 @@ def download_and_ingest_to_rocksdb(
                                 db_path=db_path, log_path=log_file,
                                 inputs={"source": f"Google Books {repo_release_id} {repo_corpus_id} {ngram_size}-grams"
                                                   f" ({ngram_type})"})
+    # What the run goes through, and what it will check, for whoever reads
+    # the progress document: "step 2 of 3", and what a problem will lead to.
+    progress.set_plan(["ingesting", "compacting"] + (["verifying"] if verify_counts else [])
+                      + (["archiving"] if archive_path_stub is not None else []))
+    progress.set_checks(verify_counts=bool(verify_counts), allow_unparsed_lines=bool(allow_unparsed_lines))
 
     # Handle existing database
     if overwrite_db and os.path.exists(db_path):
@@ -216,6 +258,10 @@ def download_and_ingest_to_rocksdb(
 
         progress.set_totals(files_total=len(file_urls_to_use) + files_to_skip,
                             files_skipped=files_to_skip, prior=prior)
+        # The listing's sizes, where it gave them: progress by how much there
+        # is to fetch, since files differ enormously in what they hold.
+        progress.set_sizes(getattr(file_urls_available, "sizes", None) or {},
+                           [PurePosixPath(u).name for u in file_urls_to_use])
 
         # Optional randomization
         if random_seed is not None:
@@ -255,17 +301,20 @@ def download_and_ingest_to_rocksdb(
             spool_dir=spool_dir,
             chunk_entries=chunk_entries,
             progress=progress,
+            spool_format=spool_format,
         )
         # Database is automatically flushed by context manager on exit
 
-        # Optional post-ingestion compaction (only for a complete run). On a
-        # large database this is the longest single step of the run.
-        if compact_after_ingest and not failure:
+        # Compaction, whenever every file is in (a run with failures leaves
+        # the database incomplete, and the re-run that completes it compacts).
+        # On a large database this is the longest single step of the run.
+        compaction_error = None
+        if not failure:
             with progress.long_phase("compacting"):
-                _perform_compaction(db, db_path)
+                compaction_error = _perform_compaction(db, db_path)
         # bookkeeping keys: one resume marker per file done, in any job
         done_files = len(success) + (prior["files"] if prior else 0)
-        progress.set_database(db, compacted=bool(compact_after_ingest and not failure), bookkeeping=done_files)
+        progress.set_database(db, compacted=not failure and compaction_error is None, bookkeeping=done_files)
 
     # Report final statistics
     end_time = datetime.now()
@@ -292,6 +341,55 @@ def download_and_ingest_to_rocksdb(
             f"only the missing files. First failure: {failure[0]}"
         )
 
+    if compaction_error is not None:
+        progress.finish("failed", f"compaction failed: {compaction_error}")
+        raise AcquisitionError(
+            f"Every file was acquired, but the compaction failed ({compaction_error}). The database is "
+            f"complete but not compacted: counts of n-grams that arrived from more than one file are not "
+            f"summed yet. Re-run with overwrite_db=False to compact it."
+        )
+
+    # Verification: the database is closed, so readers see it whole. The
+    # ledger (every file's totals) is read from the markers of every file in
+    # the database, whichever run acquired it.
+    if verify_counts:
+        from ngramprep.utilities.display import format_banner
+        with progress.long_phase("verifying"):
+            print()
+            print(format_banner("Count Verification"))
+            sys.stdout.flush()
+            t0 = time.time()
+            verification = verify_database(db_path, workers)
+            verification["seconds"] = round(time.time() - t0, 1)
+        for line in describe_verification(verification):
+            print(line)
+            logger.info("%s", line)
+        print(f"Verification took {timedelta(seconds=int(verification['seconds']))}")
+        progress.set_verification(verification)
+        if verification["status"] == "mismatch":
+            progress.finish("failed", "the counts in the database do not match what the files contributed")
+            raise AcquisitionError(
+                "The counts in the database do not match what the files contributed (figures above, and in "
+                "the log). The database should not be used. Nothing was deleted: re-run with "
+                "overwrite_db=True to acquire it again, and please report this."
+            )
+        unreadable = int(verification["ledger"].get("problem_lines", 0))
+    else:
+        from ngramprep.ngram_acquire.verify import ledger_totals
+        with open_db(db_path, mode="r", profile="read:packed24") as db:
+            ledger = ledger_totals(db)
+        unreadable = int(ledger.get("problem_lines", 0))
+        progress.set_verification({"status": "skipped", "ledger": ledger})
+        print("Count verification skipped (verify_counts is off).")
+
+    if unreadable and not allow_unparsed_lines:
+        progress.finish("failed", f"{unreadable:,} lines could not be read in full")
+        raise AcquisitionError(
+            f"{unreadable:,} lines had counts that could not be read in full, so their n-grams are "
+            f"undercounted (the log shows the lines). The database is otherwise complete and compacted. "
+            f"Re-run with allow_unparsed_lines=True to accept it as it is."
+        )
+
     # Optional archiving: compress DB to archive directory
     if archive_path_stub is not None:
         with progress.long_phase("archiving"):
@@ -304,13 +402,17 @@ def download_and_ingest_to_rocksdb(
     return None
 
 
-def _perform_compaction(db, db_path: str) -> None:
+def _perform_compaction(db, db_path: str) -> Optional[str]:
     """
     Perform full compaction on the database using compact_all().
 
     Args:
         db: Open RocksDB handle
         db_path: Path to database (for logging)
+
+    Returns:
+        None when the compaction completed, else the error as text (the
+        caller fails the run: an uncompacted database is not a finished one).
     """
     from ngramprep.utilities.display import format_bytes, format_banner
 
@@ -352,7 +454,8 @@ def _perform_compaction(db, db_path: str) -> None:
     except Exception as e:
         logger.error(f"Compaction failed: {e}")
         print(f"Compaction failed: {e}")
-        print("Database is still usable, but may not be optimally compacted.")
+        return str(e)
+    return None
 
 
 def _archive_database(

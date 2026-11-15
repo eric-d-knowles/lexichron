@@ -11,6 +11,11 @@ Chunk file layout (little-endian)::
 
     magic   b"NGC1"
     repeat: u32 key_len, u32 value_len, key bytes, value bytes
+
+:class:`SstChunkWriter` spools the same records as sorted RocksDB SST files
+instead, which the parent ingests as files; the ``Checked`` writers are the
+ones acquisition uses, and add its checks on every value (see
+:class:`_Checked`).
 """
 from __future__ import annotations
 
@@ -19,7 +24,8 @@ import struct
 from pathlib import Path
 from typing import Dict, Iterator, List, Tuple
 
-__all__ = ["MAGIC", "ChunkWriter", "read_chunk", "chunk_entry_count"]
+__all__ = ["MAGIC", "ChunkWriter", "SstChunkWriter", "CheckedChunkWriter", "CheckedSstChunkWriter",
+           "check_values", "read_chunk", "chunk_entry_count"]
 
 MAGIC = b"NGC1"
 _HDR = struct.Struct("<II")
@@ -139,10 +145,11 @@ def chunk_entry_count(path: str | os.PathLike) -> int:
 class SstChunkWriter(ChunkWriter):
     """Like :class:`ChunkWriter`, but each chunk is written as a sorted SST
     file of *merge* operands (rocks-shim >= 0.8), so the parent ingests it as
-    a file instead of replaying its records through a write batch. Meant for
-    stages whose output is many times larger than their input: the parent's
-    single-writer path would otherwise be the bottleneck. Duplicate keys
-    across chunks and units are summed by the database's merge operator at
+    a file instead of replaying its records through a write batch: the
+    parent's single-writer path is otherwise the bottleneck, for a stage
+    whose output is many times its input (the filter's pivot) and for one
+    with many small units (acquisition's shards). Duplicate keys across
+    chunks and units are summed by the database's merge operator at
     compaction, exactly as with replayed chunks.
     """
 
@@ -194,3 +201,108 @@ class SstChunkWriter(ChunkWriter):
             published.append(str(final))
         self.part_paths = []
         return published
+
+
+class _Checked:
+    """Mixin for the acquisition writers: checks every value before it is
+    spooled and keeps the totals a run is later verified against.
+
+    Values arrive as the parser packed them, ``(year, frequency, documents)``
+    in little-endian uint64. Two things are done to each, in vectorized
+    batches of ``STAGE`` values:
+
+    * its frequencies and document counts are added to ``match_total`` and
+      ``volume_total``. Summing repeated keys never changes these totals, so
+      what the finished database holds must equal the totals of everything
+      spooled into it (see :mod:`ngramprep.ngram_acquire.verify`);
+    * its years are checked to be strictly ascending. The packed24 merge
+      operator assumes this and checks nothing in a release build: a value
+      with years out of order or repeated would be summed wrongly without
+      any error. Such a value is rewritten in order (``reordered`` counts
+      them), so the assumption is enforced here instead of trusted.
+
+    Keys are encoded to bytes on arrival, so that one n-gram is one key
+    however the parser handed it over, and so that sorting them is sorting
+    what the database compares.
+    """
+
+    STAGE = 4096
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._stage: List[Tuple[bytes, bytes]] = []
+        self.match_total = 0
+        self.volume_total = 0
+        self.reordered = 0
+
+    def add(self, key, value: bytes) -> None:
+        self._stage.append((key if isinstance(key, bytes) else key.encode("utf-8"), value))
+        if len(self._stage) >= self.STAGE:
+            self._drain()
+
+    def _drain(self) -> None:
+        stage, self._stage = self._stage, []
+        if not stage:
+            return
+        values = [v for _k, v in stage]
+        match, volume, bad = check_values(values)
+        self.match_total += match
+        self.volume_total += volume
+        add = super().add
+        if bad:
+            self.reordered += len(bad)
+            wrong = set(bad)
+            for i, (key, value) in enumerate(stage):
+                add(key, self.merge_fn(value, b"") if i in wrong else value)
+        else:
+            for key, value in stage:
+                add(key, value)
+
+    def finish(self) -> List[str]:
+        self._drain()
+        return super().finish()
+
+    def discard(self) -> None:
+        self._stage = []
+        super().discard()
+
+
+def check_values(values: List[bytes]) -> Tuple[int, int, List[int]]:
+    """Totals and year order of a batch of packed values.
+
+    Returns ``(frequency total, document-count total, indices of the values
+    whose years are not strictly ascending)``. Raises ValueError for a value
+    that is empty or not a whole number of 24-byte triplets: nothing
+    downstream could read it.
+    """
+    import numpy as np
+
+    n = len(values)
+    if not n:
+        return 0, 0, []
+    sizes = np.fromiter(map(len, values), dtype=np.int64, count=n)
+    if (sizes == 0).any() or (sizes % 24).any():
+        i = int(np.flatnonzero((sizes == 0) | (sizes % 24 != 0))[0])
+        raise ValueError(f"packed value of {int(sizes[i])} bytes is not a sequence of 24-byte "
+                         f"(year, frequency, documents) triplets")
+    rows = np.frombuffer(b"".join(values), dtype="<u8").reshape(-1, 3)
+    # Python integers for the totals: a corpus total can exceed what a batch
+    # sum is safe to hold only in theory, but the ledger must never wrap.
+    match = int(rows[:, 1].sum(dtype=np.uint64))
+    volume = int(rows[:, 2].sum(dtype=np.uint64))
+    years = rows[:, 0]
+    ascending = years[1:] > years[:-1]
+    ends = np.cumsum(sizes // 24)                 # row index one past each value's last triplet
+    ascending[ends[:-1] - 1] = True               # the step from one value to the next is not a step in time
+    if ascending.all():
+        return match, volume, []
+    rows_bad = np.flatnonzero(~ascending) + 1     # a row whose year is not above the one before it
+    return match, volume, sorted(set(np.searchsorted(ends, rows_bad, side="right").tolist()))
+
+
+class CheckedChunkWriter(_Checked, ChunkWriter):
+    """:class:`ChunkWriter` with the acquisition checks (see :class:`_Checked`)."""
+
+
+class CheckedSstChunkWriter(_Checked, SstChunkWriter):
+    """:class:`SstChunkWriter` with the acquisition checks (see :class:`_Checked`)."""

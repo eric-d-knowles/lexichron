@@ -99,9 +99,10 @@ def test_state_label_and_current_text():
     doc["current"] = [f"5-{i:05d}-of-11145.gz" for i in range(80)]
     doc["phases"] = {"queued": 40, "parsing": 36, "parsed": 3, "ingesting": 1}
     doc["ingesting"] = "5-00000-of-11145.gz"
+    # a finished file is adopted by the database in one short step: one wait, not two
     assert summarize(doc, now)["current_text"] == (
         "80 files in flight: 40 waiting for a worker · 36 downloading & parsing · "
-        "3 parsed, waiting to ingest · 1 ingesting  (5-00000-of-11145.gz)")
+        "4 waiting for the database  (5-00000-of-11145.gz)")
     doc["current"] = []
     assert summarize(doc, now)["current_text"] == ""
 
@@ -250,10 +251,12 @@ def test_meters_keep_the_three_record_counts_apart():
            "corpus": {"files": 40, "entries": 2000, "bytes": 20 << 30, "lines": 5000, "unsized": 0}}
     groups = dict(meters(acq, summarize(acq, now=now, job_gone=False)))
     session = {label: value for label, value, _ in groups["Records \u2013 this session"]}
-    assert session == {"Lines read": "1,234", "Parsed": "5.0 GB", "Inserted": "500"}
+    assert session == {"N-grams scanned": "1,234", "Kept": "500", "Parsed": "5.0 GB"}
     # the database is cumulative over acquisition jobs, so it sits with the corpus totals; no file count there
     corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
-    assert corpus == {"Lines read": "5,000", "Parsed": "20.0 GB", "Inserted": "2,000", "In database": "\u2014"}
+    assert corpus == {"N-grams scanned": "5,000", "Kept": "2,000", "Parsed": "20.0 GB", "In database": "\u2014"}
+    assert dict((l, n) for l, _v, n in groups["Records \u2013 entire corpus"])["Kept"] == "40.0% of the n-grams in finished files"
+    assert "Checks" not in groups                       # a run from before the checks existed
     # a filter document written before the unit label was recorded still counts work units
     old = {"stage": "filter", "state": "running", "files_total": 8, "files_done": 1, "entries_written": 1,
            "started": "2026-10-12T00:00:00+00:00", "updated": "2026-10-12T00:10:00+00:00"}
@@ -288,8 +291,9 @@ def test_in_flight_meters_follow_the_stage():
     groups = dict(meters(doc, summarize(doc, now=now, job_gone=False)))
     assert groups["In flight: 3 work units"] == [("Waiting for a worker", "1", ""), ("Scanning", "2", ""),
                                                  ("Scanned, waiting to ingest", "0", ""), ("Ingesting", "0", "")]
-    doc.update(stage="acquire", unit_label="files")
-    assert [l for l, _, _ in dict(meters(doc, summarize(doc, now=now, job_gone=False)))["In flight: 3 files"]][1] == "Downloading & parsing"
+    doc.update(stage="acquire", unit_label="files", phases={"queued": 1, "parsing": 2, "parsed": 3, "ingesting": 1})
+    assert dict(meters(doc, summarize(doc, now=now, job_gone=False)))["In flight: 3 files"] == [
+        ("Waiting for a worker", "1", ""), ("Downloading & parsing", "2", ""), ("Waiting for the database", "4", "")]
 
 
 def test_train_runs_read_as_ensembles_not_acquisitions():
@@ -324,3 +328,219 @@ def test_train_runs_read_as_ensembles_not_acquisitions():
     assert groups["Replicates in hand (40 resamples × 2 seeds)"] == [("1972", "16/80", "20%"), ("1985", "2/80", "2%")]
     assert not any("profile" in title.lower() for title in groups)
 
+
+
+# ---- an acquisition's screen: size-weighted progress, steps, scan rate, checks --------
+
+def _acq(**over):
+    """A run 10 minutes into its files: 3 of 10 done, which is 60% of the bytes."""
+    now = datetime(2026, 11, 15, 12, 10, tzinfo=timezone.utc)
+    start = (now - timedelta(minutes=10)).isoformat(timespec="seconds")
+    d = dict(stage="acquire", state="running", unit_label="files", phase="ingesting", phase_started=start,
+             started=start, updated=now.isoformat(timespec="seconds"), finished=None,
+             steps=["ingesting", "compacting", "verifying"],
+             phase_times={"ingesting": {"started": start, "finished": None}},
+             files_total=10, files_done=3, files_failed=0, files_skipped=0, entries_written=90_000,
+             uncompressed_bytes=3 << 30, bytes_total=1000, bytes_done=500, in_flight={"lines": 600_000, "bytes": 100},
+             counters={"lines": 3_000_000, "inserted": 90_000, "empty_files": 1, "match_total": 777,
+                       "volume_total": 70, "problem_lines": 0, "reordered": 0},
+             corpus={"files": 3, "entries": 90_000, "bytes": 3 << 30, "lines": 3_000_000, "unsized": 0,
+                     "empty_files": 1, "match_total": 777, "volume_total": 70, "problem_lines": 0, "reordered": 0},
+             checks={"verify_counts": True, "allow_unparsed_lines": False},
+             current=["a.gz", "b.gz"], phases={"queued": 0, "parsing": 2, "parsed": 0, "ingesting": 0},
+             message="", db_path="/x/5grams.db", log_path=None, slurm_job_id=None, hostname="cs001")
+    d.update(over)
+    return d, now
+
+
+def test_acquire_progress_is_weighed_by_size_and_time_left_covers_the_files_only():
+    from lexichron.ui.progress_view import meters
+    doc, now = _acq()
+    info = summarize(doc, now)
+    # 500 bytes of finished files + 100 reported by workers mid-file, of 1000
+    assert info["by_size"] and abs(info["fraction"] - 0.6) < 1e-9 and info["percent"] == 30.0
+    assert abs(info["eta_s"] - 400) < 1e-6                    # 400 bytes left at 600 bytes in 600 s
+    assert info["step_text"] == "step 1 of 3" and info["then_text"] == "then compaction and the count check"
+    assert info["headline"].startswith("step 1 of 3: downloading and parsing the files on cs001 · 3/10 files (60% by size)")
+    # what is read per second, files still in flight included; not what happens to be kept
+    assert info["scanning"] and info["rate_unit"] == "n-grams scanned/s" and info["rate"] == 3_600_000 / 600
+    tiles = {label: (value, note) for label, value, note in dict(meters(doc, info))["Progress"]}
+    assert tiles["Files"] == ("3/10", "60% by size")
+    assert tiles["Scan rate"][0] == "6.0k/s"
+    assert tiles["Elapsed"][1] == "step 1 of 3"
+    assert tiles["Remaining"] == ("6m40s", "for the files; then compaction and the count check")
+    # without sizes (an index page gives none) it falls back to counting files
+    doc, now = _acq(bytes_total=None, in_flight={"lines": 0, "bytes": 0})
+    info = summarize(doc, now)
+    assert not info["by_size"] and info["fraction"] == 0.3 and abs(info["eta_s"] - 7 * 200) < 1e-6
+    assert "3/10 files (30%)" in info["headline"]
+
+
+def test_acquire_tiles_are_the_same_from_the_first_frame():
+    """Before any file is read the screen already has every tile it will
+    have, at zero: nothing appears or is renamed as the run gets going."""
+    from lexichron.ui.progress_view import meters
+    doc, now = _acq()
+    late = [[label for label, _, _ in tiles] for _title, tiles in meters(doc, summarize(doc, now))]
+    doc.update(files_done=0, bytes_done=0, entries_written=0, uncompressed_bytes=0, counters={},
+               in_flight={"lines": 0, "bytes": 0}, current=[], phases={"queued": 0, "parsing": 0, "parsed": 0, "ingesting": 0},
+               corpus={"files": 0, "entries": 0, "bytes": 0, "lines": 0, "unsized": 0})
+    info = summarize(doc, now)
+    early = [[label for label, _, _ in tiles] for _title, tiles in meters(doc, info)]
+    assert early == late and info["scanning"] and info["rate"] == 0
+
+
+def test_acquire_steps_after_the_files_are_named_and_stop_the_clock_on_the_rate():
+    from lexichron.ui.progress_view import meters
+    doc, now = _acq(phase="compacting", files_done=10, bytes_done=1000, in_flight={"lines": 0, "bytes": 0},
+                    counters={"lines": 6_000_000, "inserted": 100})
+    start = datetime.fromisoformat(doc["started"])
+    files_end = (start + timedelta(minutes=5)).isoformat(timespec="seconds")
+    doc["phase_started"] = files_end
+    doc["phase_times"] = {"ingesting": {"started": doc["started"], "finished": files_end},
+                          "compacting": {"started": files_end, "finished": None}}
+    info = summarize(doc, now)
+    assert info["headline"].startswith("step 2 of 3: compacting the database (all work ingested) (5m00s so far)")
+    assert info["eta_s"] is None and info["then_text"] == "then the count check"
+    assert info["rate"] == 6_000_000 / 300                    # over the five minutes of reading, not the ten elapsed
+    tiles = {label: (value, note) for label, value, note in dict(meters(doc, info))["Progress"]}
+    assert tiles["Remaining"] == ("\u2014", "no estimate for this step; then the count check")
+    assert tiles["Elapsed"][1] == "step 2 of 3"
+    doc["phase"] = "verifying"
+    assert summarize(doc, now)["then_text"] == "" and summarize(doc, now)["step_text"] == "step 3 of 3"
+    # once it is over, the steps are not "in progress" any more
+    assert summarize(dict(doc, state="done", finished=doc["updated"]), now)["step_text"] == "all 3 steps done"
+    ended = summarize(dict(doc, state="failed", phase="compacting", finished=doc["updated"]), now)
+    assert ended["step_text"] == "ended in step 2 of 3" and ended["then_text"] == ""
+    assert summarize(dict(doc, slurm_job_id="9"), now, job_gone=True)["step_text"] == "ended in step 3 of 3"
+
+
+def test_acquire_records_say_scanned_kept_and_files_with_nothing():
+    from lexichron.ui.progress_view import meters
+    doc, now = _acq()
+    groups = dict(meters(doc, summarize(doc, now)))
+    assert groups["Records \u2013 this session"] == [
+        ("N-grams scanned", "3,600,000", "raw data lines; 600,000 of them in files still being read"),
+        ("Kept", "90,000", "3.0% of the n-grams in finished files"),
+        ("Files with nothing kept", "1", "of 3 finished"),
+        ("Parsed", "3.0 GB", "uncompressed")]
+    corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
+    assert corpus == {"N-grams scanned": "3,000,000", "Kept": "90,000", "Files with nothing kept": "1",
+                      "Parsed": "3.0 GB", "In database": "\u2014"}
+
+
+def test_acquire_checks_are_shown_from_the_start():
+    from lexichron.ui.progress_view import meters
+
+    def checks(doc, now):
+        return {label: (value, note) for label, value, note in dict(meters(doc, summarize(doc, now)))["Checks"]}
+
+    doc, now = _acq()
+    tiles = checks(doc, now)
+    assert tiles["Counts"] == ("pending", "checked after compaction")
+    assert tiles["Occurrences"] == ("777", "in the files read so far (the ledger)")
+    assert tiles["Lines not read in full"] == ("0", "every line's counts were read")
+    assert tiles["Values put in year order"] == ("0", "all arrived in order")
+    doc["phase"] = "verifying"
+    assert checks(doc, now)["Counts"][0] == "checking"
+    doc["checks"]["verify_counts"] = False
+    assert checks(doc, now)["Counts"] == ("not checked", "verify_counts is off")
+    doc["checks"]["verify_counts"] = True
+
+    doc.update(state="done", verification={"status": "verified", "ledger": {"match_total": 900, "reordered": 2},
+                                           "database": {"match_total": 900, "volume_total": 80}})
+    tiles = checks(doc, now)
+    assert tiles["Counts"][0] == "verified" and tiles["Occurrences"] == ("900", "in the database")
+    assert tiles["Values put in year order"] == ("2", "arrived out of order; corrected")
+
+    doc.update(state="failed", verification={"status": "mismatch",
+                                             "ledger": {"match_total": 900, "volume_total": 80},
+                                             "database": {"match_total": 1350, "volume_total": 95}})
+    assert checks(doc, now)["Counts"] == ("DO NOT MATCH", "occurrences +450; volume counts +15")
+    doc["verification"] = {"status": "unverifiable", "ledger": {"unledgered": 4}, "database": {"match_total": 5}}
+    tiles = checks(doc, now)
+    assert tiles["Counts"] == ("not verifiable", "4 files predate the count ledger")
+    assert tiles["Files without totals"][0] == "4"
+    del doc["verification"]
+    assert checks(doc, now)["Counts"][0] == "not reached"       # e.g. a run that ended over failed files
+
+
+def test_acquire_warnings_say_what_a_problem_will_lead_to():
+    from lexichron.ui.progress_view import notice_text
+    doc, now = _acq()
+    assert summarize(doc, now)["warnings"] == [] and notice_text(summarize(doc, now)) == ""
+
+    doc["counters"]["problem_lines"] = doc["corpus"]["problem_lines"] = 3
+    (w,) = summarize(doc, now)["warnings"]
+    assert w.startswith("3 lines had counts that could not be read in full")
+    assert "will finish its work and then end with an error" in w and "allow_unparsed_lines accepts them" in w
+    doc["checks"]["allow_unparsed_lines"] = True
+    assert summarize(doc, now)["warnings"][0].endswith("Accepted: allow_unparsed_lines is on.")
+    doc["counters"]["problem_lines"] = doc["corpus"]["problem_lines"] = 0
+
+    doc.update(files_failed=4, message="NETWORK_ERROR: d.gz",
+               failed_files=[{"file": f, "message": "NETWORK_ERROR"} for f in ("a.gz", "b.gz", "c.gz", "d.gz")])
+    (w,) = summarize(doc, now)["warnings"]
+    assert w.startswith("4 files failed (a.gz, b.gz, c.gz, ...). The run will finish the other files and then stop")
+    assert "without compacting or checking the counts" in w
+    assert notice_text(summarize(doc, now)) == w                # the last failure's message adds nothing
+    doc.update(state="failed", message="4 file(s) failed")
+    assert "The database is incomplete and was not compacted; run again to retry them." in summarize(doc, now)["warnings"][0]
+
+    doc.update(files_failed=0, failed_files=[], message="the counts in the database do not match what the files contributed",
+               verification={"status": "mismatch", "ledger": {"match_total": 900, "volume_total": 80},
+                             "database": {"match_total": 1350, "volume_total": 95, "disordered": 1, "malformed": 0}})
+    (w,) = summarize(doc, now)["warnings"]
+    assert w == ("The counts in the database do not match what the files contributed: occurrences differ by +450, "
+                 "volume counts by +15; 1 values are malformed or have years out of order. Do not use this database.")
+    # a message no warning covers is still shown; other stages have no warnings of this kind
+    info = summarize(dict(doc, verification={}, message="compaction failed: no space"), now)
+    assert notice_text(info) == "compaction failed: no space"
+    assert summarize(dict(doc, stage="filter"), now)["warnings"] == []
+
+
+def test_reporter_keeps_the_figures_the_screen_needs(tmp_path):
+    """The plan of steps and their times, sizes of the files to fetch, what
+    workers say of files in flight, failed files by name, and the ledger."""
+    spool = tmp_path / "spool"
+    spool.mkdir()
+    p = tmp_path / "progress.json"
+    r = ProgressReporter(p, stage="acquire", min_interval_s=0, spool_dir=spool)
+    r.set_plan(["ingesting", "compacting", "verifying"])
+    r.set_checks(verify_counts=True, allow_unparsed_lines=False)
+    r.set_totals(files_total=5, files_skipped=1,
+                 prior={"files": 1, "entries": 10, "bytes": 100, "lines": 50, "unsized": 0, "empty_files": 1,
+                        "match_total": 1000, "volume_total": 10, "problem_lines": 0, "reordered": 0, "unledgered": 0})
+    r.set_sizes({"a.gz": 100, "b.gz": 300, "c.gz": 600, "z.gz": 5}, ["a.gz", "b.gz", "c.gz", "d.gz"])
+    assert read_progress(p)["bytes_total"] is None                # d.gz has no size: no weighing by size
+    r.set_sizes({"a.gz": 100, "b.gz": 300, "c.gz": 600, "d.gz": 1000}, ["a.gz", "b.gz", "c.gz", "d.gz"])
+    doc = read_progress(p)
+    assert (doc["bytes_total"], doc["bytes_done"]) == (2000, 0) and doc["steps"][0] == "ingesting"
+    assert doc["checks"] == {"verify_counts": True, "allow_unparsed_lines": False}
+
+    for name in ("a.gz", "b.gz", "c.gz", "d.gz"):
+        r.file_started(name)
+    (spool / "00001_a.gz.started").write_text("700 90")           # as a worker reports: lines, bytes received
+    (spool / "00002_b.gz.parsed").write_text("4000 300")          # finished reading, waiting for the database
+    (spool / "00003_c.gz.started").write_text("12")               # caught half-written: ignored
+    (spool / "00004_d.gz.started").touch()                        # just picked up
+    r.file_active("a.gz")
+    assert read_progress(p)["in_flight"] == {"lines": 4700, "bytes": 390}
+
+    r.file_done("b.gz", entries=0, chunks=0, uncompressed_bytes=9,
+                counters={"lines": 4000, "inserted": 0, "empty_files": 1, "match_total": 0, "volume_total": 0})
+    doc = read_progress(p)                                        # b's marker is still there: not counted twice
+    assert doc["in_flight"] == {"lines": 700, "bytes": 90} and doc["bytes_done"] == 300
+    assert doc["corpus"]["empty_files"] == 2 and doc["corpus"]["match_total"] == 1000 and doc["corpus"]["lines"] == 4050
+    r.file_failed("c.gz", "NETWORK_ERROR: c.gz")
+    doc = read_progress(p)
+    assert doc["failed_files"] == [{"file": "c.gz", "message": "NETWORK_ERROR: c.gz"}] and doc["bytes_done"] == 900
+
+    with r.long_phase("compacting"):
+        doc = read_progress(p)
+        assert doc["phase"] == "compacting" and doc["phase_times"]["ingesting"]["finished"]
+    doc = read_progress(p)
+    # a planned step stays the current phase when it ends: the run is between steps, not back at its files
+    assert doc["phase"] == "compacting" and doc["phase_times"]["compacting"]["finished"]
+    r.set_verification({"status": "verified"})
+    assert read_progress(p)["verification"] == {"status": "verified"}

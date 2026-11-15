@@ -58,7 +58,7 @@ from lexichron.provenance import format_provenance
 from lexichron.resources import MemoryEstimate, memory_estimate
 from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
-from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, summarize, tail_lines
+from lexichron.ui.progress_view import fmt_count, fmt_duration, meters, notice_text, summarize, tail_lines
 from lexichron.ui.schema import CHOICES, Field, SLURM_FIELDS, Section, stage_sections
 from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, read_user_defaults,
                                       resolve as resolve_slurm, seed_user_defaults, stage_override,
@@ -2499,13 +2499,16 @@ class LexichronApp(App):
             return
         info = self._summarize(doc)
         title.update(f"Run {self.selected_run.name}" + (f"  ->  {info['db_path']}" if info["db_path"] else ""))
-        if info["total"]:
+        if info.get("by_size") and info.get("fraction") is not None:
+            # by how much there is to fetch, not by a count of unequal files
+            bar.update(total=1000, progress=round(1000 * info["fraction"]))
+        elif info["total"]:
             bar.update(total=info["total"], progress=info["done"] + info["failed"])
         else:
             bar.update(total=None, progress=0)
         self.query_one("#run-headline", Static).update(info["headline"])
         self.query_one("#run-inputs", Static).update(info["inputs_text"] or " ")
-        self.query_one("#run-message", Static).update(info["message"])
+        self.query_one("#run-message", Static).update(notice_text(info))
         self.query_one("#meters", Meters).show(meters(doc, info))
         # Log tail: only rewrite when it changes, so the pane does not flicker.
         lines = snap.get("log_lines")

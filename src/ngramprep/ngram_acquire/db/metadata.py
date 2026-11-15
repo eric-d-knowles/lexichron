@@ -35,12 +35,12 @@ def is_file_processed(db: rs.DB, filename: str) -> bool:
         
     Returns:
         True if file has been marked as processed
+
+    A read error is raised, not taken as "not processed": ingestion sums
+    counts, so treating a file that is in the database as missing would add
+    it a second time.
     """
-    try:
-        return db.get(processed_key(filename)) is not None
-    except Exception:
-        logger.exception("Failed to check processed status for %s", filename)
-        return False
+    return db.get(processed_key(filename)) is not None
 
 
 def processed_value(*, entries: int, uncompressed_bytes: int, chunks: int = 0,
@@ -55,8 +55,10 @@ def processed_value(*, entries: int, uncompressed_bytes: int, chunks: int = 0,
 
 def processed_stats(db: rs.DB, filename: str) -> Optional[Dict[str, int]]:
     """Figures stored with a processed file's marker: ``{"entries", "bytes",
-    "chunks"}``. ``{}`` for an old marker without figures; None if the file
-    has not been processed."""
+    "chunks"}``, the lines read, and since the counts ledger ``match_total``,
+    ``volume_total``, ``problem_lines`` and ``reordered`` (see
+    :mod:`ngramprep.ngram_acquire.verify`). ``{}`` for an old marker without
+    figures; None if the file has not been processed."""
     try:
         raw = db.get(processed_key(filename))
     except Exception:

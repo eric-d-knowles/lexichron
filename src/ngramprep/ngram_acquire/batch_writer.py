@@ -1,4 +1,12 @@
-"""Ingest spooled chunk files into RocksDB, one chunk at a time."""
+"""Ingest spooled files into RocksDB and mark their shard done.
+
+Everything here is written with *merge*: a key that is already in the
+database has its per-year counts summed by the packed24 operator. That is
+what makes a shard's records add up with every other shard's, and it is also
+why a shard must never be ingested twice: the second time would be summed
+too. The marker that says "this shard is in" therefore has to become durable
+together with the shard's records, never before and never after.
+"""
 from __future__ import annotations
 
 import logging
@@ -19,14 +27,19 @@ class ChunkIngestor:
     """
     Writes a worker's chunk files into the database and marks the file done.
 
-    Each chunk is read from disk, written in one batch with ``merge`` (so a
-    key that already exists, e.g. from another chunk of the same shard, has
-    its per-year counts summed by the packed24 merge operator), and deleted.
-    Only one chunk is in memory at a time.
+    A shard spooled as SST files (``.sst``, see SstChunkWriter) is adopted
+    with a single ingest call that also carries its marker, written as a
+    one-key SST file: RocksDB applies the whole call as one manifest edit, so
+    the records and the marker are in the database together or not at all,
+    wherever the process is killed. Nothing passes through a memtable and
+    nothing needs flushing.
 
-    When all chunks of a shard are in, the shard's resume marker is written
-    and the memtables are flushed, so a completed shard is on disk together
-    with its marker even if the process is killed afterwards.
+    A shard spooled as plain chunk files is replayed: each chunk is read from
+    disk, written in one batch with ``merge``, and deleted, one chunk in
+    memory at a time. When all chunks are in, the marker is written and the
+    memtables are flushed. The marker is durable with the records as long as
+    no memtable is flushed while the shard is being replayed, which holds for
+    a shard smaller than the write buffers.
     """
 
     def __init__(self, db: rs.DB, *, disable_wal: bool = True,
@@ -41,28 +54,36 @@ class ChunkIngestor:
     def ingest_file(self, filename: str, chunk_paths: Iterable[str], *,
                     uncompressed_bytes: int = 0, extra: Optional[dict] = None,
                     entries: Optional[int] = None) -> int:
-        """Ingest all chunks of one shard, then mark it processed (recording
-        its entry count, uncompressed size and any ``extra`` figures) and
-        persist. A chunk is replayed through a write batch, or, when it is an
-        SST file (``.sst``, see SstChunkWriter), ingested as a file; the
-        caller passes ``entries`` for those, since a file ingest does not
-        count them."""
+        """Ingest all chunks of one shard and mark it processed (recording
+        its entry count, uncompressed size and any ``extra`` figures), the
+        marker becoming durable with the records. A chunk is replayed through
+        a write batch, or, when it is an SST file (``.sst``, see
+        SstChunkWriter), ingested as a file; the caller passes ``entries``
+        for those, since a file ingest does not count them."""
         chunk_paths = list(chunk_paths)
         written = 0
         sst = [p for p in chunk_paths if p.endswith(".sst")]
-        if sst:
-            self._ingest_sst(sst)
         for path in chunk_paths:
             if not path.endswith(".sst"):
                 written += self._ingest_chunk(path)
         if entries is not None:
+            # A file ingest counts nothing, so the caller's figure stands for
+            # the SST files; replayed chunks were counted as they went in.
+            if sst:
+                self.total_entries_written += max(int(entries) - written, 0)
             written = int(entries)
+        key = self.marker_prefix + filename.encode("utf-8")
+        value = processed_value(entries=written, uncompressed_bytes=uncompressed_bytes,
+                                chunks=len(chunk_paths), extra=extra)
 
-        with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
-            wb.put(self.marker_prefix + filename.encode("utf-8"),
-                   processed_value(entries=written, uncompressed_bytes=uncompressed_bytes,
-                                   chunks=len(chunk_paths), extra=extra))
-        self.db.finalize_bulk()
+        if sst and len(sst) == len(chunk_paths):
+            self._ingest_sst(sst, marker=(key, value))
+        else:
+            if sst:                               # a mixed shard: no writer produces one
+                self._ingest_sst(sst)
+            with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
+                wb.put(key, value)
+            self.db.finalize_bulk()
 
         self.files_completed += 1
         logger.info(
@@ -96,14 +117,31 @@ class ChunkIngestor:
             logger.warning("Could not remove ingested chunk %s: %s", path, exc)
         return n
 
-    def _ingest_sst(self, paths: List[str]) -> None:
+    def _ingest_sst(self, paths: List[str], marker: Optional[tuple] = None) -> None:
         # All of a unit's files in one call (one manifest write); RocksDB
         # accepts files that overlap one another in key space, placing them
-        # in level 0. The files are moved, not copied.
+        # in level 0. The files are moved, not copied. With ``marker`` (key,
+        # value) the unit's marker rides in the same call as a one-key file
+        # holding a put: the marker is never a merge operand, which the
+        # counts' operator would try to sum.
+        paths = list(paths)
+        if marker is not None:
+            from ngramprep.common_db.api import rs    # the store in use (or a test double)
+            marker_path = paths[0] + ".marker.sst"
+            writer = rs.SstFileWriter(compression="none")
+            writer.open(marker_path)
+            writer.put(marker[0], marker[1])
+            writer.finish()
+            paths.append(marker_path)
         try:
-            self.db.ingest(list(paths), move=True)
+            self.db.ingest(paths, move=True)
         except Exception:
             logger.error("SST ingest error for %s; aborting to prevent data loss", paths)
+            if marker is not None:
+                try:
+                    os.remove(paths[-1])
+                except OSError:
+                    pass
             raise
         self.write_batches += 1
         logger.info("Ingested %d SST file(s): %s", len(paths), ", ".join(os.path.basename(p) for p in paths))

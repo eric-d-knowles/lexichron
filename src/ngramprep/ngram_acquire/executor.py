@@ -20,6 +20,9 @@ logger = logging.getLogger(__name__)
 
 __all__ = ["process_files"]
 
+# How often the parent republishes progress while it waits for a file to finish.
+_REFRESH_EVERY_S = 5.0
+
 
 def process_files(
         urls: Iterable[str],
@@ -34,15 +37,20 @@ def process_files(
         chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
         write_batch_size: Optional[int] = None,  # accepted for compatibility; chunk_entries governs
         progress: Optional[ProgressReporter] = None,
+        spool_format: str = "sst",
 ) -> Tuple[List[str], List[str], int, int, int]:
     """
     Process files concurrently and ingest results into RocksDB.
 
     Workers download, parse and filter shards, spooling the packed entries to
-    chunk files (see :mod:`ngramprep.ngram_acquire.spool`); as each shard
-    completes, this process streams its chunks into the database one at a
-    time, marks the shard processed, and flushes. Memory use is bounded by
-    one chunk per worker plus one in this process, independent of shard size.
+    files (see :mod:`ngramprep.ngram_acquire.spool`); as each shard
+    completes, this process takes its files into the database and marks the
+    shard processed, the marker becoming durable with the records (see
+    :class:`~ngramprep.ngram_acquire.batch_writer.ChunkIngestor`). With the
+    default ``spool_format="sst"`` a worker hands over one sorted SST file
+    and the parent only adopts it; with ``"chunk"`` the parent replays the
+    records. Memory use is bounded by one chunk per worker plus one in this
+    process, independent of shard size.
 
     Args:
         urls: File URLs to process
@@ -56,6 +64,7 @@ def process_files(
         chunk_entries: Entries per chunk file
         write_batch_size: Ignored (kept so older callers do not break)
         progress: Optional reporter updated as files start, finish or fail
+        spool_format: How workers hand shards over, ``"sst"`` or ``"chunk"``
 
     Returns:
         Tuple of (success_msgs, failure_msgs, total_entries_written,
@@ -75,6 +84,8 @@ def process_files(
     total = len(urls) if hasattr(urls, "__len__") else None
 
     # Each run gets its own spool directory, removed at the end.
+    if spool_dir:
+        os.makedirs(spool_dir, exist_ok=True)
     spool_ctx = tempfile.TemporaryDirectory(prefix="ngram_acquire_spool_", dir=spool_dir)
     spool_path = spool_ctx.name
     logger.info("Spool directory: %s (chunk size %s entries)", spool_path, f"{chunk_entries:,}")
@@ -128,13 +139,22 @@ def process_files(
                             combined_multigrams_case=combined_multigrams_case,
                             spool_dir=spool_path,
                             chunk_entries=chunk_entries,
+                            spool_format=spool_format,
                         )
                         futures[fut] = (url, idx)
 
                 submit_next(max_in_flight)
 
                 while futures:
-                    done, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                    # Wake every few seconds even if no file has finished: the
+                    # progress document is then rewritten with what the workers
+                    # report of the files they are still reading, and its
+                    # "updated" time stays fresh through a wave of large files.
+                    done, _ = wait(futures.keys(), timeout=_REFRESH_EVERY_S, return_when=FIRST_COMPLETED)
+                    if not done:
+                        if progress:
+                            progress.refresh()
+                        continue
                     if progress:
                         for fut in done:
                             progress.file_parsed(PurePosixPath(futures[fut][0]).name)
@@ -144,14 +164,18 @@ def process_files(
                         filename = PurePosixPath(url).name
                         chunk_paths: List[str] = []
                         try:
-                            result_msg, chunk_paths, uncompressed_bytes, _entries, _lines = fut.result()
+                            result_msg, chunk_paths, uncompressed_bytes, _entries, _lines, stats = fut.result()
 
                             if result_msg.startswith("SUCCESS"):
                                 if progress:
                                     progress.file_ingesting(filename)
+                                # The marker records what the shard contributed:
+                                # the run's verification adds these up and
+                                # compares them with what the database holds.
                                 written = ingestor.ingest_file(filename, chunk_paths,
                                                                uncompressed_bytes=uncompressed_bytes,
-                                                               extra={"lines": _lines})
+                                                               extra={"lines": _lines, **stats},
+                                                               entries=_entries)
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
                                 logger.info("Processed: %s", filename)
@@ -162,7 +186,12 @@ def process_files(
                                     progress.file_done(filename, entries=_entries,
                                                        chunks=len(chunk_paths),
                                                        uncompressed_bytes=uncompressed_bytes,
-                                                       counters={"lines": _lines, "inserted": written})
+                                                       counters={"lines": _lines, "inserted": written,
+                                                                 "empty_files": 1 if not _entries else 0,
+                                                                 "match_total": stats.get("match_total", 0),
+                                                                 "volume_total": stats.get("volume_total", 0),
+                                                                 "problem_lines": stats.get("problem_lines", 0),
+                                                                 "reordered": stats.get("reordered", 0)})
                             else:
                                 ChunkIngestor.discard(chunk_paths)
                                 failure_msgs.append(result_msg)

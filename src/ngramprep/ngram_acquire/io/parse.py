@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional, Tuple, TypedDict
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["YearFreq", "NgramRecord", "parse_line", "prepare_multigrams", "parse_multigram_entry",
+__all__ = ["YearFreq", "NgramRecord", "parse_line", "parse_line_checked", "prepare_multigrams", "parse_multigram_entry",
            "Multigrams", "TARGET_ARROW"]
 
 
@@ -213,14 +213,37 @@ def parse_line(
         >>> parse_line("the working class in america\\t2000,100,50", combined_multigrams={"working class"})
         ('the working-class in america', {'frequencies': [{'year': 2000, 'frequency': 100, 'document_count': 50}]})
     """
+    key, record, _problem = parse_line_checked(line, filter_pred=filter_pred,
+                                               combined_multigrams=combined_multigrams)
+    return key, record
+
+
+def parse_line_checked(
+        line: str,
+        *,
+        filter_pred: Optional[Callable[[str], bool]] = None,
+        combined_multigrams: Optional[set] = None,
+) -> Tuple[Optional[str], Optional[NgramRecord], bool]:
+    """:func:`parse_line`, also saying whether the line held anything that
+    could not be read.
+
+    Returns ``(ngram_text, record, problem)``. ``problem`` is True when the
+    line is not blank and either has no tab-separated counts at all, or passed
+    the filter with a count entry that is not ``year,frequency,documents``
+    in whole numbers. Such an entry is left out (the rest of the line is
+    kept, as :func:`parse_line` always did), so the n-gram's counts are short
+    by it: the caller counts these lines, since a database that silently
+    undercounts is worse than one that says so. A line the filter rejects is
+    never a problem, whatever its counts look like.
+    """
     s = line.strip()
     if not s:
-        return None, None
+        return None, None, False
 
     # Split into n-gram text and frequency data
     parts = s.split("\t", 1)
     if len(parts) != 2:
-        return None, None
+        return None, None, True
 
     ngram_text, freq_blob = parts
 
@@ -230,14 +253,16 @@ def parse_line(
 
     # Apply filter before parsing frequency data (optimization)
     if filter_pred is not None and not filter_pred(ngram_text):
-        return None, None
+        return None, None, False
 
     frequencies: List[YearFreq] = []
+    problem = False
 
     # Parse frequency tuples: "year,frequency,document_count"
     for entry in freq_blob.split("\t"):
         parts = entry.split(",")
         if len(parts) != 3:
+            problem = True
             continue
 
         try:
@@ -247,11 +272,12 @@ def parse_line(
                 "document_count": int(parts[2]),
             })
         except ValueError:
-            # Skip malformed numeric values
+            # A malformed number: the entry is left out, and reported
+            problem = True
             continue
 
     # Only return if we got at least one valid frequency
     if not frequencies:
-        return None, None
+        return None, None, True
 
-    return ngram_text, {"frequencies": frequencies}
+    return ngram_text, {"frequencies": frequencies}, problem

@@ -93,6 +93,20 @@ in the image; tests create their own.
   orthogonal rotation per replicate against a reference and anchor
   vocabulary, and is a separate future kernel; do not fold it into
   `measure`.
+- **Acquired counts are summed, and the sum is checked.** Every data record
+  goes into a raw database as a *merge* (packed24 sums per year), never a
+  put: combined multigrams make the same key arrive from several lines and
+  several files. Summing is not idempotent, so a file's records and its
+  `__processed__/` marker must become durable together: workers hand over
+  one sorted SST file per shard and the parent ingests it with a one-key
+  marker SST (a put) in a single call. Each marker carries the totals of
+  what its worker kept; after the (mandatory) compaction
+  `ngram_acquire/verify.py` reads the database once and requires its totals
+  to equal the markers'. Workers also enforce ascending years per value
+  (the operator assumes it and checks nothing) and count lines they cannot
+  read in full. Do not weaken any of this for speed; `spool_format="chunk"`
+  is the old replay path, kept as the reference the SST path is tested
+  against.
 - **Scores are files.** A tuning search keeps one JSON file per scored
   cell-year (`scores/`) and per year pair (`pairs/`); `results.tsv`,
   `pairs.tsv`, `summary.*` are exports. Readers derive from the files.

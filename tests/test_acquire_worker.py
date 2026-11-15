@@ -49,10 +49,10 @@ def test_worker_sums_colliding_tagged_variants(monkeypatch, tmp_path):
         lambda url, session=None: _FakeResponse(payload),
     )
 
-    msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
+    msg, chunks, nbytes, entries, _lines, _stats = worker_mod.process_and_ingest_file(
         "http://example/3-00000-of-00001.gz", 1,
         filter_pred=None, log_file_path=None,
-        combined_multigrams={"working class"}, spool_dir=str(tmp_path),
+        combined_multigrams={"working class"}, spool_dir=str(tmp_path), spool_format="chunk",
     )
 
     assert msg.startswith("SUCCESS")
@@ -66,8 +66,8 @@ def test_worker_splits_into_chunks_and_bounds_memory(monkeypatch, tmp_path):
     payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(1000)])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _FakeResponse(payload))
-    msg, chunks, _, entries, _lines = worker_mod.process_and_ingest_file(
-        "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=300)
+    msg, chunks, _, entries, _lines, _stats = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=300, spool_format="chunk")
     assert msg.startswith("SUCCESS")
     assert len(chunks) == 4 and entries == 1000          # 300+300+300+100
     assert len(_collect(chunks)) == 1000
@@ -83,8 +83,8 @@ def test_worker_without_combining_keeps_variants_separate(monkeypatch, tmp_path)
         worker_mod, "stream_download_with_retries",
         lambda url, session=None: _FakeResponse(payload),
     )
-    _, chunks, _, entries, _lines = worker_mod.process_and_ingest_file(
-        "http://example/f.gz", 1, spool_dir=str(tmp_path))
+    _, chunks, _, entries, _lines, _stats = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, spool_dir=str(tmp_path), spool_format="chunk")
     assert entries == 2 and len(_collect(chunks)) == 2
 
 
@@ -122,8 +122,8 @@ def test_worker_retries_a_connection_dropped_mid_stream(monkeypatch, tmp_path):
         return _FakeResponse(payload)
 
     monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
-    msg, chunks, _, entries, _lines = worker_mod.process_and_ingest_file(
-        "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=500)
+    msg, chunks, _, entries, _lines, _stats = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=500, spool_format="chunk")
     assert msg.startswith("SUCCESS")
     assert calls["n"] == 2
     # The failed attempt's partial chunks were discarded: no double counting.
@@ -137,8 +137,8 @@ def test_worker_gives_up_after_max_attempts(monkeypatch, tmp_path):
     payload = _gz(["a_NOUN\t1990,1,1"])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _DroppingResponse(payload, drop_after=0))
-    msg, chunks, nbytes, entries, _lines = worker_mod.process_and_ingest_file(
-        "http://example/f.gz", 1, max_attempts=2, spool_dir=str(tmp_path))
+    msg, chunks, nbytes, entries, _lines, _stats = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, max_attempts=2, spool_dir=str(tmp_path), spool_format="chunk")
     assert msg == "NETWORK_ERROR: f.gz"
     assert chunks == [] and nbytes == 0 and entries == 0
     assert [p.name for p in tmp_path.iterdir()] == ["00001_f.gz.started"]   # the parent removes it
@@ -153,5 +153,153 @@ def test_session_is_closed_when_worker_creates_it(monkeypatch, tmp_path):
     payload = _gz(["a_NOUN\t1990,1,1"])
     monkeypatch.setattr(worker_mod, "stream_download_with_retries",
                         lambda url, session=None: _FakeResponse(payload))
-    worker_mod.process_and_ingest_file("http://example/f.gz", 1, spool_dir=str(tmp_path))
+    worker_mod.process_and_ingest_file("http://example/f.gz", 1, spool_dir=str(tmp_path), spool_format="chunk")
     assert closed["n"] == 1
+
+
+# ---- the checks a worker makes on what it spools --------------------------
+
+def _run(monkeypatch, tmp_path, lines, **kw):
+    payload = lines if isinstance(lines, bytes) else _gz(lines)
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries",
+                        lambda url, session=None: _FakeResponse(payload))
+    kw.setdefault("spool_format", "chunk")
+    return worker_mod.process_and_ingest_file("http://example/f.gz", 1, spool_dir=str(tmp_path), **kw)
+
+
+@pytest.mark.parametrize("fast", [True, False])
+def test_worker_totals_what_it_keeps(monkeypatch, tmp_path, fast):
+    """match_total and volume_total are the frequencies and document counts
+    of every kept line, before any summing of repeated keys: the figures the
+    finished database is checked against."""
+    if not fast:
+        monkeypatch.setattr(worker_mod, "_parse_packed", None)
+    from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
+    msg, chunks, _, entries, lines, stats = _run(monkeypatch, tmp_path, [
+        "working_NOUN class_NOUN in_ADP\t1990,500,80\t2000,600,90",
+        "working_NOUN class_VERB in_ADP\t1990,20,5",              # collapses onto the line above
+        "other_NOUN thing_NOUN here_ADV\t1990,1,1",
+        "untagged words here\t1990,1000,1000",                    # filtered out: not in the totals
+    ], filter_pred=make_ngram_type_predicate("tagged"), combined_multigrams={"working class"})
+    assert msg.startswith("SUCCESS") and entries == 2 and lines == 4
+    assert stats == {"match_total": 500 + 600 + 20 + 1, "volume_total": 80 + 90 + 5 + 1,
+                     "problem_lines": 0, "reordered": 0}
+    data = _collect(chunks)
+    assert sum(f for v in data.values() for _y, f, _d in _unpack(v)) == stats["match_total"]
+
+
+@pytest.mark.parametrize("fast", [True, False])
+def test_worker_counts_lines_it_cannot_read_in_full(monkeypatch, tmp_path, fast):
+    """A line with unreadable counts is never dropped in silence: what can be
+    read of it is kept, and the line is counted and logged."""
+    if not fast:
+        monkeypatch.setattr(worker_mod, "_parse_packed", None)
+    payload = gzip.compress(b"\n".join([
+        b"good_NOUN\t1990,1,1",
+        b"short_NOUN\t1990,5\t1991,2,2",                           # one entry of two fields
+        b"junk_NOUN\t1990,x,1",                                    # nothing readable
+        b"notab_NOUN",                                             # no counts at all
+        b"big_NOUN\t1990,18446744073709551616,1",                   # does not fit the packed format
+        b"bad\xff_NOUN\t1990,1,1",                                 # not UTF-8
+        b"",                                                       # a blank line is not a problem
+        b"fine_NOUN\t1990,2,2",
+    ]))
+    msg, chunks, _, entries, lines, stats = _run(monkeypatch, tmp_path, payload)
+    assert msg.startswith("SUCCESS") and "5 lines not read in full" in msg
+    assert stats["problem_lines"] == 5
+    data = _collect(chunks)
+    assert set(data) == {"good_NOUN", "short_NOUN", "fine_NOUN"}
+    assert _unpack(data["short_NOUN"]) == [(1991, 2, 2)]          # the readable entry is kept
+    assert stats["match_total"] == 1 + 2 + 2
+
+
+def test_worker_puts_years_in_order(monkeypatch, tmp_path):
+    """The merge operator assumes ascending years and checks nothing; a value
+    that arrives otherwise is rewritten in order (repeated years summed) and
+    counted, with its totals unchanged."""
+    msg, chunks, _, entries, _lines, stats = _run(monkeypatch, tmp_path, [
+        "a_NOUN\t1990,1,1\t1991,2,2",
+        "b_NOUN\t2000,5,1\t1990,7,2",                              # out of order
+        "c_NOUN\t1990,1,1\t1990,2,2",                              # a year twice
+    ])
+    assert msg.startswith("SUCCESS") and "2 values put in year order" in msg
+    data = _collect(chunks)
+    assert _unpack(data["b_NOUN"]) == [(1990, 7, 2), (2000, 5, 1)]
+    assert _unpack(data["c_NOUN"]) == [(1990, 3, 3)]
+    assert stats == {"match_total": 3 + 12 + 3, "volume_total": 3 + 3 + 3, "problem_lines": 0, "reordered": 2}
+
+
+def test_worker_refuses_a_body_shorter_than_announced(monkeypatch, tmp_path):
+    """A complete gzip stream that is nevertheless shorter than the server's
+    Content-Length is not taken as the whole file."""
+    payload = _gz(["a_NOUN\t1990,1,1"])
+
+    class Short(_FakeResponse):
+        def __init__(self):
+            super().__init__(payload)
+            self.headers = {"content-length": str(len(payload) + 10)}
+
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries", lambda url, session=None: Short())
+    msg, chunks, *_ = worker_mod.process_and_ingest_file(
+        "http://example/f.gz", 1, max_attempts=2, spool_dir=str(tmp_path), spool_format="chunk")
+    assert msg == "NETWORK_ERROR: f.gz" and chunks == []
+    assert not list(tmp_path.glob("*.chunk")) and not list(tmp_path.glob("*.part"))
+
+
+def test_worker_writes_one_sorted_sst_per_shard(monkeypatch, tmp_path):
+    """The default spool: the shard's parts are merged into a single SST file
+    of merge operands, keys in byte order, repeated keys summed."""
+    import fake_rocks
+    from ngramprep.common_db import api
+    monkeypatch.setattr(api, "rs", fake_rocks)
+    lines = [f"w{i:04d}_NOUN\t1990,{i},1" for i in range(1000)] + ["w0007_NOUN\t1990,100,1", "\u00e9t\u00e9_NOUN\t1990,1,1"]
+    msg, paths, _, entries, _lines, stats = _run(monkeypatch, tmp_path, lines, chunk_entries=300, spool_format="sst")
+    assert msg.startswith("SUCCESS") and len(paths) == 1 and paths[0].endswith(".sst")
+    import pickle
+    with open(paths[0], "rb") as fh:
+        _compression, records = pickle.load(fh)
+    assert {kind for kind, _k, _v in records} == {"merge"}
+    keys = [k for _kind, k, _v in records]
+    assert keys == sorted(keys) and len(keys) == len(set(keys)) == entries == 1001
+    assert _unpack(dict((k, v) for _kind, k, v in records)[b"w0007_NOUN"]) == [(1990, 107, 2)]
+    assert "\u00e9t\u00e9_NOUN".encode("utf-8") in keys
+    assert stats["match_total"] == sum(range(1000)) + 100 + 1
+    assert [p.name for p in tmp_path.iterdir() if p.suffix not in (".sst", ".parsed")] == []
+
+
+def test_worker_reports_how_far_it_is_into_its_file(monkeypatch, tmp_path):
+    """Every few seconds, at a block boundary, the worker rewrites its marker
+    with the lines read and the compressed bytes received, so the progress
+    display can count files that are still being read. The finished file's
+    marker holds the whole file."""
+    monkeypatch.setattr(worker_mod, "_REPORT_EVERY_S", 0.0)         # report at every block
+    monkeypatch.setattr(worker_mod, "_READ_BLOCK", 4096)
+    seen = []
+    real = worker_mod._report
+    monkeypatch.setattr(worker_mod, "_report", lambda path, lines, resp: (real(path, lines, resp),
+                                                                         seen.append(open(path).read()))[0])
+    payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(2000)])
+    msg, chunks, _, entries, lines, _stats = _run(monkeypatch, tmp_path, payload)
+    assert msg.startswith("SUCCESS") and lines == 2000
+    counts = [tuple(int(x) for x in text.split()) for text in seen]
+    assert counts[0] == (0, 0) and len(counts) > 3                 # picked up, then several reports
+    assert [c[0] for c in counts] == sorted(c[0] for c in counts)  # lines only go up
+    assert counts[-1] == (2000, len(payload))                      # the whole file: lines, compressed bytes
+    assert (tmp_path / "00001_f.gz.parsed").read_text() == f"2000 {len(payload)}"
+
+
+def test_worker_report_starts_over_with_a_retry(monkeypatch, tmp_path):
+    payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(2000)])
+    calls = {"n": 0}
+
+    def fake_download(url, session=None):
+        calls["n"] += 1
+        return _DroppingResponse(payload, drop_after=4096) if calls["n"] == 1 else _FakeResponse(payload)
+
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
+    seen = []
+    real = worker_mod._report
+    monkeypatch.setattr(worker_mod, "_report", lambda path, lines, resp: (real(path, lines, resp), seen.append(lines))[0])
+    msg, *_ = worker_mod.process_and_ingest_file("http://example/f.gz", 1, spool_dir=str(tmp_path), spool_format="chunk")
+    assert msg.startswith("SUCCESS") and calls["n"] == 2
+    assert seen[0] == 0 and 0 in seen[1:] and seen[-1] == 2000     # back to zero for the second attempt

@@ -439,28 +439,73 @@ only the parent ever writes to the database:
 3. **A worker downloads and parses its file in one stream.** It decompresses
    the gzip as it arrives, parses each line, applies the `ngram_type` filter
    and any `combined_multigrams`, and packs the year, count and volume
-   triplets into binary. Entries are spooled to chunk files of
-   `chunk_entries` entries each under `spool_dir`, with repeated keys within
-   a chunk summed, so a worker holds about one chunk in memory whatever the
-   file's size. A connection dropped mid-file discards its chunks and
-   starts the file again, up to three times.
-4. **The parent ingests each finished file.** It replays the file's chunks
-   into the database one at a time as merge batches (keys repeated across
-   chunks are summed by the merge operator), deletes the chunks, writes the
-   file's processed marker, and flushes. A file and its marker therefore
-   reach disk together: an interrupted run loses only the files in flight,
-   and the next run (`overwrite_db: false`) picks up the rest. Ingestion
-   runs while the other workers are still parsing.
-5. **The parent compacts the database** (`compact_after_ingest`). Each
-   file's flush leaves its own SST file and auto-compaction is off in the
-   write profile, so this is what folds them together and applies the
-   pending merges. Skip it only for a quick partial run.
-6. **The parent archives the database** when `archive_path_stub` is set,
+   triplets into binary. It holds at most `chunk_entries` entries in memory,
+   whatever the file's size: each full batch is sorted and written under
+   `spool_dir` as an SST file (RocksDB's own file format), repeated keys
+   within it summed, and at the end of the file the batches are merged into
+   one sorted SST file. A connection dropped mid-file, or a body shorter
+   than the server announced, discards what was written and starts the file
+   again, up to three times.
+4. **The parent adopts each finished file.** It hands the worker's SST file
+   to the database together with a second, one-key file holding the file's
+   "processed" marker, in a single ingest call. RocksDB applies the call as
+   one edit of its manifest, so a file's records and its marker are in the
+   database together or not at all, wherever the job is killed: an
+   interrupted run loses only the files in flight, and the next run
+   (`overwrite_db: false`) picks up the rest. Nothing is replayed record by
+   record, so the parent keeps up with any number of workers.
+5. **The parent compacts the database.** Each file arrived as its own SST
+   file and auto-compaction is off in the write profile, so this is what
+   folds them together. It is not optional: until then an n-gram that
+   arrived from several files exists as several partial records.
+6. **The counts are verified** (`verify_counts`, on by default; see below).
+7. **The parent archives the database** when `archive_path_stub` is set,
    as a `.tar.zst` under `<stub>/<release>/<corpus>/<n>gram_files/`.
 
 A file that fails all its attempts does not stop the others. The run reports
-it at the end and exits with an error, skipping compaction and archiving;
-re-running resumes with only the missing files.
+it at the end and exits with an error, skipping compaction, verification and
+archiving; re-running resumes with only the missing files.
+
+**Counts are summed, never replaced.** Every record is written as a *merge*:
+when a key is already in the database, its per-year counts are added. Without
+`combined_multigrams` each n-gram occurs once in the whole release and the
+sum has one term. With them it does not: combining keeps only the first
+token's tag, so `working_NOUN class_NOUN` and `working_NOUN class_VERB` both
+become `working-class_NOUN`, and a sequence with a named token collapses its
+capitalizations too (`a . i .` and `A . I .` both become `A.I.`), which sit
+in different files. Their counts are added up within a batch by the worker,
+across a file's batches when they are merged, and across files by the
+compaction.
+
+Summing has one hazard, which is why the run checks its own arithmetic: a
+file taken in twice would be counted twice, and no later stage could tell.
+Four things guard the counts.
+
+- **A ledger, checked against the database on every run.** Each worker
+  totals the occurrences and the volume counts of every line it keeps, and
+  the totals are stored in the file's marker. Adding counts together never
+  changes a grand total, so after compaction the database must hold exactly
+  the sum of its markers' totals. The run reads the whole database once, in
+  parallel, and compares: a file ingested twice, a record lost on the way or
+  a wrong sum each leave a difference, the run fails, and the summary gives
+  both figures. The outcome is recorded in the database's provenance
+  (`lexichron inspect <database> --info`) and shown in the UI. A database
+  begun by an earlier version, whose markers hold no totals, is reported as
+  not verifiable; that is not an error.
+- **Years in order.** The merge operator assumes each value's years ascend
+  and checks nothing. Workers check every value before it is spooled and
+  rewrite any that arrive otherwise, and the verification scan checks every
+  value again in the finished database.
+- **No line dropped in silence.** A line whose counts cannot be read in full
+  (an entry that is not `year,count,volumes` in whole numbers) is logged
+  with its content and counted in the file's marker; what can be read of it
+  is kept. A run that met any such line finishes its work and then fails,
+  saying how many, because those n-grams are undercounted.
+  `allow_unparsed_lines: true` accepts them; the number is recorded either
+  way.
+- **Records and marker together.** Step 4 above. `tests/test_acquire_kill.py`
+  kills a run at chosen and at random moments against the real RocksDB and
+  requires the resumed database to equal an uninterrupted one.
 
 ### The filter stage
 
@@ -602,15 +647,14 @@ Tabs:
   out-of-memory kill.
 - **Progress** — the latest runs, newest first, whether started with *Run
   here* or by a Slurm job: a progress bar, what is being worked on, the
-  run's inputs, a grid of meters, and the tail of the run's log (collapsed;
-  click *Log* to open it), refreshed every few seconds. The meters keep
-  three record counts apart: what was *read* (raw data lines for
-  acquisition, source records for filtering), what was *inserted* into the
-  database (fewer: records with the same key merge before insertion) and
-  what the final database *holds* (fewer again, exact once compacted). An
-  acquisition run shows this session's figures and, since the database
-  accumulates over acquisition jobs, the totals for the entire corpus with
-  the database's count among them. A filter run also shows what each rule removed:
+  run's inputs, anything that has gone wrong and what it will lead to, a
+  grid of meters, and the tail of the run's log (collapsed; click *Log* to
+  open it), refreshed every few seconds. The meters keep
+  three record counts apart: what was *read* (raw n-grams for
+  acquisition, source records for filtering), what was *kept* and handed
+  to the database (fewer: records with the same key merge before
+  insertion) and what the final database *holds* (fewer again, exact once
+  compacted). A filter run also shows what each rule removed:
   tokens that were not alphabetic, too short, stopwords or not in the
   vocabulary, and n-grams dropped for having too few real tokens. The
   Runs table's *Records* column is the records kept so far while a run is
@@ -620,6 +664,33 @@ Tabs:
   `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
+
+  An acquisition's screen reads as follows.
+  - *The headline and the bar* say which step the run is on (`step 1 of 3:
+    downloading and parsing the files`, then compaction, the count check,
+    and archiving if asked for) and how far it is **by size**: the listing
+    gives every file's compressed size, and files differ by orders of
+    magnitude in what they hold, so a count of files says little.
+    *Remaining* is an estimate for the files only, and says which steps
+    follow; those are single long operations with no estimate.
+  - *Scan rate* is the raw n-grams read per second while files were being
+    read, files still in flight included (workers report every few
+    seconds). It does not depend on how much of what is read is kept.
+  - *In flight* shows files waiting for a worker, being downloaded and
+    parsed, and waiting for the database. The last should stay near zero: a
+    finished file is adopted in one short operation.
+  - *Records* are given for this session and, since the database
+    accumulates over acquisition jobs, for the entire corpus: the n-grams
+    *scanned*, those *kept* (with the share), and the *files with nothing
+    kept*. For tagged n-grams most files hold nothing to keep, and a small
+    share kept is what a correct run looks like.
+  - *Checks* shows the count check from the start (pending, checking,
+    verified, or the difference found), the occurrences in the files read
+    so far, the lines whose counts could not be read in full, and the
+    values that had to be put in year order. A line that could not be read,
+    or a file that failed, is also written under the headline the moment it
+    happens, with what it will lead to: the run finishes what it can and
+    then ends with an error.
 - **Inspect** — look inside a database: pick which of the corpus's databases
   or vocabulary files to open (or type any path), and show the first rows, the rows
   from a key, or the rows with a prefix, decoded for the database's layout
@@ -686,8 +757,9 @@ them:
     .lexichron/runs/            progress records of every run
 ```
 
-Nothing temporary is left behind: workers spool their chunks under the
-job's scratch directory and the chunks are deleted as they are ingested.
+Nothing temporary is left behind: workers spool their files under the
+job's scratch directory, and each is moved into the database (or deleted)
+as it is ingested.
 
 Model training writes one model per year (or per year bin) into the model
 directory you specify. Use `common_db.compress_db()` to archive a database for
