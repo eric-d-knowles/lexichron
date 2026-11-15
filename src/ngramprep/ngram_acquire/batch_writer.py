@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from typing import Iterable, List, Optional
 
 import rocks_shim as rs
@@ -61,6 +62,7 @@ class ChunkIngestor:
         SstChunkWriter), ingested as a file; the caller passes ``entries``
         for those, since a file ingest does not count them."""
         chunk_paths = list(chunk_paths)
+        t0 = time.perf_counter()
         written = 0
         sst = [p for p in chunk_paths if p.endswith(".sst")]
         for path in chunk_paths:
@@ -78,17 +80,20 @@ class ChunkIngestor:
 
         if sst and len(sst) == len(chunk_paths):
             self._ingest_sst(sst, marker=(key, value))
+            how = (f"adopted {len(sst)} SST file{'s' if len(sst) != 1 else ''} and the marker "
+                   f"in one ingest call")
         else:
             if sst:                               # a mixed shard: no writer produces one
                 self._ingest_sst(sst)
             with self.db.write_batch(disable_wal=self.disable_wal, sync=False) as wb:
                 wb.put(key, value)
             self.db.finalize_bulk()
+            how = (f"replayed {len(chunk_paths)} chunk file{'s' if len(chunk_paths) != 1 else ''}, "
+                   f"wrote the marker and flushed" if chunk_paths else "nothing to ingest; wrote the marker and flushed")
 
         self.files_completed += 1
-        logger.info(
-            "Completed %s: %s entries written (persisted to disk)", filename, f"{written:,}"
-        )
+        # One entry per unit, saying what was done to make it durable.
+        logger.info("Ingested %s: %s entries; %s (%.2fs)", filename, f"{written:,}", how, time.perf_counter() - t0)
         return written
 
     def _ingest_chunk(self, path: str) -> int:
@@ -110,7 +115,7 @@ class ChunkIngestor:
             raise
         self.total_entries_written += n
         self.write_batches += 1
-        logger.info("Ingested chunk %s: %s entries", os.path.basename(path), f"{n:,}")
+        logger.debug("Replayed chunk %s: %s entries", os.path.basename(path), f"{n:,}")
         try:
             os.remove(path)
         except OSError as exc:
@@ -144,7 +149,7 @@ class ChunkIngestor:
                     pass
             raise
         self.write_batches += 1
-        logger.info("Ingested %d SST file(s): %s", len(paths), ", ".join(os.path.basename(p) for p in paths))
+        logger.debug("Ingested %d SST file(s): %s", len(paths), ", ".join(os.path.basename(p) for p in paths))
         for path in paths:
             if os.path.exists(path):              # a store that copied rather than moved
                 try:

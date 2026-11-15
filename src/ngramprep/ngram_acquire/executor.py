@@ -74,7 +74,7 @@ def process_files(
 
     log_file_path = _get_log_file_path()
     if log_file_path:
-        logger.info("Log file path for workers: %s", log_file_path)
+        logger.debug("Log file path for workers: %s", log_file_path)
 
     success_msgs: List[str] = []
     failure_msgs: List[str] = []
@@ -88,7 +88,9 @@ def process_files(
         os.makedirs(spool_dir, exist_ok=True)
     spool_ctx = tempfile.TemporaryDirectory(prefix="ngram_acquire_spool_", dir=spool_dir)
     spool_path = spool_ctx.name
-    logger.info("Spool directory: %s (chunk size %s entries)", spool_path, f"{chunk_entries:,}")
+    logger.info("Starting %d workers; each spools its file as %s under %s (at most %s entries in memory)",
+                workers, "one sorted SST file" if spool_format == "sst" else "chunk files", spool_path,
+                f"{chunk_entries:,}")
     if progress:
         progress.set_spool_dir(spool_path)
 
@@ -108,7 +110,7 @@ def process_files(
                 # and so each worker inherits the already-imported modules
                 # instead of re-importing them.
                 kwargs["mp_context"] = mp.get_context("fork")
-                logger.info(
+                logger.debug(
                     "Using multiprocessing start method: %s",
                     kwargs["mp_context"].get_start_method()
                 )
@@ -140,6 +142,7 @@ def process_files(
                             spool_dir=spool_path,
                             chunk_entries=chunk_entries,
                             spool_format=spool_format,
+                            files_total=total,
                         )
                         futures[fut] = (url, idx)
 
@@ -178,7 +181,6 @@ def process_files(
                                                                entries=_entries)
                                 success_msgs.append(result_msg)
                                 total_uncompressed_bytes += uncompressed_bytes
-                                logger.info("Processed: %s", filename)
                                 if progress:
                                     # lines: raw data lines parsed; inserted: records
                                     # handed to the database (lines that produced an
@@ -195,6 +197,8 @@ def process_files(
                             else:
                                 ChunkIngestor.discard(chunk_paths)
                                 failure_msgs.append(result_msg)
+                                logger.error("Not ingested, not marked: %s (the worker's entries say why); "
+                                             "a re-run will fetch it again", filename)
                                 if progress:
                                     progress.file_failed(filename, result_msg)
 
@@ -202,7 +206,8 @@ def process_files(
                             ChunkIngestor.discard(chunk_paths)
                             msg = f"ERROR: {filename} - {exc}"
                             failure_msgs.append(msg)
-                            logger.error(msg)
+                            logger.error("Could not ingest %s: %s: %s. Its spool files were discarded and it is "
+                                         "not marked; a re-run will fetch it again", filename, type(exc).__name__, exc)
                             if progress:
                                 progress.file_failed(filename, msg)
                         finally:

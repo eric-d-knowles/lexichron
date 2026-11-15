@@ -81,7 +81,7 @@ def fetch_file_urls(
 
         for attempt in range(1, max_retries + 1):
             try:
-                logger.info(
+                logger.debug(
                     "Fetching file listing page %d from %s (attempt %d/%d)",
                     page_num, base_url, attempt, max_retries
                 )
@@ -131,7 +131,7 @@ def fetch_file_urls(
                         found.append(abs_url)
 
                 all_found.extend(found)
-                logger.info("Page %d: Found %d matching files (total: %d)",
+                logger.debug("Page %d: Found %d matching files (total: %d)",
                            page_num, len(found), len(all_found))
 
                 # Check for pagination (GCS XML format)
@@ -141,7 +141,7 @@ def fetch_file_urls(
                     next_marker_tag = soup.find("nextmarker")
                     if next_marker_tag:
                         marker = next_marker_tag.get_text(strip=True)
-                        logger.info("Results truncated, continuing with marker: %s", marker)
+                        logger.debug("Results truncated, continuing with marker: %s", marker)
                         break  # Break retry loop, continue to next page
                     else:
                         logger.warning("IsTruncated=true but no NextMarker found")
@@ -189,5 +189,7 @@ def fetch_file_urls(
     # Remove duplicates and sort by filename
     all_found = sorted(set(all_found), key=lambda u: PurePosixPath(u).name)
 
-    logger.info("Fetched %d total matching files across %d pages", len(all_found), page_num)
+    logger.info("Listing read: %d matching files across %d pages, %s", len(all_found), page_num,
+                f"{sum(sizes.values()) / 1e9:,.1f} GB compressed" if len(sizes) == len(all_found) and sizes
+                else "sizes not given")
     return FileListing(all_found, sizes)

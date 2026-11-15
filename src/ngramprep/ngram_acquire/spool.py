@@ -258,6 +258,16 @@ class _Checked:
             for key, value in stage:
                 add(key, value)
 
+    def settle(self) -> None:
+        """Check and pass on everything staged so far, so that the writer's
+        own figures (``pending``, ``part_paths``, the totals) are current."""
+        self._drain()
+
+    @property
+    def kept(self) -> int:
+        """Values taken so far, before repeated keys are summed across parts."""
+        return self.entries_total + len(self.pending) + len(self._stage)
+
     def finish(self) -> List[str]:
         self._drain()
         return super().finish()

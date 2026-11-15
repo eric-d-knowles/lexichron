@@ -422,10 +422,11 @@ def test_acquire_records_say_scanned_kept_and_files_with_nothing():
     assert groups["Records \u2013 this session"] == [
         ("N-grams scanned", "3,600,000", ""),
         ("Kept", "90,000", "3.0%"),
-        ("Empty files", "1", "of 3"),
+        ("Nothing kept", "1", "files"),
         ("Parsed", "3.0 GB", "uncompressed")]
     corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
-    assert corpus == {"N-grams scanned": "3,000,000", "Kept": "90,000", "Empty files": "1",
+    # the corpus total includes the files in flight too: it never trails the session's
+    assert corpus == {"N-grams scanned": "3,600,000", "Kept": "90,000", "Nothing kept": "1",
                       "Parsed": "3.0 GB", "In database": "\u2014"}
 
 

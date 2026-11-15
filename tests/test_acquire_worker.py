@@ -2,6 +2,7 @@
 import gzip
 import io
 import struct
+from pathlib import Path
 
 import pytest
 
@@ -303,3 +304,87 @@ def test_worker_report_starts_over_with_a_retry(monkeypatch, tmp_path):
     msg, *_ = worker_mod.process_and_ingest_file("http://example/f.gz", 1, spool_dir=str(tmp_path), spool_format="chunk")
     assert msg.startswith("SUCCESS") and calls["n"] == 2
     assert seen[0] == 0 and 0 in seen[1:] and seen[-1] == 2000     # back to zero for the second attempt
+
+
+# ---- the log: every entry says which file, where it stands in the run, and which worker ----
+
+def test_worker_log_entries_name_the_file_and_what_is_being_done(monkeypatch, tmp_path, caplog):
+    import logging
+    monkeypatch.setattr(worker_mod, "_REPORT_EVERY_S", 0.0)
+    monkeypatch.setattr(worker_mod, "_LOG_EVERY_S", 0.0)
+    monkeypatch.setattr(worker_mod, "_READ_BLOCK", 4096)
+    payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(2000)] + ["bad_NOUN\t1990,x,1"])
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries", lambda url, session=None: _FakeResponse(payload))
+    with caplog.at_level(logging.INFO):
+        worker_mod.process_and_ingest_file("http://example/5-00450-of-11145.gz", 12, spool_dir=str(tmp_path),
+                                           spool_format="chunk", chunk_entries=700, files_total=40)
+    records = [r for r in caplog.records if r.name.startswith("acquire.worker.")]
+    text = [r.getMessage() for r in records]
+    # run in this process, so it is "worker 00"; a pool's processes are 01, 02, ...
+    assert {r.name for r in records} == {"acquire.worker.00"}
+    assert all(m.startswith("5-00450-of-11145.gz (file 12 of 40): ") for m in text)
+    steps = [m.split("): ", 1)[1] for m in text]
+    assert steps[0] == "opening the download"
+    assert steps[1] == f"downloading and parsing as it arrives ({len(payload) / 1e6:,.1f} MB compressed)"
+    assert any(m.startswith("still reading after") and "lines" in m and "kept so far" in m and "MB received" in m
+               for m in steps)
+    assert any(m.startswith("line 2,001 could not be read in full") and "bad_NOUN" in m for m in steps)
+    assert any(m.startswith("read to the end in") and "2,001 lines" in m and m.endswith("writing 3 chunk files")
+               for m in steps)
+    assert any(m.startswith("done in") and "2,000 entries from 2,001 lines, in 3 chunk files" in m
+               and m.endswith("waiting for the parent to ingest it") for m in steps)
+    assert steps[-1] == "1 line could not be read in full; n-grams on such lines are undercounted"
+    # what it says while reading is true: lines only grow, and so does what was kept
+    reading = [m for m in steps if m.startswith("still reading")]
+    assert "1,877 lines, 1,877 kept so far" in reading[-1]
+    assert [r.levelname for r in records if "could not be read" in r.getMessage()] == ["WARNING", "WARNING"]
+
+
+def test_worker_log_says_when_nothing_was_kept_and_when_a_download_breaks_off(monkeypatch, tmp_path, caplog):
+    import logging
+    from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
+    payload = _gz(["plain words\t1990,1,1"] * 3)
+    calls = {"n": 0}
+
+    def fake_download(url, session=None):
+        calls["n"] += 1
+        return _DroppingResponse(payload, drop_after=0) if calls["n"] == 1 else _FakeResponse(payload)
+
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
+    with caplog.at_level(logging.INFO):
+        worker_mod.process_and_ingest_file("http://example/f.gz", 3, make_ngram_type_predicate("tagged"),
+                                           spool_dir=str(tmp_path), spool_format="chunk")
+    steps = [r.getMessage().split("): ", 1)[1] for r in caplog.records if r.name.startswith("acquire.worker.")]
+    assert any(m.startswith("the download broke off after 0 lines (attempt 1 of 3:") and
+               m.endswith("discarded what was read, starting the file again") for m in steps)
+    assert "opening the download (attempt 2 of 3)" in steps
+    assert any("writing nothing (no line was kept)" in m for m in steps)
+    assert any("nothing kept from 3 lines; waiting for the parent to mark it processed" in m for m in steps)
+
+
+def test_workers_and_the_parent_can_share_one_log_file(tmp_path):
+    """The parent used to open its log for plain writing: it kept its own
+    position in the file and overwrote every line the workers appended, so
+    no worker's entry ever survived. All handles append now."""
+    import logging
+    from ngramprep.ngram_acquire.logger import setup_logger
+    root = logging.getLogger()
+    saved, level = root.handlers[:], root.level
+    root.handlers = []
+    try:
+        log_path = setup_logger(tmp_path, filename_prefix="t")
+        logging.getLogger("parent").info("before the workers")
+        other = logging.FileHandler(log_path, mode="a")            # as a worker process opens it
+        other.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        worker = logging.getLogger("acquire.worker.test")
+        worker.addHandler(other); worker.setLevel(logging.INFO); worker.propagate = False
+        for i in range(50):
+            worker.info("worker entry %d", i)
+        logging.getLogger("parent").info("after the workers")
+        other.close(); worker.removeHandler(other)
+        for h in root.handlers:
+            h.close()
+        text = Path(log_path).read_text()
+    finally:
+        root.handlers, _ = saved, root.setLevel(level)
+    assert text.count("worker entry") == 50 and "before the workers" in text and "after the workers" in text

@@ -683,9 +683,10 @@ Tabs:
     accumulates over acquisition jobs, for the entire corpus: the n-grams
     *scanned* (one per data line; the session's figure includes files
     still being read), those *kept*, with their share of the n-grams in
-    finished files, and the *empty files*, which held nothing to keep. For
-    tagged n-grams most files are empty, and a small share kept is what a
-    correct run looks like.
+    finished files, and the files from which *nothing* was *kept*: read in
+    full, with no line that passed the token-type filter. For tagged
+    n-grams that is most files, and a small share kept is what a correct
+    run looks like.
   - *Checks* shows the count check from the start (pending, checking,
     verified, or the difference found), the *occurrences* (the total in the
     files read so far, and the database's once it has been checked), the

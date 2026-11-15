@@ -90,9 +90,14 @@ def setup_logger(
             encoding="utf-8",
         )
     else:
+        # Append mode, always. Worker processes write to this file too
+        # (through the handle they inherit, or one of their own): with every
+        # handle in append mode each record lands at the end of the file.
+        # Opened for plain writing, this process would keep its own position
+        # and overwrite whatever the others had added since.
         file_handler = logging.FileHandler(
             log_path,
-            mode="w",
+            mode="a",
             encoding="utf-8",
         )
 

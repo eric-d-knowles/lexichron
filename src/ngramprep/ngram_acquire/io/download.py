@@ -48,24 +48,26 @@ def stream_download_with_retries(
     """
     sess = session or requests.Session()
     delay = delay_seconds
+    name = url.rsplit("/", 1)[-1]
 
     for attempt in range(1, max_retries + 1):
         try:
-            logger.info("Downloading %s (attempt %d/%d)", url, attempt, max_retries)
+            # This only opens the stream; the body is read by the caller as it
+            # parses. The caller logs the start, so a first attempt is quiet here.
+            logger.debug("Requesting %s (attempt %d of %d)", url, attempt, max_retries)
             resp = sess.get(url, stream=True, timeout=timeout)
             resp.raise_for_status()
-            logger.debug("Download succeeded: %s", url)
             return resp
         except requests.RequestException as exc:
             if attempt == max_retries:
                 logger.error(
-                    "Failed to download %s after %d attempts: %s",
-                    url, max_retries, exc
+                    "%s: the server could not be reached or refused the request, %d attempts made: %s",
+                    name, max_retries, exc
                 )
                 raise
             logger.warning(
-                "Download failed (attempt %d/%d): %s - retrying in %.1fs",
-                attempt, max_retries, exc, delay
+                "%s: could not open the download (attempt %d of %d): %s; trying again in %.1fs",
+                name, attempt, max_retries, exc, delay
             )
             time.sleep(delay)
             delay *= backoff

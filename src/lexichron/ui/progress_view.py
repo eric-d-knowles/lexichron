@@ -516,9 +516,10 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     cumulative, so its record count belongs with the latter). In each:
     the raw n-grams *scanned* (one per data line, files in flight included
     in the session's figure), how many were *kept* by the token-type filter
-    (with their share of the n-grams in finished files), and the *empty
-    files*, which held nothing to keep: for tagged n-grams that is most of
-    them and does not mean anything is wrong.
+    (with their share of the n-grams in finished files), and the files
+    from which *nothing* was *kept*: read in full, with no line that passed
+    the filter. For tagged n-grams that is most files and does not mean
+    anything is wrong.
 
     Checks: what the run verifies of its own counts (see
     ngramprep.ngram_acquire.verify), shown from the start so that it is
@@ -540,19 +541,19 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
         ("Kept", f"{kept:,}", kept_note(kept, lines)),
     ]
     if "empty_files" in counters or doc.get("checks") is not None:
-        session.append(("Empty files", f"{int(counters.get('empty_files', 0)):,}",
-                        f"of {int(doc.get('files_done', 0)):,}"))
+        session.append(("Nothing kept", f"{int(counters.get('empty_files', 0)):,}", "files"))
     session.append(("Parsed", fmt_bytes(float(doc.get("uncompressed_bytes") or 0)), "uncompressed"))
     groups.append(("Records \u2013 this session", session))
 
     tiles = []
     if "lines" in corpus:
-        tiles.append(("N-grams scanned", f"{int(corpus.get('lines', 0)):,}", ""))
+        # Earlier jobs' files plus everything this session has read, files
+        # in flight included: the corpus total never trails the session's.
+        tiles.append(("N-grams scanned", f"{int(corpus.get('lines', 0)) + flying:,}", ""))
     tiles.append(("Kept", f"{int(corpus.get('entries', 0)):,}",
                   kept_note(int(corpus.get("entries", 0)), int(corpus.get("lines", 0)))))
     if "empty_files" in corpus or doc.get("checks") is not None:
-        tiles.append(("Empty files", f"{int(corpus.get('empty_files', 0)):,}",
-                      f"of {int(corpus.get('files', 0)):,}"))
+        tiles.append(("Nothing kept", f"{int(corpus.get('empty_files', 0)):,}", "files"))
     tiles += [("Parsed", fmt_bytes(float(corpus.get("bytes", 0))), "uncompressed"), db_tile]
     unsized = int(corpus.get("unsized", 0))
     if unsized:

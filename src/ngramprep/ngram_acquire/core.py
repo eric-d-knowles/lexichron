@@ -151,7 +151,8 @@ def download_and_ingest_to_rocksdb(
             the ledger, or if lines could not be read and
             ``allow_unparsed_lines`` is off.
     """
-    logger.info("Starting N-gram processing pipeline")
+    logger.info("Acquisition starting: Google Books %s %s %s-grams (%s)", repo_release_id, repo_corpus_id,
+                ngram_size, ngram_type)
 
     # Set process title if available
     if _setproctitle is not None:
@@ -262,6 +263,10 @@ def download_and_ingest_to_rocksdb(
         # is to fetch, since files differ enormously in what they hold.
         progress.set_sizes(getattr(file_urls_available, "sizes", None) or {},
                            [PurePosixPath(u).name for u in file_urls_to_use])
+        to_fetch = progress.doc.get("bytes_total")
+        logger.info("Files: %d to fetch%s, %d already in the database, %d workers",
+                    len(file_urls_to_use), f" ({to_fetch / 1e9:,.1f} GB compressed)" if to_fetch else "",
+                    files_to_skip, workers)
 
         # Optional randomization
         if random_seed is not None:
@@ -304,6 +309,9 @@ def download_and_ingest_to_rocksdb(
             spool_format=spool_format,
         )
         # Database is automatically flushed by context manager on exit
+        logger.info("Files finished in %s: %d ingested, %d failed; %s entries handed to the database, "
+                    "%.1f GB uncompressed read", timedelta(seconds=int((datetime.now() - start_time).total_seconds())),
+                    len(success), len(failure), f"{written:,}", uncompressed_bytes / 1e9)
 
         # Compaction, whenever every file is in (a run with failures leaves
         # the database incomplete, and the re-run that completes it compacts).
@@ -334,6 +342,8 @@ def download_and_ingest_to_rocksdb(
     if failure:
         for msg in failure:
             logger.error("Failed file: %s", msg)
+        logger.error("Stopping without compacting or verifying: %d files failed. The database holds the other "
+                     "files, each marked; a re-run fetches only the missing ones", len(failure))
         progress.finish("failed", f"{len(failure)} file(s) failed")
         raise AcquisitionError(
             f"{len(failure)} of {len(success) + len(failure)} files failed "
@@ -343,6 +353,7 @@ def download_and_ingest_to_rocksdb(
 
     if compaction_error is not None:
         progress.finish("failed", f"compaction failed: {compaction_error}")
+        logger.error("Stopping: every file is in, but the compaction failed; a re-run compacts")
         raise AcquisitionError(
             f"Every file was acquired, but the compaction failed ({compaction_error}). The database is "
             f"complete but not compacted: counts of n-grams that arrived from more than one file are not "
@@ -359,15 +370,21 @@ def download_and_ingest_to_rocksdb(
             print(format_banner("Count Verification"))
             sys.stdout.flush()
             t0 = time.time()
+            logger.info("Verifying the counts: reading the whole database once with up to %d processes "
+                        "and comparing its totals with the files' recorded totals", workers)
             verification = verify_database(db_path, workers)
             verification["seconds"] = round(time.time() - t0, 1)
         for line in describe_verification(verification):
             print(line)
             logger.info("%s", line)
         print(f"Verification took {timedelta(seconds=int(verification['seconds']))}")
+        logger.info("Verification took %s; outcome: %s", timedelta(seconds=int(verification["seconds"])),
+                    verification["status"])
         progress.set_verification(verification)
         if verification["status"] == "mismatch":
             progress.finish("failed", "the counts in the database do not match what the files contributed")
+            logger.error("Stopping: the counts in the database do not match what the files contributed. "
+                         "The database should not be used")
             raise AcquisitionError(
                 "The counts in the database do not match what the files contributed (figures above, and in "
                 "the log). The database should not be used. Nothing was deleted: re-run with "
@@ -381,9 +398,13 @@ def download_and_ingest_to_rocksdb(
         unreadable = int(ledger.get("problem_lines", 0))
         progress.set_verification({"status": "skipped", "ledger": ledger})
         print("Count verification skipped (verify_counts is off).")
+        logger.info("Count verification skipped (verify_counts is off)")
 
     if unreadable and not allow_unparsed_lines:
         progress.finish("failed", f"{unreadable:,} lines could not be read in full")
+        logger.error("Ending with an error: %s lines could not be read in full (the workers' entries show them) "
+                     "and allow_unparsed_lines is off. The database is otherwise complete and compacted",
+                     f"{unreadable:,}")
         raise AcquisitionError(
             f"{unreadable:,} lines had counts that could not be read in full, so their n-grams are "
             f"undercounted (the log shows the lines). The database is otherwise complete and compacted. "
@@ -396,6 +417,8 @@ def download_and_ingest_to_rocksdb(
             _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
 
     progress.finish("done")
+    logger.info("Acquisition finished in %s: %s", timedelta(seconds=int((datetime.now() - start_time).total_seconds())),
+                db_path)
 
     # Return None to avoid Jupyter displaying the path
     # (the path is already printed in the summary)
@@ -416,7 +439,8 @@ def _perform_compaction(db, db_path: str) -> Optional[str]:
     """
     from ngramprep.utilities.display import format_bytes, format_banner
 
-    logger.info("Starting post-ingestion compaction")
+    logger.info("Compacting: folding the per-file SST files into one sorted database and summing the "
+                "counts of n-grams that arrived from more than one file")
     print()
     print(format_banner("Post-Ingestion Compaction"))
 
@@ -437,6 +461,7 @@ def _perform_compaction(db, db_path: str) -> Optional[str]:
         elapsed = time.time() - start_time
 
         print(f"Compaction completed in {timedelta(seconds=int(elapsed))}")
+        logger.info("Compaction completed in %s", timedelta(seconds=int(elapsed)))
 
         # Get final size if possible
         try:
@@ -448,6 +473,8 @@ def _perform_compaction(db, db_path: str) -> Optional[str]:
                 print(f"Size before:             {format_bytes(initial_size)}")
                 print(f"Size after:              {format_bytes(final_size)}")
                 print(f"Space saved:             {format_bytes(saved)} ({pct:.1f}%)")
+                logger.info("Database size: %s before compaction, %s after", format_bytes(initial_size),
+                            format_bytes(final_size))
         except Exception:
             pass
 
@@ -486,7 +513,7 @@ def _archive_database(
     from pathlib import Path
     from ngramprep.utilities.display import format_banner, truncate_path_to_fit
 
-    logger.info("Starting database archival")
+    logger.info("Archiving the database")
     print()
     print(format_banner("Database Archival"))
 

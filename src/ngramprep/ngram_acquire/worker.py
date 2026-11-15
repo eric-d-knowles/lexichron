@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import gzip
 import logging
+import multiprocessing as mp
 import os
 import struct
 from contextlib import closing
@@ -65,6 +66,11 @@ SPOOL_FORMATS = ("sst", "chunk")
 # marker file the parent already watches (see ``_report``).
 _REPORT_EVERY_S = 3.0
 
+# While a file is being read, the worker says so in the log this often: a large
+# file takes minutes, and a log that is silent meanwhile cannot tell "reading"
+# from "stuck".
+_LOG_EVERY_S = 60.0
+
 # Unreadable lines are logged with their content up to this many per shard;
 # the count is always complete.
 _PROBLEM_LINES_LOGGED = 20
@@ -92,6 +98,7 @@ def process_and_ingest_file(
     spool_dir: Optional[str] = None,
     chunk_entries: int = DEFAULT_CHUNK_ENTRIES,
     spool_format: str = "sst",
+    files_total: Optional[int] = None,
 ) -> Tuple[str, List[str], int, int, int, Dict[str, int]]:
     """
     Download, decompress, parse a gzipped ngram file, and spool it to chunks.
@@ -111,7 +118,10 @@ def process_and_ingest_file(
 
     Args:
         url: Download URL for the gzipped ngram file
-        worker_id: Worker identifier for logging
+        worker_id: The file's number in this run (1, 2, ...). It names the
+            file's spool files and appears in the log as "file 12 of 40"; it
+            is not the number of the process doing the work, which the log
+            gives separately (see ``_worker_slot``).
         filter_pred: Optional predicate to filter ngrams by text
         log_file_path: Optional path to log file for worker output
         session: Optional requests.Session for connection pooling
@@ -126,6 +136,7 @@ def process_and_ingest_file(
         chunk_entries: Entries per chunk file.
         spool_format: ``"sst"`` (one sorted SST file of merge operands for
             the shard) or ``"chunk"`` (plain chunk files); see ``SPOOL_FORMATS``.
+        files_total: How many files this run fetches, for the log ("file 12 of 40").
 
     Returns:
         Tuple of (status_message, chunk_paths, uncompressed_bytes, entries,
@@ -144,36 +155,34 @@ def process_and_ingest_file(
         Values are packed as little-endian uint64 triplets per year:
         (year, frequency, document_count) → struct format '<{3*N}Q'
     """
-    # Set up worker-specific logging
-    if log_file_path:
-        worker_logger = logging.getLogger(f"worker_{os.getpid()}")
+    # Every log entry of this call names the file, where it stands in the run,
+    # and the process doing the work: "5-00450-of-11145.gz (file 12 of 40)" from
+    # logger "acquire.worker.03". The pool's processes are numbered 1..workers
+    # and each takes many files in turn.
+    filename = PurePosixPath(url).name
+    slot = _worker_slot()
+    worker_logger = logging.getLogger(f"acquire.worker.{slot:02d}")
+    if log_file_path and not worker_logger.handlers:
+        try:
+            file_handler = logging.FileHandler(log_file_path, mode="a")
+            file_handler.setFormatter(logging.Formatter(
+                "%(asctime)s %(levelname)-8s %(name)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+            worker_logger.addHandler(file_handler)
+            worker_logger.setLevel(logging.INFO)
+            worker_logger.propagate = False
+        except Exception as e:
+            # Fall back to the module's logger if the file cannot be opened
+            logger.warning("%s: could not open the log file for this worker: %s", filename, e)
+            worker_logger = logger
+    which = f"{filename} (file {worker_id}" + (f" of {files_total}" if files_total else "") + ")"
 
-        # Only add handler if not already present
-        if not worker_logger.handlers:
-            try:
-                file_handler = logging.FileHandler(log_file_path, mode="a")
-                formatter = logging.Formatter(
-                    "%(asctime)s %(levelname)-8s %(name)s: %(message)s",
-                    datefmt="%Y-%m-%d %H:%M:%S",
-                )
-                file_handler.setFormatter(formatter)
-                worker_logger.addHandler(file_handler)
-                worker_logger.setLevel(logging.INFO)
-                worker_logger.propagate = False
-            except Exception as e:
-                # Fallback to standard logger if file logging fails
-                logger.warning(
-                    "Worker %s (PID %s): Could not set up file logging: %s",
-                    worker_id, os.getpid(), e
-                )
-                worker_logger = logger
-    else:
-        worker_logger = logger
+    def log(level: int, text: str, *args) -> None:
+        worker_logger.log(level, "%s: " + text, which, *args)
 
-    # Set process title if available (helps with process monitoring)
+    # The process title too (ps, top): which worker, and the file it has.
     if _setproctitle is not None:
         try:
-            _setproctitle.setproctitle(f"nga:worker[{worker_id:03d}]")
+            _setproctitle.setproctitle(f"nga:worker[{slot:02d}] {filename}")
         except Exception:
             pass
 
@@ -181,14 +190,10 @@ def process_and_ingest_file(
         raise ValueError(f"spool_format must be one of {SPOOL_FORMATS}, got {spool_format!r}")
     writer_class = CheckedSstChunkWriter if spool_format == "sst" else CheckedChunkWriter
 
-    filename = PurePosixPath(url).name
-    pid = os.getpid()
-
     # One session per worker call, closed when done (a shared one may be passed in).
     own_session = session is None
     sess = session or requests.Session()
-
-    worker_logger.info("Worker %s (PID %s): Processing %s", worker_id, pid, filename)
+    started_at = _monotonic()
 
     import tempfile
     spool_root = spool_dir or tempfile.gettempdir()
@@ -216,22 +221,17 @@ def process_and_ingest_file(
             problem_lines = 0
             if attempt > 1:
                 _report(started_path, 0, None)          # the file starts over: so does its count
-            last_report = _monotonic()
+            last_report = last_logged = attempt_started = _monotonic()
+            log(logging.INFO, "opening the download%s", f" (attempt {attempt} of {max_attempts})" if attempt > 1 else "")
             try:
                 resp = stream_download_with_retries(url, session=sess)
                 with closing(resp):
                     content_length = resp.headers.get("content-length")
-                    if content_length:
-                        try:
-                            worker_logger.info(
-                                "Worker %s (PID %s): File size: %s bytes (compressed)",
-                                worker_id, pid, f"{int(content_length):,}"
-                            )
-                        except ValueError:
-                            worker_logger.debug(
-                                "Worker %s (PID %s): Non-numeric content-length=%r",
-                                worker_id, pid, content_length
-                            )
+                    try:
+                        size_text = f"{int(content_length) / 1e6:,.1f} MB compressed"
+                    except (TypeError, ValueError):
+                        size_text = "size not announced"
+                    log(logging.INFO, "downloading and parsing as it arrives (%s)", size_text)
 
                     # Process gzipped content line by line
                     with gzip.GzipFile(fileobj=resp.raw, mode="rb") as gz:
@@ -243,6 +243,12 @@ def process_and_ingest_file(
                                 if _monotonic() - last_report >= _REPORT_EVERY_S:
                                     last_report = _monotonic()
                                     _report(started_path, lines_processed, resp)
+                                    if last_report - last_logged >= _LOG_EVERY_S:
+                                        last_logged = last_report
+                                        log(logging.INFO, "still reading after %.0fs: %s lines, %s kept so far%s",
+                                            last_report - attempt_started, f"{lines_processed:,}",
+                                            f"{writer.kept:,}",
+                                            _received_text(resp, content_length))
                                 continue
                             lines_processed += 1
                             if fast:
@@ -283,14 +289,23 @@ def process_and_ingest_file(
                             if problem:
                                 problem_lines += 1
                                 if problem_lines <= _PROBLEM_LINES_LOGGED:
-                                    worker_logger.warning(
-                                        "Worker %s (PID %s): %s line %s could not be read in full (%s): %r",
-                                        worker_id, pid, filename, lines_processed, problem, raw[:200]
-                                    )
+                                    log(logging.WARNING, "line %s could not be read in full (%s): %r",
+                                        f"{lines_processed:,}", problem, raw[:200])
+                                elif problem_lines == _PROBLEM_LINES_LOGGED + 1:
+                                    log(logging.WARNING, "more lines could not be read in full; only the first %d "
+                                        "are shown, all are counted", _PROBLEM_LINES_LOGGED)
 
                     _check_complete(resp, content_length, filename)
                     _report(started_path, lines_processed, resp)     # the whole file, while it waits to be ingested
 
+                read_s = _monotonic() - attempt_started
+                writer.settle()                           # so that its part count is the true one
+                parts = len(writer.part_paths) + (1 if writer.pending else 0)
+                log(logging.INFO, "read to the end in %.0fs: %s lines, %.1f MB uncompressed; writing %s",
+                    read_s, f"{lines_processed:,}", uncompressed_bytes / 1e6,
+                    "nothing (no line was kept)" if not parts else
+                    (f"one SST file from {parts} sorted part{'s' if parts != 1 else ''}" if spool_format == "sst"
+                     else f"{parts} chunk file{'s' if parts != 1 else ''}"))
                 chunk_paths = writer.finish()
                 entries = writer.entries_total
                 # Tell the parent's progress reporter this file is parsed, even
@@ -310,7 +325,22 @@ def process_and_ingest_file(
                     msg += f", {problem_lines:,} lines not read in full"
                 if writer.reordered:
                     msg += f", {writer.reordered:,} values put in year order"
-                worker_logger.info("Worker %s (PID %s): %s", worker_id, pid, msg)
+                spooled = sum(os.path.getsize(p) for p in chunk_paths if os.path.exists(p))
+                took = (_monotonic() - started_at, read_s, _monotonic() - attempt_started - read_s)
+                if chunk_paths:
+                    log(logging.INFO, "done in %.0fs (read %.0fs, spool %.0fs): %s entries from %s lines, in %d %s "
+                        "file%s (%.1f MB); waiting for the parent to ingest it", *took, f"{entries:,}",
+                        f"{lines_processed:,}", len(chunk_paths), "SST" if spool_format == "sst" else "chunk",
+                        "" if len(chunk_paths) == 1 else "s", spooled / 1e6)
+                else:
+                    log(logging.INFO, "done in %.0fs (read %.0fs, spool %.0fs): nothing kept from %s lines; "
+                        "waiting for the parent to mark it processed", *took, f"{lines_processed:,}")
+                if problem_lines:
+                    log(logging.WARNING, "%s line%s could not be read in full; n-grams on such lines are undercounted",
+                        f"{problem_lines:,}", "" if problem_lines == 1 else "s")
+                if writer.reordered:
+                    log(logging.WARNING, "%s value%s arrived with years out of order and were put in order",
+                        f"{writer.reordered:,}", "" if writer.reordered == 1 else "s")
                 return msg, chunk_paths, uncompressed_bytes, entries, lines_processed, stats
 
             except requests.Timeout as exc:
@@ -325,16 +355,13 @@ def process_and_ingest_file(
                 last_error = f"NETWORK_ERROR: {filename}"
                 detail = f"{type(exc).__name__}: {exc}"
 
+            kind = "the download timed out" if last_error.startswith("TIMEOUT") else "the download broke off"
             if attempt < max_attempts:
-                worker_logger.warning(
-                    "Worker %s (PID %s): %s after %s lines (attempt %d/%d: %s); retrying from start",
-                    worker_id, pid, last_error, f"{lines_processed:,}", attempt, max_attempts, detail
-                )
+                log(logging.WARNING, "%s after %s lines (attempt %d of %d: %s); discarded what was read, "
+                    "starting the file again", kind, f"{lines_processed:,}", attempt, max_attempts, detail)
             else:
-                worker_logger.error(
-                    "Worker %s (PID %s): %s - giving up after %d attempts (%s)",
-                    worker_id, pid, last_error, max_attempts, detail
-                )
+                log(logging.ERROR, "%s after %s lines (%s); giving up after %d attempts. Nothing of this file "
+                    "was ingested", kind, f"{lines_processed:,}", detail, max_attempts)
         return last_error, [], 0, 0, 0, {}
 
     except Exception as exc:
@@ -346,7 +373,7 @@ def process_and_ingest_file(
         except Exception:
             pass
         msg = f"ERROR: {filename} - {exc}"
-        worker_logger.error("Worker %s (PID %s): Error - %s: %s", worker_id, pid, filename, exc)
+        log(logging.ERROR, "failed with %s: %s. Nothing of this file was ingested", type(exc).__name__, exc)
         return msg, [], 0, 0, 0, {}
 
     finally:
@@ -355,6 +382,25 @@ def process_and_ingest_file(
                 sess.close()
             except Exception:
                 pass
+
+
+def _worker_slot() -> int:
+    """Which of the pool's processes this is: 1..workers, or 0 when the
+    caller runs in the main process (a thread pool, a test, a notebook)."""
+    identity = getattr(mp.current_process(), "_identity", ())
+    return int(identity[0]) if identity else 0
+
+
+def _received_text(resp, content_length) -> str:
+    """", 310.2 of 395.3 MB received" for a log line, as far as it is known."""
+    try:
+        received = int(resp.raw.tell())
+    except (AttributeError, OSError, TypeError, ValueError):
+        return ""
+    try:
+        return f", {received / 1e6:,.1f} of {int(content_length) / 1e6:,.1f} MB received"
+    except (TypeError, ValueError):
+        return f", {received / 1e6:,.1f} MB received"
 
 
 def _report(marker_path: str, lines: int, resp) -> None:
