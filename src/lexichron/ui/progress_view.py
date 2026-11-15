@@ -398,11 +398,10 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         how_far = f"{info['percent']:.0f}%" if info["percent"] is not None else ""
     # What the estimate covers. A run that declares its steps has more to do
     # after its files, in single long calls that nothing predicts.
-    then = info.get("then_text") or ""
-    if info["eta_s"] is not None:
-        remaining_note = f"for the files; {then}" if then else "estimate"
-    elif info.get("state") == "running" and doc.get("phase") in LONG_PHASES and info.get("step_text"):
-        remaining_note = "no estimate for this step" + (f"; {then}" if then else "")
+    # (Tile notes stay short enough not to wrap: a figure or a caveat, never
+    # an explanation. The headline names the steps; the README explains the tiles.)
+    if info.get("step_text"):
+        remaining_note = "files only" if info["eta_s"] is not None else ""
     else:
         remaining_note = "estimate"
     progress_tiles = [
@@ -413,7 +412,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—",
           "years" if stage == "measure" else "models")
          if stage in ("tune", "train", "measure") else
-         ("Scan rate", f"{fmt_count(info['rate'])}/s", "raw n-grams read, while reading files")
+         ("Scan rate", f"{fmt_count(info['rate'])}/s", "n-grams")
          if info.get("scanning") else
          ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries")),
         ("Elapsed", fmt_duration(info["elapsed_s"]), info.get("step_text") or ""),
@@ -515,9 +514,11 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     Records: this session's figures, then the running totals over every
     acquisition job that has added to the database (the database is
     cumulative, so its record count belongs with the latter). In each:
-    the raw n-grams *scanned* (one per data line), how many were *kept* by
-    the token-type filter, and the files that held nothing to keep, which
-    for tagged n-grams is most of them and does not mean anything is wrong.
+    the raw n-grams *scanned* (one per data line, files in flight included
+    in the session's figure), how many were *kept* by the token-type filter
+    (with their share of the n-grams in finished files), and the *empty
+    files*, which held nothing to keep: for tagged n-grams that is most of
+    them and does not mean anything is wrong.
 
     Checks: what the run verifies of its own counts (see
     ngramprep.ngram_acquire.verify), shown from the start so that it is
@@ -529,30 +530,29 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     groups: List[Tuple[str, List[Tuple[str, str, str]]]] = []
 
     def kept_note(kept: int, scanned: int) -> str:
-        return (_pct(kept, scanned) + " of the n-grams in finished files") if scanned else ""
+        return _pct(kept, scanned) if scanned else ""           # of the n-grams in finished files
 
     lines = int(counters.get("lines", 0))
     flying = int(in_flight.get("lines", 0))
     kept = int(counters.get("inserted", doc.get("entries_written", 0)))
     session = [
-        ("N-grams scanned", f"{lines + flying:,}",
-         f"raw data lines; {flying:,} of them in files still being read" if flying else "raw data lines"),
+        ("N-grams scanned", f"{lines + flying:,}", ""),           # files in flight included
         ("Kept", f"{kept:,}", kept_note(kept, lines)),
     ]
     if "empty_files" in counters or doc.get("checks") is not None:
-        session.append(("Files with nothing kept", f"{int(counters.get('empty_files', 0)):,}",
-                        f"of {int(doc.get('files_done', 0)):,} finished"))
+        session.append(("Empty files", f"{int(counters.get('empty_files', 0)):,}",
+                        f"of {int(doc.get('files_done', 0)):,}"))
     session.append(("Parsed", fmt_bytes(float(doc.get("uncompressed_bytes") or 0)), "uncompressed"))
     groups.append(("Records \u2013 this session", session))
 
     tiles = []
     if "lines" in corpus:
-        tiles.append(("N-grams scanned", f"{int(corpus.get('lines', 0)):,}", "raw data lines, finished files"))
+        tiles.append(("N-grams scanned", f"{int(corpus.get('lines', 0)):,}", ""))
     tiles.append(("Kept", f"{int(corpus.get('entries', 0)):,}",
                   kept_note(int(corpus.get("entries", 0)), int(corpus.get("lines", 0)))))
     if "empty_files" in corpus or doc.get("checks") is not None:
-        tiles.append(("Files with nothing kept", f"{int(corpus.get('empty_files', 0)):,}",
-                      f"of {int(corpus.get('files', 0)):,} finished"))
+        tiles.append(("Empty files", f"{int(corpus.get('empty_files', 0)):,}",
+                      f"of {int(corpus.get('files', 0)):,}"))
     tiles += [("Parsed", fmt_bytes(float(corpus.get("bytes", 0))), "uncompressed"), db_tile]
     unsized = int(corpus.get("unsized", 0))
     if unsized:
@@ -568,38 +568,35 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     status = verification.get("status")
     state, phase = info.get("state"), doc.get("phase")
     if status == "verified":
-        counts = ("verified", "the database holds exactly what the files gave")
+        counts = ("verified", "")
     elif status == "mismatch":
-        note = "the database differs from what the files gave"
+        note = ""
         if not ledger.get("unledgered") and "match_total" in found:
             note = (f"occurrences {int(found.get('match_total', 0)) - int(ledger.get('match_total', 0)):+,}; "
                     f"volume counts {int(found.get('volume_total', 0)) - int(ledger.get('volume_total', 0)):+,}")
         counts = ("DO NOT MATCH", note)
     elif status == "unverifiable":
-        counts = ("not verifiable", f"{int(ledger.get('unledgered', 0)):,} files predate the count ledger")
+        counts = ("not verifiable", "")                # the "Files without totals" tile says why
     elif status == "skipped" or checks.get("verify_counts") is False:
-        counts = ("not checked", "verify_counts is off")
+        counts = ("not checked", "verify_counts off")
     elif state == "running" and phase == "verifying":
-        counts = ("checking", "reading the whole database once")
+        counts = ("checking", "")
     elif state == "running":
-        counts = ("pending", "checked after compaction")
+        counts = ("pending", "")
     else:
-        counts = ("not reached", "the run ended before the check")
+        counts = ("not reached", "")
     occurrences = int(found.get("match_total", ledger.get("match_total", corpus.get("match_total", 0))))
     unreadable = int(ledger.get("problem_lines", corpus.get("problem_lines", counters.get("problem_lines", 0))))
     reordered = int(ledger.get("reordered", corpus.get("reordered", counters.get("reordered", 0))))
     tiles = [
         ("Counts", counts[0], counts[1]),
-        ("Occurrences", f"{occurrences:,}",
-         "in the database" if "match_total" in found else "in the files read so far (the ledger)"),
-        ("Lines not read in full", f"{unreadable:,}",
-         "their n-grams are undercounted; see the log" if unreadable else "every line's counts were read"),
-        ("Values put in year order", f"{reordered:,}",
-         "arrived out of order; corrected" if reordered else "all arrived in order"),
+        ("Occurrences", f"{occurrences:,}", ""),          # the ledger's while files are read; the database's once checked
+        ("Unread lines", f"{unreadable:,}", "see log" if unreadable else ""),
+        ("Reordered values", f"{reordered:,}", "corrected" if reordered else ""),
     ]
     unledgered = int(ledger.get("unledgered", corpus.get("unledgered", 0)))
     if unledgered:
-        tiles.append(("Files without totals", f"{unledgered:,}", "acquired before the count ledger"))
+        tiles.append(("Files without totals", f"{unledgered:,}", "pre-ledger"))
     groups.append(("Checks", tiles))
     return groups
 

@@ -255,7 +255,7 @@ def test_meters_keep_the_three_record_counts_apart():
     # the database is cumulative over acquisition jobs, so it sits with the corpus totals; no file count there
     corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
     assert corpus == {"N-grams scanned": "5,000", "Kept": "2,000", "Parsed": "20.0 GB", "In database": "\u2014"}
-    assert dict((l, n) for l, _v, n in groups["Records \u2013 entire corpus"])["Kept"] == "40.0% of the n-grams in finished files"
+    assert dict((l, n) for l, _v, n in groups["Records \u2013 entire corpus"])["Kept"] == "40.0%"
     assert "Checks" not in groups                       # a run from before the checks existed
     # a filter document written before the unit label was recorded still counts work units
     old = {"stage": "filter", "state": "running", "files_total": 8, "files_done": 1, "entries_written": 1,
@@ -368,7 +368,7 @@ def test_acquire_progress_is_weighed_by_size_and_time_left_covers_the_files_only
     assert tiles["Files"] == ("3/10", "60% by size")
     assert tiles["Scan rate"][0] == "6.0k/s"
     assert tiles["Elapsed"][1] == "step 1 of 3"
-    assert tiles["Remaining"] == ("6m40s", "for the files; then compaction and the count check")
+    assert tiles["Remaining"] == ("6m40s", "files only") and tiles["Scan rate"][1] == "n-grams"
     # without sizes (an index page gives none) it falls back to counting files
     doc, now = _acq(bytes_total=None, in_flight={"lines": 0, "bytes": 0})
     info = summarize(doc, now)
@@ -404,7 +404,7 @@ def test_acquire_steps_after_the_files_are_named_and_stop_the_clock_on_the_rate(
     assert info["eta_s"] is None and info["then_text"] == "then the count check"
     assert info["rate"] == 6_000_000 / 300                    # over the five minutes of reading, not the ten elapsed
     tiles = {label: (value, note) for label, value, note in dict(meters(doc, info))["Progress"]}
-    assert tiles["Remaining"] == ("\u2014", "no estimate for this step; then the count check")
+    assert tiles["Remaining"] == ("\u2014", "")
     assert tiles["Elapsed"][1] == "step 2 of 3"
     doc["phase"] = "verifying"
     assert summarize(doc, now)["then_text"] == "" and summarize(doc, now)["step_text"] == "step 3 of 3"
@@ -420,12 +420,12 @@ def test_acquire_records_say_scanned_kept_and_files_with_nothing():
     doc, now = _acq()
     groups = dict(meters(doc, summarize(doc, now)))
     assert groups["Records \u2013 this session"] == [
-        ("N-grams scanned", "3,600,000", "raw data lines; 600,000 of them in files still being read"),
-        ("Kept", "90,000", "3.0% of the n-grams in finished files"),
-        ("Files with nothing kept", "1", "of 3 finished"),
+        ("N-grams scanned", "3,600,000", ""),
+        ("Kept", "90,000", "3.0%"),
+        ("Empty files", "1", "of 3"),
         ("Parsed", "3.0 GB", "uncompressed")]
     corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
-    assert corpus == {"N-grams scanned": "3,000,000", "Kept": "90,000", "Files with nothing kept": "1",
+    assert corpus == {"N-grams scanned": "3,000,000", "Kept": "90,000", "Empty files": "1",
                       "Parsed": "3.0 GB", "In database": "\u2014"}
 
 
@@ -437,21 +437,22 @@ def test_acquire_checks_are_shown_from_the_start():
 
     doc, now = _acq()
     tiles = checks(doc, now)
-    assert tiles["Counts"] == ("pending", "checked after compaction")
-    assert tiles["Occurrences"] == ("777", "in the files read so far (the ledger)")
-    assert tiles["Lines not read in full"] == ("0", "every line's counts were read")
-    assert tiles["Values put in year order"] == ("0", "all arrived in order")
+    # a note is a figure or a caveat, never an explanation: a plain state has none
+    assert tiles == {"Counts": ("pending", ""), "Occurrences": ("777", ""), "Unread lines": ("0", ""),
+                     "Reordered values": ("0", "")}
     doc["phase"] = "verifying"
     assert checks(doc, now)["Counts"][0] == "checking"
     doc["checks"]["verify_counts"] = False
-    assert checks(doc, now)["Counts"] == ("not checked", "verify_counts is off")
+    assert checks(doc, now)["Counts"] == ("not checked", "verify_counts off")
     doc["checks"]["verify_counts"] = True
 
     doc.update(state="done", verification={"status": "verified", "ledger": {"match_total": 900, "reordered": 2},
                                            "database": {"match_total": 900, "volume_total": 80}})
     tiles = checks(doc, now)
-    assert tiles["Counts"][0] == "verified" and tiles["Occurrences"] == ("900", "in the database")
-    assert tiles["Values put in year order"] == ("2", "arrived out of order; corrected")
+    assert tiles["Counts"] == ("verified", "") and tiles["Occurrences"] == ("900", "")
+    assert tiles["Reordered values"] == ("2", "corrected")
+    doc["verification"]["ledger"]["problem_lines"] = 3
+    assert checks(doc, now)["Unread lines"] == ("3", "see log")
 
     doc.update(state="failed", verification={"status": "mismatch",
                                              "ledger": {"match_total": 900, "volume_total": 80},
@@ -459,8 +460,7 @@ def test_acquire_checks_are_shown_from_the_start():
     assert checks(doc, now)["Counts"] == ("DO NOT MATCH", "occurrences +450; volume counts +15")
     doc["verification"] = {"status": "unverifiable", "ledger": {"unledgered": 4}, "database": {"match_total": 5}}
     tiles = checks(doc, now)
-    assert tiles["Counts"] == ("not verifiable", "4 files predate the count ledger")
-    assert tiles["Files without totals"][0] == "4"
+    assert tiles["Counts"] == ("not verifiable", "") and tiles["Files without totals"] == ("4", "pre-ledger")
     del doc["verification"]
     assert checks(doc, now)["Counts"][0] == "not reached"       # e.g. a run that ended over failed files
 

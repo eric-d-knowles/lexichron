@@ -671,8 +671,8 @@ Tabs:
     and archiving if asked for) and how far it is **by size**: the listing
     gives every file's compressed size, and files differ by orders of
     magnitude in what they hold, so a count of files says little.
-    *Remaining* is an estimate for the files only, and says which steps
-    follow; those are single long operations with no estimate.
+    *Remaining* is an estimate for the files only; the steps that follow
+    are single long operations with no estimate.
   - *Scan rate* is the raw n-grams read per second while files were being
     read, files still in flight included (workers report every few
     seconds). It does not depend on how much of what is read is kept.
@@ -681,13 +681,17 @@ Tabs:
     finished file is adopted in one short operation.
   - *Records* are given for this session and, since the database
     accumulates over acquisition jobs, for the entire corpus: the n-grams
-    *scanned*, those *kept* (with the share), and the *files with nothing
-    kept*. For tagged n-grams most files hold nothing to keep, and a small
-    share kept is what a correct run looks like.
+    *scanned* (one per data line; the session's figure includes files
+    still being read), those *kept*, with their share of the n-grams in
+    finished files, and the *empty files*, which held nothing to keep. For
+    tagged n-grams most files are empty, and a small share kept is what a
+    correct run looks like.
   - *Checks* shows the count check from the start (pending, checking,
-    verified, or the difference found), the occurrences in the files read
-    so far, the lines whose counts could not be read in full, and the
-    values that had to be put in year order. A line that could not be read,
+    verified, or the difference found), the *occurrences* (the total in the
+    files read so far, and the database's once it has been checked), the
+    *unread lines*, whose counts could not be read in full, and the
+    *reordered values*, which arrived with years out of order and were put
+    in order. A line that could not be read,
     or a file that failed, is also written under the headline the moment it
     happens, with what it will lead to: the run finishes what it can and
     then ends with an error.
