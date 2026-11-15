@@ -421,6 +421,47 @@ container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml`
 (`singularity exec` on a Singularity cluster, or a project's
 `.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
 
+### The acquire stage
+
+`lexichron acquire` downloads one release of Google Books n-grams and writes
+`<n>grams.db`, keyed by n-gram with a packed list of per-year counts under
+each key. A run is one parent process and a pool of worker processes, and
+only the parent ever writes to the database:
+
+1. **The parent lists the files.** It reads the release's index page for the
+   corpus and n-gram size, keeps the `file_range` if one is set, and drops
+   every file already marked as processed in the database (`overwrite_db`
+   deletes the database first instead; the command line and the UI ask
+   before it does). `random_seed` shuffles the order so a partial run
+   samples the alphabet evenly.
+2. **The parent hands files to the workers.** Each worker gets one URL at a
+   time, with at most two files per worker queued ahead.
+3. **A worker downloads and parses its file in one stream.** It decompresses
+   the gzip as it arrives, parses each line, applies the `ngram_type` filter
+   and any `combined_multigrams`, and packs the year, count and volume
+   triplets into binary. Entries are spooled to chunk files of
+   `chunk_entries` entries each under `spool_dir`, with repeated keys within
+   a chunk summed, so a worker holds about one chunk in memory whatever the
+   file's size. A connection dropped mid-file discards its chunks and
+   starts the file again, up to three times.
+4. **The parent ingests each finished file.** It replays the file's chunks
+   into the database one at a time as merge batches (keys repeated across
+   chunks are summed by the merge operator), deletes the chunks, writes the
+   file's processed marker, and flushes. A file and its marker therefore
+   reach disk together: an interrupted run loses only the files in flight,
+   and the next run (`overwrite_db: false`) picks up the rest. Ingestion
+   runs while the other workers are still parsing.
+5. **The parent compacts the database** (`compact_after_ingest`). Each
+   file's flush leaves its own SST file and auto-compaction is off in the
+   write profile, so this is what folds them together and applies the
+   pending merges. Skip it only for a quick partial run.
+6. **The parent archives the database** when `archive_path_stub` is set,
+   as a `.tar.zst` under `<stub>/<release>/<corpus>/<n>gram_files/`.
+
+A file that fails all its attempts does not stop the others. The run reports
+it at the end and exits with an error, skipping compaction and archiving;
+re-running resumes with only the missing files.
+
 ### The filter stage
 
 `lexichron filter` turns the acquired database (`<n>grams.db`, every raw
