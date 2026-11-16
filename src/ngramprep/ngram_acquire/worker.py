@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gzip
+import http.client
 import logging
 import multiprocessing as mp
 import os
@@ -12,6 +13,7 @@ from pathlib import PurePosixPath
 from typing import Callable, Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import requests
+import urllib3.exceptions
 
 from ngramprep.ngram_acquire.io.download import stream_download_with_retries
 from ngramprep.ngram_acquire.io.parse import parse_line_checked, prepare_multigrams
@@ -61,6 +63,17 @@ __all__ = ["process_and_ingest_file", "merge_packed_records", "DEFAULT_CHUNK_ENT
 # batch. Both carry the same records; "chunk" is the older path, kept as the
 # reference the SST path is tested against.
 SPOOL_FORMATS = ("sst", "chunk")
+
+# What a download that fails part-way raises. The body is read from the raw
+# urllib3 stream (through gzip), so a connection that breaks or stalls while
+# the file is being read raises urllib3's own errors, which are neither
+# requests' nor OSError: "Connection broken: IncompleteRead(...)" is a
+# urllib3 ProtocolError. Opening the download goes through requests and
+# raises its errors. All of them mean the same thing here: discard what was
+# read and start the file again.
+_TIMEOUTS = (requests.Timeout, urllib3.exceptions.TimeoutError)
+_BROKEN_DOWNLOADS = (requests.RequestException, urllib3.exceptions.HTTPError, http.client.HTTPException,
+                     EOFError, OSError, gzip.BadGzipFile)
 
 # A worker says how far it is into its file this often, by rewriting the
 # marker file the parent already watches (see ``_report``).
@@ -343,11 +356,11 @@ def process_and_ingest_file(
                         f"{writer.reordered:,}", "" if writer.reordered == 1 else "s")
                 return msg, chunk_paths, uncompressed_bytes, entries, lines_processed, stats
 
-            except requests.Timeout as exc:
+            except _TIMEOUTS as exc:
                 writer.discard()
                 last_error = f"TIMEOUT: {filename}"
                 detail = str(exc)
-            except (requests.RequestException, EOFError, OSError, gzip.BadGzipFile) as exc:
+            except _BROKEN_DOWNLOADS as exc:
                 # Includes connections dropped mid-stream, which surface from
                 # inside the gzip loop rather than from the initial request,
                 # and a body shorter than the server announced.

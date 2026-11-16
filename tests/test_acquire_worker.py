@@ -388,3 +388,58 @@ def test_workers_and_the_parent_can_share_one_log_file(tmp_path):
     finally:
         root.handlers, _ = saved, root.setLevel(level)
     assert text.count("worker entry") == 50 and "before the workers" in text and "after the workers" in text
+
+
+@pytest.mark.parametrize("error, kind", [
+    ("protocol", "the download broke off"),          # "Connection broken: IncompleteRead(...)", as the network raises it
+    ("incomplete", "the download broke off"),
+    ("read_timeout", "the download timed out"),
+])
+def test_worker_retries_what_a_broken_stream_really_raises(monkeypatch, tmp_path, caplog, error, kind):
+    """The body is read from the raw urllib3 stream, so a connection that
+    breaks or stalls mid-file raises urllib3's errors, not requests'. They
+    used to slip past the retry and fail the file on its first attempt."""
+    import http.client
+    import logging
+    import urllib3.exceptions as u3
+    payload = _gz([f"w{i}_NOUN\t1990,{i},1" for i in range(2000)])
+    raised = {
+        "protocol": u3.ProtocolError("Connection broken: IncompleteRead(64 bytes read, 999 more expected)",
+                                     u3.IncompleteRead(64, 999)),
+        "incomplete": http.client.IncompleteRead(b"", 999),
+        "read_timeout": u3.ReadTimeoutError(None, "http://example/f.gz", "Read timed out."),
+    }[error]
+    calls = {"n": 0}
+
+    def fake_download(url, session=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            resp = _DroppingResponse(payload, drop_after=64)
+            resp.raw.exc = raised
+            return resp
+        return _FakeResponse(payload)
+
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
+    with caplog.at_level(logging.INFO):
+        msg, chunks, _, entries, *_ = worker_mod.process_and_ingest_file(
+            "http://example/f.gz", 1, spool_dir=str(tmp_path), chunk_entries=500, spool_format="chunk")
+    assert msg.startswith("SUCCESS") and calls["n"] == 2
+    assert entries == 2000 and len(_collect(chunks)) == 2000        # the first attempt left nothing behind
+    steps = [r.getMessage().split("): ", 1)[1] for r in caplog.records if r.name.startswith("acquire.worker.")]
+    assert any(m.startswith(kind) and m.endswith("starting the file again") for m in steps)
+
+
+def test_worker_gives_up_on_a_stream_that_keeps_breaking(monkeypatch, tmp_path):
+    import urllib3.exceptions as u3
+    payload = _gz(["a_NOUN\t1990,1,1"])
+
+    def fake_download(url, session=None):
+        resp = _DroppingResponse(payload, drop_after=0)
+        resp.raw.exc = u3.ProtocolError("Connection broken", u3.IncompleteRead(0, 9))
+        return resp
+
+    monkeypatch.setattr(worker_mod, "stream_download_with_retries", fake_download)
+    msg, chunks, *_ = worker_mod.process_and_ingest_file("http://example/f.gz", 1, max_attempts=3,
+                                                         spool_dir=str(tmp_path), spool_format="chunk")
+    assert msg == "NETWORK_ERROR: f.gz" and chunks == []           # after three attempts, not one
+    assert not list(tmp_path.glob("*.chunk")) and not list(tmp_path.glob("*.part"))
