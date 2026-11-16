@@ -445,7 +445,11 @@ def test_inspect_tab_shows_provenance_and_year_series(tmp_path, monkeypatch):
            "counters": {"scanned": 8, "kept": 5, "produced": 5, "inserted": 5, "tokens": 8},
            "database": {"records": 1, "bytes": 100, "compacted": True},
            "inputs": {"source": str(corpus / "1grams.db"), "vocabulary": None}}
-    provenance.write_provenance(db_dir, provenance.build_record("filter", {"ngram_size": 1, "mode": "restart"}, doc))
+    # a list setting, long enough to be cut short in the summary: square brackets, one of them unclosed.
+    # Shown as markup, that was an error that took the screen down.
+    settings = {"ngram_size": 1, "mode": "restart",
+                "always_include": ["artificial intelligence", "human being", "a . i . => A.I.", "human beings"]}
+    provenance.write_provenance(db_dir, provenance.build_record("filter", settings, doc))
 
     async def scenario():
         app = LexichronApp(str(proj), "filter")
@@ -459,6 +463,7 @@ def test_inspect_tab_shows_provenance_and_year_series(tmp_path, monkeypatch):
             assert box.display
             text = str(app.query_one("#inspect-provenance", Static).content)
             assert "Made by lexichron" in text and "stage filter" in text and "8 scanned, 5 kept" in text
+            assert 'always_include=["artificial intelligence"' in text       # as it is, brackets and all
             table = app.query_one("#inspect-table", DataTable)
             assert table.row_count == 1
             # selecting the row shows its year series
@@ -1411,3 +1416,13 @@ def test_always_keep_editor_splits_the_two_lists_and_shows_handed_over_tokens(tm
         _assert_clean(app)
 
     asyncio.run(scenario())
+
+
+def test_meter_tiles_show_data_with_brackets_as_text():
+    """Tiles style their label, value and note as spans of a Text; what goes
+    into them is data, and a bracket in it is a bracket."""
+    from lexichron.ui.app import Meters
+    text = Meters._text("Files [eng]", "3/10", "[2011] nuclear [/")
+    assert text.plain == "Files [eng]\n3/10  [2011] nuclear [/"
+    assert [str(span.style) for span in text.spans] == ["dim", "bold", "dim"]
+    assert Meters._text("Kept", "5", "").plain == "Kept\n5"

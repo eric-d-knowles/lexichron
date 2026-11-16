@@ -69,6 +69,8 @@ def describe(path: str) -> Dict[str, Any]:
             level0 = _int_property(db, "rocksdb.num-files-at-level0")
             bookkeeping = sum(1 for _ in _bookkeeping_keys(db))
             layout = sniff_layout(db)
+        if not records and size:
+            records = _key_count(p)
     except Exception as exc:
         return {"kind": "rocksdb", "error": f"cannot open as a RocksDB database: {exc}"}
     from lexichron.provenance import read_provenance
@@ -207,6 +209,23 @@ def year_series(value: bytes) -> List[Tuple[int, int, int]]:
 def _open(p: Path):
     from ngramprep.common_db.api import open_db
     return open_db(str(p), mode="r", profile="scan:packed24")
+
+
+def _key_count(p: Path) -> int:
+    """RocksDB's key count for a database, read with the ``read`` profile.
+
+    The ``scan`` profile everything else here uses opens a database without
+    loading any file's statistics, which is what makes it cheap on any node,
+    and RocksDB then reports an estimate of 0 keys whatever the database
+    holds. The ``read`` profile loads them: under a second and a few tens of
+    megabytes for a database of hundreds of gigabytes, and exact once the
+    database is compacted. Opened just for this figure, and closed."""
+    from ngramprep.common_db.api import open_db
+    try:
+        with open_db(str(p), mode="r", profile="read:packed24") as db:
+            return _int_property(db, "rocksdb.estimate-num-keys")
+    except Exception:
+        return 0
 
 
 def _scan(db, start: bytes):

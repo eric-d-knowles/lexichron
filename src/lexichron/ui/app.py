@@ -38,8 +38,23 @@ from textual.containers import Grid, Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (
     Button, Collapsible, DataTable, Footer, Header, Input, Label, ProgressBar,
-    RichLog, Select, Static, Switch, TabbedContent, TabPane,
+    RichLog, Select, Switch, TabbedContent, TabPane,
 )
+from textual.widgets import Static as MarkupStatic
+
+
+class Static(MarkupStatic):
+    """A Static that shows its text as it is. Nearly everything this app
+    puts in one is data: settings, paths, n-grams, a run's inputs and
+    messages. Read as markup, a square bracket in any of them is a tag, and
+    an unclosed one (a list setting cut short, "[2011] nuclear") is an error
+    that takes the screen down. Text that needs styling is built as a
+    ``rich.text.Text`` with styled spans (see ``Meters``), never as markup
+    with data pasted into it."""
+
+    def __init__(self, content="", *, markup: bool = False, **kwargs) -> None:
+        super().__init__(content, markup=markup, **kwargs)
+
 
 from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
@@ -278,8 +293,12 @@ class Meters(Vertical):
         self._tiles: List[List[Static]] = []
 
     @staticmethod
-    def _text(label: str, value: str, note: str) -> str:
-        return f"[dim]{label}[/]\n[b]{value}[/]" + (f"  [dim]{note}[/]" if note else "")
+    def _text(label: str, value: str, note: str) -> Text:
+        # Styled spans, not markup: the three are data, and stay text whatever they contain.
+        parts = [(str(label), "dim"), "\n", (str(value), "bold")]
+        if note:
+            parts += ["  ", (str(note), "dim")]
+        return Text.assemble(*parts)
 
     def show(self, groups) -> None:
         shape = tuple(tuple(label for label, _, _ in tiles) for _, tiles in groups)

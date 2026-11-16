@@ -58,6 +58,17 @@ def test_ngram_database_is_sniffed_and_decoded(rocks, tmp_path):
     assert inspection.rows(str(tmp_path / "1grams_processed.db"), "head", n=1, layout="raw")[1][0][0].startswith("__processed__/")
 
 
+def test_record_count_survives_the_scan_profile(rocks, tmp_path, monkeypatch):
+    """Opened with the scan profile, RocksDB loads no file statistics and
+    estimates 0 keys for any database; Inspect used to report "0 records"
+    for hundreds of gigabytes. The count is read with the read profile."""
+    _ngram_db(tmp_path / "1grams_processed.db")
+    monkeypatch.setattr(rocks.DB, "scan_profile_hides_key_count", True)
+    info = inspection.describe(str(tmp_path / "1grams_processed.db"))
+    assert info["records"] == 3 and info["bookkeeping"] == 1
+    assert inspection.format_summary(info).startswith("3 records")
+
+
 def test_pivoted_database_keys_are_typed_with_the_year(rocks, tmp_path):
     db = str(tmp_path / "5grams_pivoted.db")
     _pivoted_db(db)

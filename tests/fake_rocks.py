@@ -108,7 +108,15 @@ class DB:
             if move:
                 os.remove(p)
 
+    # rocks-shim's scan profile loads no file statistics, and RocksDB then
+    # estimates 0 keys; a test sets this to make the fake do the same.
+    scan_profile_hides_key_count = False
+    last_profile = ""
+
     def get_property(self, name):
+        if (name == "rocksdb.estimate-num-keys" and self.scan_profile_hides_key_count
+                and str(self.last_profile).startswith("scan")):
+            return "0"
         if name == "rocksdb.total-sst-files-size":
             return str(sum(len(k) + len(v) for k, v in self.data.items()))
         if name == "rocksdb.num-files-at-level0":
@@ -198,6 +206,7 @@ def open(path, mode="rw", profile="", create_if_missing=False, **_):
             raise FileNotFoundError(path)
         _REGISTRY[path] = DB(path)
         os.makedirs(path, exist_ok=True)     # so Path(...).exists() behaves
+    _REGISTRY[path].last_profile = profile
     return _REGISTRY[path]
 
 
