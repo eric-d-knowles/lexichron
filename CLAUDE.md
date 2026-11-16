@@ -106,7 +106,12 @@ in the image; tests create their own.
   (the operator assumes it and checks nothing) and count lines they cannot
   read in full. Do not weaken any of this for speed; `spool_format="chunk"`
   is the old replay path, kept as the reference the SST path is tested
-  against.
+  against. The filter stage (`rangemap`) follows the same rules: every unit
+  is an SST file ingested with its marker, compaction is mandatory, a
+  source that was never compacted is refused, and each unit's marker holds
+  the totals of what it read and of what it emitted. The destination must
+  hold the emitted totals, and the read totals must add up to the source's
+  verified total (a key range skipped or repeated by the partition).
 - **Lemmas use the tag only where spaCy's tables vouch for it.** The lookup
   table has one lemma per spelling; `ngram_filter/lemmatizer.py` lets a
   token's Google tag override it only when an irregular form is listed for

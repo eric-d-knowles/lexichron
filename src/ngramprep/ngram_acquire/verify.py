@@ -38,16 +38,20 @@ _BATCH = 4096
 READ_PROFILE = "scan:packed24"
 
 
-def ledger_totals(db) -> Dict[str, int]:
-    """Add up the markers of every shard in ``db``.
+def ledger_totals(db, marker_prefix: bytes = PROCESSED_PREFIX) -> Dict[str, int]:
+    """Add up the markers of every shard in ``db`` (or, with another
+    ``marker_prefix``, of every work unit of a range-map run).
 
     ``unledgered`` counts markers that carry no totals: shards acquired by a
     version that did not record them. With any of those the database cannot
     be checked against its ledger (the scan still checks every value's form).
+    A range-map unit's marker also holds what the unit *read* from its
+    source (``source_match``, ``source_volume``, ``source_disordered``).
     """
     out = {"shards": 0, "unledgered": 0, "entries": 0, "lines": 0, "match_total": 0, "volume_total": 0,
-           "problem_lines": 0, "reordered": 0}
-    for _key, raw in prefix_scan(db, PROCESSED_PREFIX):
+           "problem_lines": 0, "reordered": 0, "scanned": 0, "kept": 0,
+           "source_match": 0, "source_volume": 0, "source_disordered": 0}
+    for _key, raw in prefix_scan(db, marker_prefix):
         out["shards"] += 1
         try:
             doc = json.loads(bytes(raw).decode("utf-8"))
@@ -56,7 +60,8 @@ def ledger_totals(db) -> Dict[str, int]:
         if not isinstance(doc, dict) or "match_total" not in doc or "volume_total" not in doc:
             out["unledgered"] += 1
             continue
-        for name in ("entries", "lines", "match_total", "volume_total", "problem_lines", "reordered"):
+        for name in ("entries", "lines", "match_total", "volume_total", "problem_lines", "reordered", "scanned",
+                     "kept", "source_match", "source_volume", "source_disordered"):
             out[name] += int(doc.get(name, 0))
     return out
 
@@ -142,7 +147,8 @@ def scan_totals(db_path: str, workers: int = 1, *, profile: str = READ_PROFILE) 
     return total
 
 
-def verify_database(db_path: str, workers: int = 1, *, profile: str = READ_PROFILE) -> Dict[str, Any]:
+def verify_database(db_path: str, workers: int = 1, *, profile: str = READ_PROFILE,
+                    marker_prefix: bytes = PROCESSED_PREFIX) -> Dict[str, Any]:
     """Compare the database with its ledger. Returns a record with ``status``:
 
     * ``"verified"``: the counts in the database equal the sum of what every
@@ -154,7 +160,7 @@ def verify_database(db_path: str, workers: int = 1, *, profile: str = READ_PROFI
       formed, or the status would be ``"mismatch"``).
     """
     with open_db(db_path, mode="r", profile=profile) as db:
-        ledger = ledger_totals(db)
+        ledger = ledger_totals(db, marker_prefix)
     found = scan_totals(db_path, workers, profile=profile)
     if found["disordered"] or found["malformed"]:
         status = "mismatch"

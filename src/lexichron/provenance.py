@@ -72,6 +72,22 @@ def build_record(stage: str, settings: Dict[str, Any], doc: Dict[str, Any]) -> D
     else:
         figures = {k: v for k, v in counters.items()}
         figures.setdefault("work_units", int(doc.get("files_total", 0)))
+        # A filter run's count check (ngramprep.ngram_filter.pipeline.orchestrator):
+        # the destination against what the units emitted, and what they read
+        # against what the source holds.
+        verification = doc.get("verification") or {}
+        if stage == "filter" and verification.get("status"):
+            ledger, found = verification.get("ledger") or {}, verification.get("database") or {}
+            source = verification.get("source") or {}
+            figures["counts"] = {"status": verification["status"],
+                                 "occurrences": found.get("match_total", ledger.get("match_total")),
+                                 "volume_counts": found.get("volume_total", ledger.get("volume_total")),
+                                 "ledger_occurrences": ledger.get("match_total"),
+                                 "ledger_volume_counts": ledger.get("volume_total"),
+                                 "values_reordered": int(ledger.get("reordered", 0)),
+                                 "source": source.get("status"),
+                                 "source_occurrences_read": (source.get("read") or {}).get("match_total"),
+                                 "source_occurrences": (source.get("expected") or {}).get("match_total")}
     database = dict(doc.get("database") or {})
     database["path"] = doc.get("db_path")
     inputs = _describe_inputs(stage, settings, doc)
@@ -225,6 +241,18 @@ def format_provenance(p: Dict[str, Any]) -> List[str]:
                  if fig.get(key)]
         if fig.get("tokens"):
             lines.append(f"Dropped: {fig['tokens']:,} tokens seen; " + ", ".join(f"{n:,} {label}" for label, n in rules))
+        counts = fig.get("counts") if isinstance(fig.get("counts"), dict) else {}
+        if counts.get("status"):
+            text = {"verified": "verified against the work units' own totals",
+                    "mismatch": "DO NOT MATCH the work units' totals",
+                    "unverifiable": "not verifiable (some work units predate the count ledger)",
+                    "skipped": "not checked (verify_counts was off)"}.get(counts["status"], counts["status"])
+            line = f"Counts: {text}"
+            if counts.get("occurrences") is not None:
+                line += f"; {int(counts['occurrences']):,} occurrences"
+            line += {"verified": "; the source was read in full", "mismatch": "; THE SOURCE WAS NOT READ EXACTLY ONCE",
+                     "unknown": "; the source's own total is not known"}.get(counts.get("source"), "")
+            lines.append(line)
     db = p.get("database") or {}
     if db.get("records") is not None:
         lines.append(f"Database: {db['records']:,} records, {_fmt_bytes(db.get('bytes', 0))}"

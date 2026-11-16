@@ -224,3 +224,19 @@ def test_a_run_records_how_it_made_its_lemmas(rocks, tmp_path, monkeypatch):
                             lemmatize_by_tag=setting, progress_path=str(progress), output_vocabulary=False)
         assert json.loads(progress.read_text())["inputs"]["lemmas"] == expected, (corpus, setting)
     assert made == [("en", True), ("en", False), ("de", False)]      # tags are used in English only
+
+
+def test_source_totals_come_from_a_verified_acquisition(tmp_path):
+    """The filter checks that it read the whole source against the total the
+    acquisition verified; a source without that record offers nothing to check against."""
+    import json
+    db = tmp_path / "5grams.db"; db.mkdir()
+    assert stage.verified_source_totals(db) is None
+    record = {"format": 1, "stage": "acquire", "figures": {"counts": {"status": "verified", "occurrences": 1234,
+                                                                      "volume_counts": 56}}}
+    (db / "lexichron.json").write_text(json.dumps(record))
+    assert stage.verified_source_totals(db) == {"match_total": 1234, "volume_total": 56}
+    for status in ("unverifiable", "skipped", "mismatch"):
+        record["figures"]["counts"]["status"] = status
+        (db / "lexichron.json").write_text(json.dumps(record))
+        assert stage.verified_source_totals(db) is None

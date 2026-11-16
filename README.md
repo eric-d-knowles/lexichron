@@ -584,17 +584,55 @@ it made its lemmas, and the stage refuses a vocabulary made the other way, so
 after changing the setting (or on a corpus filtered before 0.12) run the
 unigram filter again first. `lemmatize_by_tag: false` is the lookup alone.
 
-The work is split into key ranges balanced by data volume (from the source
-database's own file metadata, so there is no pre-scan), worker processes
-scan their ranges and spool results to node-local disk, and one process
-merges everything into the destination. A worker holds the source open with
-rocks-shim's `scan` profile (only the files its range touches, nothing
-pinned, a small cache), so it needs about 200 MB however large the
-database is, and all the CPUs of an allocation can be used: 40 workers fit
-in the default 28G. A run that is interrupted resumes from the ranges
-it had finished (`mode: resume`); `mode: restart` starts over, after
-deleting the destination database, and both the UI and the command line ask
-before it does (see [Command line](#command-line)).
+The stage is built like the acquire stage, with a database where that has
+downloads. The work is split into key ranges (*work units*) balanced by data
+volume, from the source database's own file metadata, so there is no
+pre-scan. Worker processes each scan a unit, and hand it over as one sorted
+SST file; the parent adopts that file together with the unit's marker in a
+single ingest call, so a unit's records and the fact that it is done are in
+the destination together or not at all, wherever the job is killed. When
+every unit is in, the parent compacts the destination, which is what folds
+the units' files into one sorted database and sums the counts of records
+that arrived from more than one unit. Compaction is not optional. A worker
+holds the source open with rocks-shim's `scan` profile (only the files its
+range touches, nothing pinned, a small cache), so it needs about 200 MB
+however large the database is, and all the CPUs of an allocation can be
+used: 40 workers fit in the default 28G. A run that is interrupted resumes
+from the units it had finished (`mode: resume`); `mode: restart` starts over,
+after deleting the destination database, and both the UI and the command
+line ask before it does (see [Command line](#command-line)).
+
+The source must be a finished database: one whose acquisition stopped before
+compacting (a file failed, the job ran out of time) is refused, with a
+message saying to run that stage again.
+
+**The run checks its own counts** (`verify_counts`, on by default), in the
+same way an acquisition does. Filtering only ever moves counts and adds them
+together, so two totals must come out exactly, and each unit records both in
+its marker:
+
+- **What was read.** Every unit totals the occurrences and volume counts of
+  every source record in its range, kept or not. Each record lies in exactly
+  one unit, so the units together must have read exactly what the source
+  holds. Where the acquisition that made the source verified its counts,
+  that figure is on record and the two are compared: a key range the
+  partition skipped, or gave to two units, shows as a difference. A source
+  acquired before counts were verified has no figure to compare with, and
+  the run says so.
+- **What was written.** Every unit totals what it emits, before records with
+  the same key are summed. After compaction the destination is read once, in
+  parallel, and must hold exactly the sum of what the units emitted, with
+  every value's years in ascending order (workers check that as they spool,
+  and put right any value that is not). A unit taken in twice, or a record
+  lost on the way, shows as a difference.
+
+A difference fails the run and no vocabulary is written from it. The outcome
+is recorded in the database's provenance and shown on the Progress tab.
+
+One thing the counts do not promise: when spellings merge under one lemma,
+their volume counts are added. A book that contains both *building* and
+*buildings* is counted for each, so a filtered record's volume count is an
+upper bound on the books it appears in. Occurrence counts are exact.
 
 ## Terminal user interface
 
@@ -690,7 +728,11 @@ Tabs:
   insertion) and what the final database *holds* (fewer again, exact once
   compacted). A filter run also shows what each rule removed:
   tokens that were not alphabetic, too short, stopwords or not in the
-  vocabulary, and n-grams dropped for having too few real tokens. The
+  vocabulary, and n-grams dropped for having too few real tokens; its
+  headline names the step it is on (the work units, compaction, the count
+  check, the vocabulary), its *Scan rate* is source records read per second
+  with units in flight included, and its *Checks* group shows the count
+  check from the start and whether the source was read in full. The
   Runs table's *Records* column is the records kept so far while a run is
   going and the compacted database's count (marked `*`) once it is done;
   *Clear finished runs* removes the records of runs that are no longer

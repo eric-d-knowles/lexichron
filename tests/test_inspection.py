@@ -39,6 +39,7 @@ def _pivoted_db(path):
         wb.put(b"__rangemap__/partition", b"[]")
         for year, ng, count in ((1990, b"cat run", 5), (2011, b"nuclear <UNK>", 9), (2011, b"nuclear power", 4)):
             wb.put(struct.pack(">I", year) + ng, struct.pack("<QQQ", year, count, count))
+    db.finalize_bulk()                  # flushed and never compacted: a run that stopped before its compaction
     return db
 
 

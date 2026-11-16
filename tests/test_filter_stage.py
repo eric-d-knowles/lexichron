@@ -144,3 +144,86 @@ def test_a_run_leaves_no_temporary_directories(rocks, tmp_path, monkeypatch):
     left = {p.name for p in src.parent.iterdir()} - {"logs"}
     assert left == {"1grams.db", "1grams_processed.db"}
     assert list(spool.iterdir()) == []
+
+
+# ---- the checks a filter run makes of its own output --------------------------------------
+
+def _run(stub, tmp_path, progress=None, **pipeline):
+    pipeline.setdefault("mode", "restart")
+    return build_processed_db(
+        filter_config=FilterConfig(stop_set={"the"}, lemma_gen=FakeLemmatizer(), min_len=3, min_context_tokens=1),
+        pipeline_config=PipelineConfig(ngram_size=1, repo_release_id="20200217", repo_corpus_id="eng",
+                                       db_path_stub=str(stub), num_workers=2, num_initial_work_units=4,
+                                       use_smart_partitioning=False, **pipeline),
+        progress_path=str(progress) if progress else None, spool_dir=str(tmp_path))
+
+
+# what _raw_unigrams holds: occurrences and volume counts of every record, and of those the filter keeps
+SOURCE = {"match_total": 10 + 5 + 1 + 7 + 100 + 3 + 2 + 1 + 1, "volume_total": 2 + 1 + 1 + 3 + 50 + 1 + 1 + 1 + 1}
+KEPT = (10 + 5 + 1 + 7 + 3 + 2, 2 + 1 + 1 + 3 + 1 + 1)
+
+
+def test_a_filter_run_verifies_its_counts_and_that_it_read_the_whole_source(rocks, tmp_path, capsys):
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    _raw_unigrams(str(paths["src_db"]))
+    progress = tmp_path / "p.json"
+    _run(stub, tmp_path, progress, source_totals=SOURCE, output_whitelist_path="default", compact_after_ingest=False)
+    doc = read_progress(progress)
+    v = doc["verification"]
+    assert doc["state"] == "done" and v["status"] == "verified"
+    assert (v["database"]["match_total"], v["database"]["volume_total"]) == KEPT
+    assert (v["ledger"]["match_total"], v["ledger"]["volume_total"]) == KEPT
+    assert v["source"] == {"status": "verified", "read": SOURCE, "expected": SOURCE, "disordered": 0}
+    assert doc["steps"] == ["ingesting", "compacting", "verifying", "whitelist"] and doc["phase"] == "whitelist"
+    assert doc["checks"] == {"verify_counts": True, "source_known": True}
+    out = capsys.readouterr().out
+    assert "Counts verified" in out and "Source read in full" in out
+    assert "compact_after_ingest is ignored" in out               # a complete run always compacts
+    store = fake_rocks._REGISTRY[str(paths["dst_db"])]
+    assert store.compactions == 1 and store.ingests >= 1          # the unigram run hands over SST files too
+    assert paths["whitelist"].exists()
+
+    # the source's own total is not known (a database acquired before counts were verified): said, not an error
+    _run(stub, tmp_path, progress)
+    v = read_progress(progress)["verification"]
+    assert v["status"] == "verified" and v["source"]["status"] == "unknown" and v["source"]["read"] == SOURCE
+    assert "Source total not known" in capsys.readouterr().out
+
+    _run(stub, tmp_path, progress, verify_counts=False)
+    assert read_progress(progress)["verification"] == {"status": "skipped"}
+    assert read_progress(progress)["steps"] == ["ingesting", "compacting"]
+
+
+def test_a_source_not_read_exactly_once_fails_the_run(rocks, tmp_path, capsys):
+    """What a partition that skipped a key range, or gave one to two units,
+    would cause: the units' total of everything they read is not the source's."""
+    from ngramprep.ngram_filter.pipeline.orchestrator import FilterError
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    _raw_unigrams(str(paths["src_db"]))
+    progress = tmp_path / "p.json"
+    wrong = dict(SOURCE, match_total=SOURCE["match_total"] + 40)
+    with pytest.raises(FilterError, match="counts do not match"):
+        _run(stub, tmp_path, progress, source_totals=wrong, output_whitelist_path="default")
+    doc = read_progress(progress)
+    assert doc["state"] == "failed" and doc["verification"]["status"] == "mismatch"
+    assert doc["verification"]["source"]["status"] == "mismatch"
+    out = capsys.readouterr().out
+    assert "THE SOURCE WAS NOT READ EXACTLY ONCE" in out and "(difference -40)" in out
+    assert "Counts verified" in out                               # the destination itself is what the units emitted
+    assert not paths["whitelist"].exists()                        # no vocabulary from a database that failed its check
+
+
+def test_a_source_that_was_never_compacted_is_refused(rocks, tmp_path):
+    from ngramprep.ngram_filter.pipeline.orchestrator import FilterError
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    src = _raw_unigrams(str(paths["src_db"]))
+    src.finalize_bulk()                                           # flushed, never compacted: an unfinished acquisition
+    with pytest.raises(FilterError, match="has not been compacted.*Run that stage again"):
+        _run(stub, tmp_path)
+    assert not paths["dst_db"].exists()
+    src.compact_all()
+    _run(stub, tmp_path)
+    assert set(fake_rocks.dump(paths["dst_db"])) == {b"cat", b"woman", b"run"}

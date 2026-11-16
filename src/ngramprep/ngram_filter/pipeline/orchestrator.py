@@ -22,7 +22,8 @@ from typing import Any, Optional, Set, Union
 
 from ..config import FilterConfig, PipelineConfig
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from ngramprep.rangemap import RangeMapConfig, run_rangemap
+from ngramprep.ngram_acquire.verify import verify_database
+from ngramprep.rangemap import RangeMapConfig, UNIT_MARKER_PREFIX, run_rangemap
 from ngramprep.utilities.display import format_banner, truncate_path_to_fit
 from .mapper import FilterMapper, PivotFilterMapper
 from .setup import PipelineSetup
@@ -34,7 +35,8 @@ logger = logging.getLogger(__name__)
 LEMMAS_BY_TAG = "by part-of-speech tag, else lookup table"
 LEMMAS_LOOKUP = "lookup table"
 
-__all__ = ["build_processed_db", "run_filter_pipeline", "derive_paths"]
+__all__ = ["build_processed_db", "run_filter_pipeline", "derive_paths", "FilterError",
+           "describe_filter_verification"]
 
 
 def _to_bytes_set(s: Optional[Set[Any]]) -> Optional[Set[bytes]]:
@@ -62,6 +64,102 @@ def derive_paths(db_path_stub: str, ngram_size: int, repo_release_id: str, repo_
             "pivoted_db": base / f"{ngram_size}grams_pivoted.db"}
 
 
+class FilterError(RuntimeError):
+    """Raised when a filter run cannot vouch for its output: the source is
+    not a finished database, or the counts do not add up."""
+
+
+def _require_compacted_source(src_db, read_profile: str) -> None:
+    """Refuse a source database that was never compacted.
+
+    An acquisition that did not finish (a file failed, or the job ended
+    before compaction) leaves one SST file per downloaded file, every one
+    overlapping the others: counts of an n-gram that arrived from several
+    files are not summed yet, and a range of keys touches nearly every file.
+    The stage's partition and its workers assume a compacted source."""
+    from ngramprep.common_db.api import open_db
+    try:
+        with open_db(str(src_db), mode="r", profile=read_profile) as db:
+            level0 = db.get_property("rocksdb.num-files-at-level0")
+    except Exception:
+        return                                   # not openable: the run reports that itself
+    try:
+        level0 = int(level0 or 0)
+    except (TypeError, ValueError):
+        return
+    if level0 > 0:
+        raise FilterError(
+            f"The source database {src_db} has not been compacted ({level0:,} files still waiting to be "
+            f"folded in): the run that made it did not finish. Run that stage again; it resumes, and "
+            f"compacts when every file is in.")
+
+
+def _check_source(ledger: dict, source_totals: Optional[dict]) -> dict:
+    """What the work units read, against what the source is known to hold.
+
+    Every data record of the source lies in exactly one unit's key range, so
+    the units' totals of everything they read (kept or not) must equal the
+    source's own. A difference means the partition skipped keys or gave some
+    to two units. ``unknown`` when the source's totals were never verified
+    (a database acquired before the count ledger), or some units predate
+    their own."""
+    read = {"match_total": int(ledger.get("source_match", 0)), "volume_total": int(ledger.get("source_volume", 0))}
+    out = {"status": "unknown", "read": read, "expected": None,
+           "disordered": int(ledger.get("source_disordered", 0))}
+    if out["disordered"]:
+        out["status"] = "mismatch"               # the source itself holds values the merge operator cannot sum
+    if not source_totals or ledger.get("unledgered"):
+        return out
+    out["expected"] = {"match_total": int(source_totals["match_total"]),
+                       "volume_total": int(source_totals["volume_total"])}
+    if out["status"] != "mismatch":
+        out["status"] = "verified" if read == out["expected"] else "mismatch"
+    return out
+
+
+def describe_filter_verification(v: dict) -> list:
+    """The verification record of a filter run in sentences."""
+    ledger, found, source = v.get("ledger") or {}, v.get("database") or {}, v.get("source") or {}
+    lines = []
+    units = int(ledger.get("shards", 0))
+    if ledger.get("unledgered"):
+        lines.append(f"Counts not verifiable: {int(ledger['unledgered']):,} of {units:,} work units were filtered by "
+                     f"a version that kept no totals. Every value in the database is well formed."
+                     if not (found.get("disordered") or found.get("malformed")) else
+                     f"{int(found.get('disordered', 0)) + int(found.get('malformed', 0)):,} values in the database "
+                     f"are malformed or have years out of order.")
+    elif (found.get("match_total"), found.get("volume_total")) == (ledger.get("match_total"), ledger.get("volume_total")) \
+            and not (found.get("disordered") or found.get("malformed")):
+        lines.append(f"Counts verified: the database's {int(found.get('records', 0)):,} records hold "
+                     f"{int(found.get('match_total', 0)):,} occurrences in {int(found.get('volume_total', 0)):,} "
+                     f"volume counts, exactly what the {units:,} work units emitted.")
+    else:
+        lines.append("COUNTS DO NOT MATCH what the work units emitted:")
+        lines.append(f"  occurrences:   database {int(found.get('match_total', 0)):,}   units {int(ledger.get('match_total', 0)):,}"
+                     f"   difference {int(found.get('match_total', 0)) - int(ledger.get('match_total', 0)):+,}")
+        lines.append(f"  volume counts: database {int(found.get('volume_total', 0)):,}   units {int(ledger.get('volume_total', 0)):,}"
+                     f"   difference {int(found.get('volume_total', 0)) - int(ledger.get('volume_total', 0)):+,}")
+        if found.get("disordered") or found.get("malformed"):
+            lines.append(f"  {int(found.get('disordered', 0)) + int(found.get('malformed', 0)):,} values are malformed "
+                         f"or have years out of order")
+    read, expected = source.get("read") or {}, source.get("expected")
+    if source.get("status") == "verified":
+        lines.append(f"Source read in full: the units read {int(read.get('match_total', 0)):,} occurrences, "
+                     f"exactly what the source database holds.")
+    elif source.get("status") == "mismatch" and expected:
+        lines.append(f"THE SOURCE WAS NOT READ EXACTLY ONCE: the units read {int(read.get('match_total', 0)):,} "
+                     f"occurrences and the source holds {int(expected['match_total']):,} "
+                     f"(difference {int(read.get('match_total', 0)) - int(expected['match_total']):+,}).")
+    elif source.get("status") == "unknown":
+        lines.append(f"Source total not known (the source was made before counts were verified): the units read "
+                     f"{int(read.get('match_total', 0)):,} occurrences; nothing to compare that with.")
+    if source.get("disordered"):
+        lines.append(f"{int(source['disordered']):,} values in the SOURCE have years out of order.")
+    if ledger.get("reordered"):
+        lines.append(f"{int(ledger['reordered']):,} emitted values had years out of order and were put in order.")
+    return lines
+
+
 def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineConfig,
                         *, progress_path: Optional[str] = None,
                         spool_dir: Optional[str] = None, chunk_entries: int = 200_000) -> str:
@@ -79,6 +177,8 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
     print(f"Destination:  {pc.dst_db}" + ("  (keyed year-first)" if pivot else ""))
     print(f"Mode:         {pc.mode}")
     print(f"Workers:      {pc.num_workers}")
+
+    _require_compacted_source(pc.src_db, pc.reader_profile)
 
     # Whitelist loading, vocabulary index, directories.
     setup = PipelineSetup(pc, filter_config)
@@ -115,27 +215,68 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
                                             x.decode() if isinstance(x, bytes) else str(x)
                                             for x in (filter_config.always_include_case or ()))) or None})
     num_units = pc.num_initial_work_units or max(4 * pc.num_workers, 64)
+    # What the run goes through and what it will check, for whoever reads the
+    # progress document ("step 2 of 4", what a problem will lead to).
+    progress.set_plan(["ingesting", "compacting"] + (["verifying"] if pc.verify_counts else [])
+                      + (["whitelist"] if pc.output_whitelist_path else []))
+    progress.set_checks(verify_counts=bool(pc.verify_counts),
+                        source_known=bool(pc.source_totals))
+    if not pc.compact_after_ingest:
+        print("Note: compact_after_ingest is ignored; a complete filter run is always compacted.")
 
-    # The pivoted output is many times the size of its input (one record per
-    # year), so its chunks go to the database as SST files rather than
-    # through the parent's write path.
+    # Every unit is handed over as one sorted SST file of merge operands and
+    # adopted by the database together with its marker in a single ingest
+    # call: the unit's records and the fact that it is done are durable
+    # together or not at all, and the parent replays nothing. (The pivoted
+    # output is many times the size of its input, one record per year, and
+    # was the first to go this way; the unigram run follows for the marker.)
     cfg = RangeMapConfig(
         src_db=Path(pc.src_db), dst_db=Path(pc.dst_db),
         mapper=PivotFilterMapper(filter_config) if pivot else FilterMapper(filter_config),
-        output="sst" if pivot else "chunks",
+        output="sst",
         num_units=num_units, workers=pc.num_workers, mode=mode,
         smart_partitioning=pc.use_smart_partitioning, samples_per_worker=pc.samples_per_worker,
         use_cached_partition=pc.use_cached_partitions and pc.cache_partitions,
         partition_cache_dir=paths["cache_dir"],
         read_profile=pc.reader_profile, write_profile=pc.ingest_write_profile,
         chunk_entries=chunk_entries, spool_dir=Path(spool_dir) if spool_dir else None,
-        compact_after=pc.compact_after_ingest, progress=progress,
+        compact_after=True, progress=progress,
     )
     result = run_rangemap(cfg)
     year_records = f" ({result.produced:,} year records)" if pivot else ""
     print(f"Filtered {result.scanned:,} records -> {result.kept:,} kept{year_records} in "
           f"{result.units_done} work units ({result.units_skipped} already done) "
           f"in {result.seconds / 60:.1f} min")
+
+    # The count check: the destination against what the units recorded
+    # emitting, and what they recorded reading against what the source holds.
+    if pc.verify_counts:
+        with progress.long_phase("verifying"):
+            print(format_banner("Count Verification"))
+            logger.info("Verifying the counts: reading the whole destination once with up to %d processes and "
+                        "comparing its totals with the work units' recorded totals", pc.num_workers)
+            t_verify = time.perf_counter()
+            verification = verify_database(str(pc.dst_db), pc.num_workers, marker_prefix=UNIT_MARKER_PREFIX)
+            verification["source"] = _check_source(verification["ledger"], pc.source_totals)
+            if verification["source"]["status"] == "mismatch" and verification["status"] != "mismatch":
+                verification["status"] = "mismatch"
+            verification["seconds"] = round(time.perf_counter() - t_verify, 1)
+        for line in describe_filter_verification(verification):
+            print(line)
+            logger.info("%s", line)
+        logger.info("Verification took %.0fs; outcome: %s", verification["seconds"], verification["status"])
+        progress.set_verification(verification)
+        if verification["status"] == "mismatch":
+            progress.finish("failed", "the counts in the database do not match what the work units recorded")
+            logger.error("Stopping: the counts do not match. The database should not be used")
+            raise FilterError(
+                "The filtered database's counts do not match what the run recorded (figures above, and in the "
+                "log). The database should not be used. Nothing was deleted: run again with mode: restart to "
+                "build it again, and please report this.")
+    else:
+        progress.set_verification({"status": "skipped"})
+        print("Count verification skipped (verify_counts is off).")
+        logger.info("Count verification skipped (verify_counts is off)")
 
     if pc.output_whitelist_path:
         wl = Path(pc.output_whitelist_path)
@@ -155,6 +296,7 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
             pass
 
     progress.finish("done")
+    logger.info("Filter finished in %.1f min: %s", (time.perf_counter() - t0) / 60, pc.dst_db)
     print(f"Done in {(time.perf_counter() - t0) / 60:.1f} min: {pc.dst_db}")
     return str(pc.dst_db)
 

@@ -188,7 +188,7 @@ def test_filter_runs_describe_work_units_not_files():
            "updated": "2026-10-12T00:01:00+00:00", "current": ["u1", "u2", "u3"],
            "phases": {"parsing": 2, "parsed": 1}}
     s = summarize(doc, now=__import__("datetime").datetime.fromisoformat("2026-10-12T00:01:00+00:00"), job_gone=False)
-    assert s["current_text"] == "3 work units in flight: 2 scanning · 1 scanned, waiting to ingest"
+    assert s["current_text"] == "3 work units in flight: 2 scanning · 1 waiting for the database"
     assert "10/80 work units" in s["headline"]
 
 
@@ -232,9 +232,9 @@ def test_meters_keep_the_three_record_counts_apart():
            "database": {"records": 8_210_776, "bytes": 1 << 30, "compacted": True}}
     groups = dict(meters(doc, summarize(doc, now=now, job_gone=False)))
     records = {label: (value, note) for label, value, note in groups["Records"]}
-    assert records["Scanned"] == ("26,291,248", "source records")
-    assert records["Kept"] == ("15,436,675", "58.7% of scanned")
-    assert records["Inserted"] == ("10,924,676", "to the database")
+    assert records["Scanned"] == ("26,291,248", "")
+    assert records["Kept"] == ("15,436,675", "58.7%")
+    assert records["Inserted"] == ("10,924,676", "")
     assert records["In database"] == ("8,210,776", "after compaction")
     rules = {label: value for label, value, _ in groups["Dropped by rule"]}
     assert rules == {"Not alphabetic": "5,000,000", "Too short": "1,000,000", "Stopword": "4,854,573",
@@ -290,7 +290,7 @@ def test_in_flight_meters_follow_the_stage():
            "phases": {"queued": 1, "parsing": 2, "parsed": 0, "ingesting": 0}}
     groups = dict(meters(doc, summarize(doc, now=now, job_gone=False)))
     assert groups["In flight: 3 work units"] == [("Waiting for a worker", "1", ""), ("Scanning", "2", ""),
-                                                 ("Scanned, waiting to ingest", "0", ""), ("Ingesting", "0", "")]
+                                                 ("Waiting for the database", "0", "")]
     doc.update(stage="acquire", unit_label="files", phases={"queued": 1, "parsing": 2, "parsed": 3, "ingesting": 1})
     assert dict(meters(doc, summarize(doc, now=now, job_gone=False)))["In flight: 3 files"] == [
         ("Waiting for a worker", "1", ""), ("Downloading & parsing", "2", ""), ("Waiting for the database", "4", "")]
@@ -497,7 +497,7 @@ def test_acquire_warnings_say_what_a_problem_will_lead_to():
     # a message no warning covers is still shown; other stages have no warnings of this kind
     info = summarize(dict(doc, verification={}, message="compaction failed: no space"), now)
     assert notice_text(info) == "compaction failed: no space"
-    assert summarize(dict(doc, stage="filter"), now)["warnings"] == []
+    assert summarize(dict(doc, stage="tune"), now)["warnings"] == []
 
 
 def test_reporter_keeps_the_figures_the_screen_needs(tmp_path):
@@ -545,3 +545,101 @@ def test_reporter_keeps_the_figures_the_screen_needs(tmp_path):
     assert doc["phase"] == "compacting" and doc["phase_times"]["compacting"]["finished"]
     r.set_verification({"status": "verified"})
     assert read_progress(p)["verification"] == {"status": "verified"}
+
+
+# ---- a filter run's screen: steps, scan rate, checks ---------------------------------------
+
+def _flt(**over):
+    """A filter run 10 minutes into its work units: 20 of 80 done."""
+    now = datetime(2026, 11, 16, 12, 10, tzinfo=timezone.utc)
+    start = (now - timedelta(minutes=10)).isoformat(timespec="seconds")
+    d = dict(stage="filter", state="running", unit_label="work units", phase="ingesting", phase_started=start,
+             started=start, updated=now.isoformat(timespec="seconds"), finished=None,
+             steps=["ingesting", "compacting", "verifying", "whitelist"],
+             phase_times={"ingesting": {"started": start, "finished": None}},
+             files_total=80, files_done=20, files_failed=0, files_skipped=0, entries_written=500_000,
+             in_flight={"lines": 400_000, "bytes": 0},
+             counters={"scanned": 2_000_000, "kept": 500_000, "produced": 500_000, "inserted": 450_000,
+                       "match_total": 9_000, "volume_total": 800, "source_match": 30_000, "source_volume": 2_000,
+                       "reordered": 0, "source_disordered": 0},
+             checks={"verify_counts": True, "source_known": True},
+             current=["u1", "u2"], phases={"queued": 0, "parsing": 2, "parsed": 0, "ingesting": 0},
+             inputs={"source": "/x/5grams.db"}, message="", db_path="/x/5grams_pivoted.db", log_path=None,
+             slurm_job_id=None, hostname="cs001")
+    d.update(over)
+    return d, now
+
+
+def test_filter_progress_names_its_steps_and_reports_what_is_being_scanned():
+    from lexichron.ui.progress_view import meters
+    doc, now = _flt()
+    info = summarize(doc, now)
+    assert info["headline"].startswith("step 1 of 4: scanning and filtering the work units on cs001 · 20/80 work units (25%)")
+    assert info["then_text"] == "then compaction, the count check and the vocabulary"
+    # records read per second, units still being scanned included
+    assert info["scanning"] and info["rate_unit"] == "records scanned/s" and info["rate"] == 2_400_000 / 600
+    groups = dict(meters(doc, info))
+    tiles = {label: (value, note) for label, value, note in groups["Progress"]}
+    assert tiles["Scan rate"] == ("4.0k/s", "records") and tiles["Remaining"][1] == "units only"
+    assert groups["In flight: 2 work units"] == [("Waiting for a worker", "0", ""), ("Scanning", "2", ""),
+                                                 ("Waiting for the database", "0", "")]
+    assert groups["Records"][:2] == [("Scanned", "2,400,000", ""), ("Kept", "500,000", "25.0%")]
+    # a run recorded before workers reported keeps its old figures
+    old = {k: v for k, v in doc.items() if k not in ("in_flight", "steps", "phase_times", "checks")}
+    info = summarize(old, now)
+    assert not info["scanning"] and info["rate_unit"] == "entries/s" and "Checks" not in dict(meters(old, info))
+
+
+def test_filter_checks_cover_the_destination_and_the_source():
+    from lexichron.ui.progress_view import meters, notice_text
+
+    def checks(doc, now):
+        return {label: (value, note) for label, value, note in dict(meters(doc, summarize(doc, now)))["Checks"]}
+
+    doc, now = _flt()
+    assert checks(doc, now) == {"Counts": ("pending", ""), "Source": ("pending", ""), "Occurrences": ("9,000", ""),
+                                "Reordered values": ("0", "")}
+    doc["checks"]["source_known"] = False                       # a source made before counts were verified
+    assert checks(doc, now)["Source"] == ("total not known", "")
+    doc["checks"]["source_known"] = True
+    doc["phase"] = "verifying"
+    assert checks(doc, now)["Counts"] == ("checking", "")
+
+    good = {"status": "verified", "ledger": {"shards": 80, "match_total": 36_000, "volume_total": 3_000},
+            "database": {"records": 10, "match_total": 36_000, "volume_total": 3_000, "disordered": 0, "malformed": 0},
+            "source": {"status": "verified", "read": {"match_total": 120_000, "volume_total": 8_000},
+                       "expected": {"match_total": 120_000, "volume_total": 8_000}, "disordered": 0}}
+    doc.update(state="done", verification=good)
+    tiles = checks(doc, now)
+    assert tiles["Counts"] == ("verified", "") and tiles["Source"] == ("read in full", "")
+    assert tiles["Occurrences"] == ("36,000", "") and summarize(doc, now)["warnings"] == []
+
+    # the destination holds more than the units emitted: a unit taken in twice
+    bad = dict(good, status="mismatch", database=dict(good["database"], match_total=36_450, volume_total=3_015))
+    doc.update(state="failed", verification=bad)
+    assert checks(doc, now)["Counts"] == ("DO NOT MATCH", "occurrences +450; volume counts +15")
+    (w,) = summarize(doc, now)["warnings"]
+    assert w.startswith("The counts in the database do not match what the work units emitted: occurrences differ by +450")
+
+    # the units read less than the source holds: the partition skipped keys
+    gap = dict(good, status="mismatch", source=dict(good["source"], status="mismatch",
+                                                    read={"match_total": 119_000, "volume_total": 7_900}))
+    doc["verification"] = gap
+    tiles = checks(doc, now)
+    assert tiles["Counts"] == ("verified", "") and tiles["Source"] == ("NOT READ ONCE", "occurrences -1,000; volume counts -100")
+    (w,) = summarize(doc, now)["warnings"]
+    assert "The source was not read exactly once" in w and "-1,000" in w
+
+    doc["verification"] = dict(good, status="unverifiable", ledger=dict(good["ledger"], unledgered=3),
+                               source={"status": "unknown", "read": {}, "expected": None, "disordered": 0})
+    tiles = checks(doc, now)
+    assert tiles["Counts"] == ("not verifiable", "") and tiles["Source"] == ("total not known", "")
+    assert tiles["Units without totals"] == ("3", "pre-ledger")
+    doc.update(verification={"status": "skipped"}); doc["checks"]["verify_counts"] = False
+    assert checks(doc, now)["Counts"] == ("not checked", "verify_counts off")
+
+    # failed work units are named, with what follows
+    doc, now = _flt(files_failed=2, failed_files=[{"file": "unit_a", "message": "x"}, {"file": "unit_b", "message": "y"}])
+    (w,) = summarize(doc, now)["warnings"]
+    assert w.startswith("2 work units failed (unit_a, unit_b). The run will finish the other work units and then stop")
+    assert notice_text(summarize(doc, now)) == w

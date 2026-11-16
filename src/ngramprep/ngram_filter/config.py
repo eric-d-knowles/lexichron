@@ -106,7 +106,14 @@ class PipelineConfig:
 
     # Pipeline control
     mode: str = "resume"  # "restart" (wipe all), "resume" (continue), or "reprocess" (wipe DB, keep cache)
-    compact_after_ingest: bool = True
+    compact_after_ingest: bool = True   # ignored: a complete run always compacts (kept so older callers load)
+    # After compaction, read the destination once and require its counts to
+    # equal what the work units recorded emitting (see ngram_acquire.verify)
+    verify_counts: bool = True
+    # What the source database is known to hold, when its own run verified
+    # it: {"match_total", "volume_total"}. The units' totals of everything
+    # they read must add up to it, or the partition skipped or repeated keys.
+    source_totals: Optional[dict] = None
     work_unit_claim_order: str = "random"  # "sequential" or "random"
 
     # What the stage writes: "processed" (keyed by n-gram, one packed year list

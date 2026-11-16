@@ -208,7 +208,8 @@ class ProgressReporter:
             previous = times.get(self.doc.get("phase"))
             if previous and self.doc.get("phase") != phase and not previous.get("finished"):
                 previous["finished"] = now
-            times.setdefault(phase, {"started": now, "finished": None})
+            # (a phase entered again, e.g. the units after partitioning, is not finished)
+            times.setdefault(phase, {"started": now})["finished"] = None
         self.doc["phase"] = phase
         self.doc["phase_started"] = now
         self._write(force=True)

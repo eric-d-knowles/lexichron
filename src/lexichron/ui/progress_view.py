@@ -67,7 +67,9 @@ LONG_PHASES = {
 # The steps of a run that declares them (acquire: see ProgressReporter.set_plan):
 # what each is called while it runs, and when it is still to come.
 STEP_NOW = {"ingesting": "downloading and parsing the files", **LONG_PHASES}
-STEP_LATER = {"compacting": "compaction", "verifying": "the count check", "archiving": "archiving"}
+STEP_NOW_FILTER = {**STEP_NOW, "ingesting": "scanning and filtering the work units"}
+STEP_LATER = {"compacting": "compaction", "verifying": "the count check", "archiving": "archiving",
+              "whitelist": "the vocabulary"}
 
 
 def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
@@ -129,11 +131,16 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     # not yet finished count too.
     # (Known from the first frame: a run that reports files in flight says so
     # before any line is read, so the screen does not change its tiles later.)
-    scanning = doc.get("stage", "acquire") == "acquire" and ("lines" in counters or "in_flight" in doc)
+    # A filter run reads source records and keeps some, the same way; its
+    # workers report as they go too (from 0.13; an older run's record shows
+    # entries kept per second, as it did).
+    stage_name = doc.get("stage", "acquire")
+    scanning = ((stage_name == "acquire" and ("lines" in counters or "in_flight" in doc))
+                or (stage_name == "filter" and "in_flight" in doc))
     if scanning:
-        scanned = int(counters.get("lines", 0)) + int(in_flight.get("lines", 0))
+        scanned = int(counters.get("scanned" if stage_name == "filter" else "lines", 0)) + int(in_flight.get("lines", 0))
         rate = (scanned / work_elapsed) if work_elapsed and work_elapsed > 0 else 0.0
-        rate_unit = "n-grams scanned/s"
+        rate_unit = "records scanned/s" if stage_name == "filter" else "n-grams scanned/s"
     else:
         rate = (entries / elapsed) if elapsed and elapsed > 0 else 0.0
         rate_unit = "entries/s"
@@ -192,7 +199,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         status = (f"{step_text}: " if step_text else "") + f"{LONG_PHASES[phase]} ({for_how_long} so far)"
         eta = None
     elif state == "running" and step_text:
-        status = f"{step_text}: {STEP_NOW.get(phase, phase)}"
+        status = f"{step_text}: {(STEP_NOW_FILTER if stage_name == 'filter' else STEP_NOW).get(phase, phase)}"
     else:
         status = state
     parts = [status + (f" {where_txt}" if where_txt else "")]
@@ -224,8 +231,10 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     # What a worker does with a unit differs by stage: acquisition downloads
     # and parses a file, filtering scans a key range.
     if doc.get("stage") == "filter":
+        # a finished unit is adopted by the database in one short step, as an acquired file is
+        phases = dict(phases, handover=int(phases.get("parsed", 0)) + int(phases.get("ingesting", 0))) if phases else phases
         phase_labels = (("queued", "waiting for a worker"), ("parsing", "scanning"),
-                        ("parsed", "scanned, waiting to ingest"), ("ingesting", "ingesting"))
+                        ("handover", "waiting for the database"))
     elif doc.get("stage") == "tune":
         phase_labels = (("queued", "waiting"), ("parsing", "training"),
                         ("parsed", "trained, waiting to score"), ("ingesting", "scoring"))
@@ -298,16 +307,37 @@ def warnings(doc: Dict[str, Any], *, state: Optional[str] = None, stopped: bool 
     state = state or doc.get("state", "running")
     running = state == "running" and not stopped
     out: List[str] = []
-    if (doc.get("stage") or "acquire") != "acquire":
+    stage = doc.get("stage") or "acquire"
+    if stage not in ("acquire", "filter"):
         return out
+    unit = "work unit" if stage == "filter" else "file"
     failed = int(doc.get("files_failed", 0))
     if failed:
         names = [f.get("file", "") for f in (doc.get("failed_files") or [])][:3]
         named = (" (" + ", ".join(names) + (", ..." if failed > len(names) else "") + ")") if names else ""
-        out.append(f"{failed:,} file{'s' if failed != 1 else ''} failed{named}. "
-                   + ("The run will finish the other files and then stop with an error, without compacting or "
+        out.append(f"{failed:,} {unit}{'s' if failed != 1 else ''} failed{named}. "
+                   + (f"The run will finish the other {unit}s and then stop with an error, without compacting or "
                       "checking the counts; run it again to retry them." if running else
                       "The database is incomplete and was not compacted; run again to retry them."))
+    if stage == "filter":
+        verification = doc.get("verification") or {}
+        if verification.get("status") == "mismatch":
+            ledger, found = verification.get("ledger") or {}, verification.get("database") or {}
+            source = verification.get("source") or {}
+            if (found.get("match_total"), found.get("volume_total")) != (ledger.get("match_total"), ledger.get("volume_total")):
+                out.append("The counts in the database do not match what the work units emitted: occurrences differ by "
+                           f"{int(found.get('match_total', 0)) - int(ledger.get('match_total', 0)):+,}, volume counts by "
+                           f"{int(found.get('volume_total', 0)) - int(ledger.get('volume_total', 0)):+,}. "
+                           "Do not use this database.")
+            if source.get("status") == "mismatch" and source.get("expected"):
+                read = source.get("read") or {}
+                out.append("The source was not read exactly once: the work units read occurrences differing from the "
+                           f"source's by {int(read.get('match_total', 0)) - int(source['expected']['match_total']):+,}. "
+                           "Do not use this database.")
+            bad = int(found.get("disordered", 0)) + int(found.get("malformed", 0)) + int(source.get("disordered", 0))
+            if bad:
+                out.append(f"{bad:,} values are malformed or have years out of order. Do not use this database.")
+        return out
     corpus = doc.get("corpus") or {}
     counters = doc.get("counters") or {}
     ledger = (doc.get("verification") or {}).get("ledger") or {}
@@ -401,7 +431,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
     # (Tile notes stay short enough not to wrap: a figure or a caveat, never
     # an explanation. The headline names the steps; the README explains the tiles.)
     if info.get("step_text"):
-        remaining_note = "files only" if info["eta_s"] is not None else ""
+        remaining_note = ("units only" if stage == "filter" else "files only") if info["eta_s"] is not None else ""
     else:
         remaining_note = "estimate"
     progress_tiles = [
@@ -412,7 +442,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—",
           "years" if stage == "measure" else "models")
          if stage in ("tune", "train", "measure") else
-         ("Scan rate", f"{fmt_count(info['rate'])}/s", "n-grams")
+         ("Scan rate", f"{fmt_count(info['rate'])}/s", "records" if stage == "filter" else "n-grams")
          if info.get("scanning") else
          ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries")),
         ("Elapsed", fmt_duration(info["elapsed_s"]), info.get("step_text") or ""),
@@ -434,8 +464,9 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
     # when the set of groups changes).
     if phases and (current or info.get("state") == "running"):
         if stage == "filter":
+            phases = dict(phases, handover=int(phases.get("parsed", 0)) + int(phases.get("ingesting", 0)))
             labels = (("queued", "Waiting for a worker"), ("parsing", "Scanning"),
-                      ("parsed", "Scanned, waiting to ingest"), ("ingesting", "Ingesting"))
+                      ("handover", "Waiting for the database"))
         elif stage == "tune":
             labels = (("queued", "Waiting"), ("parsing", "Training"),
                       ("parsed", "Trained, waiting to score"), ("ingesting", "Scoring"))
@@ -480,14 +511,16 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         ]))
     elif stage == "filter":
         scanned = int(counters.get("scanned", 0))
+        flying = int((doc.get("in_flight") or {}).get("lines", 0))      # units still being scanned
         kept = int(counters.get("kept", 0))
         produced = int(counters.get("produced", kept))
-        tiles = [("Scanned", f"{scanned:,}", "source records"),
-                 ("Kept", f"{kept:,}", _pct(kept, scanned) + " of scanned" if scanned else "")]
+        # (notes are a figure or nothing; the README says what each tile is)
+        tiles = [("Scanned", f"{scanned + flying:,}", ""),
+                 ("Kept", f"{kept:,}", _pct(kept, scanned) if scanned else "")]
         if produced > kept:
             # the pivot makes one record per n-gram and year from each kept n-gram
             tiles.append(("Year records", f"{produced:,}", f"{produced / kept:.1f} per n-gram" if kept else ""))
-        tiles += [("Inserted", f"{int(counters.get('inserted', 0)):,}", "to the database"), db_tile()]
+        tiles += [("Inserted", f"{int(counters.get('inserted', 0)):,}", ""), db_tile()]
         groups.append(("Records", tiles))
         tokens = int(counters.get("tokens", 0))
         ngrams = int(counters.get("ngrams", 0))
@@ -503,9 +536,69 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             dropped = int(counters.get("ngrams_dropped_context", 0))
             tiles.append(("Too few real tokens", f"{dropped:,}", _pct(dropped, ngrams) + " of n-grams"))
             groups.append(("Dropped by rule", tiles))
+        groups += filter_checks(doc, info)
     else:
         groups += acquire_groups(doc, info, db_tile())
     return groups
+
+
+def filter_checks(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
+    """A filter run's checks (see ngramprep.ngram_filter.pipeline.orchestrator):
+    the destination against what the work units recorded emitting, and what
+    they recorded reading against what the source database holds. Shown from
+    the start; absent for a run from before the checks existed."""
+    checks = doc.get("checks")
+    verification = doc.get("verification") or {}
+    if checks is None and not verification:
+        return []
+    checks = checks or {}
+    counters = doc.get("counters") or {}
+    ledger, found = verification.get("ledger") or {}, verification.get("database") or {}
+    source = verification.get("source") or {}
+    status, state, phase = verification.get("status"), info.get("state"), doc.get("phase")
+    running = state == "running"
+
+    def difference(a: Dict[str, Any], b: Dict[str, Any]) -> str:
+        return (f"occurrences {int(a.get('match_total', 0)) - int(b.get('match_total', 0)):+,}; "
+                f"volume counts {int(a.get('volume_total', 0)) - int(b.get('volume_total', 0)):+,}")
+
+    emitted_ok = ("match_total" in found and not ledger.get("unledgered")
+                  and (found.get("match_total"), found.get("volume_total")) == (ledger.get("match_total"), ledger.get("volume_total"))
+                  and not (found.get("disordered") or found.get("malformed")))
+    if status == "skipped" or checks.get("verify_counts") is False:
+        counts = ("not checked", "verify_counts off")
+    elif status and ledger.get("unledgered"):
+        counts = ("not verifiable", "")
+    elif status and emitted_ok:
+        counts = ("verified", "")
+    elif status:
+        counts = ("DO NOT MATCH", difference(found, ledger) if "match_total" in found else "")
+    elif running and phase == "verifying":
+        counts = ("checking", "")
+    else:
+        counts = ("pending", "") if running else ("not reached", "")
+
+    if status == "skipped" or checks.get("verify_counts") is False:
+        src = ("not checked", "")
+    elif source.get("status") == "verified":
+        src = ("read in full", "")
+    elif source.get("status") == "mismatch":
+        src = ("NOT READ ONCE", difference(source.get("read") or {}, source["expected"]) if source.get("expected")
+               else f"{int(source.get('disordered', 0)):,} values out of order")
+    elif source.get("status") == "unknown" or checks.get("source_known") is False:
+        src = ("total not known", "")
+    else:
+        src = ("pending", "") if running else ("not reached", "")
+
+    occurrences = int(found.get("match_total", ledger.get("match_total", counters.get("match_total", 0))))
+    reordered = int(ledger.get("reordered", counters.get("reordered", 0)))
+    tiles = [("Counts", counts[0], counts[1]), ("Source", src[0], src[1]),
+             ("Occurrences", f"{occurrences:,}", ""),
+             ("Reordered values", f"{reordered:,}", "corrected" if reordered else "")]
+    unledgered = int(ledger.get("unledgered", 0))
+    if unledgered:
+        tiles.append(("Units without totals", f"{unledgered:,}", "pre-ledger"))
+    return [("Checks", tiles)]
 
 
 def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[Tuple[str, List[Tuple[str, str, str]]]]:

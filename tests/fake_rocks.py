@@ -89,17 +89,26 @@ class DB:
     def write_batch(self, disable_wal=False, sync=False):
         return _Batch(self)
 
+    # Files in level 0: one per flush or ingested file since the last
+    # compaction. A database a test fills by hand and never flushes has
+    # none, like a finished one; an acquisition or filter run that stops
+    # before compacting leaves them, as the real store does.
+    level0 = 0
+
     def finalize_bulk(self):
         self.flushes += 1
+        self.level0 += 1
 
     def compact_all(self):
         self.compactions += 1
+        self.level0 = 0
 
     def ingest(self, paths, move=True, write_global_seqno=False):
         import os
         import pickle
         self.ingests = getattr(self, "ingests", 0) + 1                      # calls
         self.ingested_files = getattr(self, "ingested_files", 0) + len(paths)
+        self.level0 += len(paths)
         for p in paths:
             with builtins.open(p, "rb") as fh:
                 _compression, entries = pickle.load(fh)
@@ -120,7 +129,7 @@ class DB:
         if name == "rocksdb.total-sst-files-size":
             return str(sum(len(k) + len(v) for k, v in self.data.items()))
         if name == "rocksdb.num-files-at-level0":
-            return "0" if self.compactions else "1"
+            return str(self.level0)
         return str(len(self.data))        # estimate-num-keys: exact for the fake
 
     # SST metadata as rocks-shim 0.6 reports it: the fake pretends the sorted

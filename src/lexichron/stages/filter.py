@@ -83,6 +83,7 @@ def filter_ngrams(
     mode: str = "resume",
     pivot: Optional[bool] = None,
     compact_after_ingest: bool = True,
+    verify_counts: bool = True,
     chunk_entries: int = 200_000,
     spool_dir: Optional[str] = None,
     progress_path: Optional[str] = None,
@@ -162,7 +163,22 @@ def filter_ngrams(
             database, instead of <n>grams_processed.db (keyed by n-gram, a
             packed year list each: what the vocabulary is built from).
             Default: off for unigrams, on for longer n-grams
-        compact_after_ingest: Compact the destination at the end
+        compact_after_ingest: Ignored: a run that finished every work unit
+            always compacts. Each unit arrives as its own SST file, and
+            compaction is what folds them into one sorted database and sums
+            the counts of records that arrived from more than one unit.
+            Kept so that older settings files still load.
+        verify_counts: Check the finished database against the run's own
+            records (default True). Every work unit records the total
+            occurrences and volume counts of what it read from the source
+            and of what it emitted. After compaction the destination is
+            read once, in parallel, and must hold exactly what the units
+            emitted, with every value's years in order; and what the units
+            read must add up to what the source database holds, where the
+            acquisition that made it verified its own counts (a key range
+            skipped or read twice by the partition shows there). A
+            difference fails the run. Turn it off only to save the pass on
+            a database you will check another way.
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)
         progress_path: Progress document for this run (set by the CLI)
@@ -239,6 +255,7 @@ def filter_ngrams(
         num_initial_work_units=None, mode=mode, output=output,
         use_smart_partitioning=True,
         compact_after_ingest=compact_after_ingest,
+        verify_counts=bool(verify_counts), source_totals=verified_source_totals(paths["src_db"]),
         output_whitelist_path=paths["whitelist"] if output_vocabulary else None,
         dst_db=paths["pivoted_db"] if output == "pivoted" else paths["dst_db"],
         output_whitelist_top_n=output_vocabulary_top_n,
@@ -248,6 +265,17 @@ def filter_ngrams(
     return build_processed_db(filter_config=filter_config, pipeline_config=pipeline_config,
                               progress_path=progress_path, spool_dir=spool_dir,
                               chunk_entries=int(chunk_entries))
+
+
+def verified_source_totals(src_db) -> Optional[dict]:
+    """``{"match_total", "volume_total"}`` of the source database, when the
+    run that made it verified them (its provenance record's count check), or
+    None. The filter's work units must read exactly this much."""
+    from lexichron.provenance import read_provenance
+    counts = ((read_provenance(src_db) or {}).get("figures") or {}).get("counts") or {}
+    if counts.get("status") != "verified" or counts.get("occurrences") is None or counts.get("volume_counts") is None:
+        return None
+    return {"match_total": int(counts["occurrences"]), "volume_total": int(counts["volume_counts"])}
 
 
 def combined_tokens_from_acquire(src_db) -> List[str]:

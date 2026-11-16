@@ -148,7 +148,7 @@ def test_worker_scans_without_filling_the_cache(rocks, tmp_path):
     from ngramprep.rangemap.worker import map_unit
     src = tmp_path / "src.db"
     _make_source(str(src), n=10)
-    chunks, scanned, kept, _, _stats, _written, _produced = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
+    chunks, scanned, kept, _, _stats, _written, _produced, _ledger = map_unit(0, "u0", None, None, str(src), LowerMapper(), str(tmp_path), 100)
     assert scanned == 21 and kept == 20 and len(chunks) == 1
     assert fake_rocks._REGISTRY[str(src)].last_iterator_opts == (False, 2 << 20)
 
@@ -253,3 +253,114 @@ def test_underscore_tokens_are_data_not_bookkeeping():
     assert not is_bookkeeping(b"__NOUN")
     assert not is_bookkeeping(b"____X the_DET cat_NOUN")
     assert not is_bookkeeping(b"_")
+
+
+# ---- the ledger: what each unit read and emitted, and the checks built on it ----------------
+
+def _source_totals(src):
+    """Occurrences and volume counts of every data record of a source."""
+    rows = [(k, v) for k, v in fake_rocks.dump(src).items()]
+    return (sum(f for _k, v in rows for _y, f, _d in _unpack(v)), sum(d for _k, v in rows for _y, _f, d in _unpack(v)))
+
+
+@pytest.mark.parametrize("output", ["sst", "chunks"])
+def test_units_record_what_they_read_and_emitted_and_the_database_is_verified(rocks, tmp_path, output):
+    from ngramprep.ngram_acquire.verify import ledger_totals, verify_database
+    from ngramprep.rangemap import UNIT_MARKER_PREFIX
+    src, dst = tmp_path / "src.db", tmp_path / "dst.db"
+    _make_source(str(src))
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=LowerMapper(), num_units=8, workers=2,
+                                smart_partitioning=False, chunk_entries=64, spool_dir=tmp_path, output=output))
+    markers = fake_rocks.markers(dst)
+    assert len(markers) == 8 and all("match_total" in m and "source_match" in m for m in markers.values())
+    # everything read, kept or not, adds up to what the source holds: every key lies in exactly one unit
+    read = (sum(m["source_match"] for m in markers.values()), sum(m["source_volume"] for m in markers.values()))
+    assert read == _source_totals(src)
+    # the 'drop' records were read and not emitted; the rest went out with their counts
+    dropped = (10 * 9, 10 * 9)
+    emitted = (sum(m["match_total"] for m in markers.values()), sum(m["volume_total"] for m in markers.values()))
+    assert emitted == (read[0] - dropped[0], read[1] - dropped[1])
+    assert all(m["reordered"] == 0 and m["source_disordered"] == 0 for m in markers.values())
+
+    v = verify_database(str(dst), 2, marker_prefix=UNIT_MARKER_PREFIX)
+    assert v["status"] == "verified" and (v["database"]["match_total"], v["database"]["volume_total"]) == emitted
+    assert v["ledger"]["shards"] == 8 and v["ledger"]["source_match"] == read[0]
+    store = fake_rocks._REGISTRY[str(dst)]
+    if output == "sst":
+        # a unit's records and its marker arrive in one ingest call: nothing is replayed, nothing flushed for it
+        assert store.ingested_files == 2 * store.ingests and store.flushes <= 8 - store.ingests + 2
+
+    # a unit taken in twice (its marker lost, the next run scans it again) is counted twice: the check finds it
+    victim = next(k for k, m in markers.items() if m["entries"])
+    lost = markers[victim]["match_total"]
+    del store.data[victim.encode()]
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=LowerMapper(), num_units=8, workers=2,
+                                smart_partitioning=False, chunk_entries=64, spool_dir=tmp_path, output=output))
+    v = verify_database(str(dst), 2, marker_prefix=UNIT_MARKER_PREFIX)
+    assert v["status"] == "mismatch" and v["database"]["match_total"] - v["ledger"]["match_total"] == lost
+
+
+def test_emitted_values_are_put_in_year_order_and_source_disorder_is_counted(rocks, tmp_path):
+    src, dst = tmp_path / "src.db", tmp_path / "dst.db"
+    db = fake_rocks.open(str(src), mode="rw", create_if_missing=True)
+    with db.write_batch() as wb:
+        wb.put(b"Fine", _packed((1990, 1, 1), (2000, 2, 2)))
+        wb.put(b"Odd", _packed((2000, 5, 1), (1990, 7, 2)))          # years out of order in the source
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=LowerMapper(), num_units=1, workers=1,
+                                smart_partitioning=False, spool_dir=tmp_path, output="sst"))
+    assert _unpack(fake_rocks.dump(dst)[b"odd"]) == [(1990, 7, 2), (2000, 5, 1)]
+    (marker,) = fake_rocks.markers(dst).values()
+    assert marker["source_disordered"] == 1 and marker["reordered"] == 1 and marker["match_total"] == 15
+
+
+def test_progress_is_republished_while_units_are_still_being_scanned(rocks, tmp_path, monkeypatch):
+    """A unit of a large database takes minutes. The parent republishes the
+    progress document meanwhile, with what the workers report of their units."""
+    from ngramprep.ngram_acquire.progress import ProgressReporter
+    from ngramprep.rangemap import engine as engine_mod, worker as worker_mod
+    monkeypatch.setattr(engine_mod, "_REFRESH_EVERY_S", 0.05)
+    monkeypatch.setattr(worker_mod, "_REPORT_EVERY_S", 0.0)
+    monkeypatch.setattr(worker_mod, "_BATCH", 16)
+    src, dst = tmp_path / "src.db", tmp_path / "dst.db"
+    _make_source(str(src), n=200)
+
+    class Slow(Mapper):
+        def build(self):
+            import time
+            def fn(key, value):
+                time.sleep(0.002)
+                return key.lower(), value
+            return fn
+
+    progress = ProgressReporter(tmp_path / "p.json", stage="filter", min_interval_s=0, unit_label="work units")
+    seen = []
+    real = progress.refresh
+    progress.refresh = lambda: (real(), seen.append(dict(read_progress(tmp_path / "p.json")["in_flight"])))[0]
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=Slow(), num_units=2, workers=2,
+                                smart_partitioning=False, spool_dir=tmp_path, output="sst", progress=progress))
+    assert len(seen) >= 2 and max(x["lines"] for x in seen) > 0          # records scanned in units not yet finished
+    assert read_progress(tmp_path / "p.json")["in_flight"] == {"lines": 0, "bytes": 0}
+
+
+def test_worker_log_entries_name_the_unit_and_what_is_being_done(rocks, tmp_path, caplog, monkeypatch):
+    import logging
+    from ngramprep.rangemap import worker as worker_mod
+    from ngramprep.rangemap.worker import map_unit
+    monkeypatch.setattr(worker_mod, "_REPORT_EVERY_S", 0.0)
+    monkeypatch.setattr(worker_mod, "_LOG_EVERY_S", 0.0)
+    monkeypatch.setattr(worker_mod, "_BATCH", 64)
+    src = tmp_path / "src.db"
+    _make_source(str(src), n=100)
+    with caplog.at_level(logging.INFO):
+        map_unit(2, "unit_a_m", b"W", b"x", str(src), LowerMapper(), str(tmp_path), 1000, output="sst", units_total=8)
+        with pytest.raises(RuntimeError):
+            map_unit(3, "unit_bad", None, None, str(src), LowerMapper(poison=b"word42"), str(tmp_path), 1000)
+    records = [r for r in caplog.records if r.name.startswith("rangemap.worker.")]
+    text = [r.getMessage() for r in records]
+    assert {r.name for r in records} == {"rangemap.worker.00"}                 # run in this process
+    good = [m for m in text if m.startswith("unit unit_a_m (3 of 8): ")]
+    assert good[0].startswith("unit unit_a_m (3 of 8): scanning keys b'W' to b'x'")
+    assert any("still scanning after" in m and "records read" in m and "kept so far" in m for m in good)
+    assert good[-1].startswith("unit unit_a_m (3 of 8): done in") and "in 1 SST file; waiting for the parent to ingest it" in good[-1]
+    bad = [r for r in records if "unit_bad" in r.getMessage() and r.levelname == "ERROR"]
+    assert len(bad) == 1 and "failed after" in bad[0].getMessage() and "poisoned record" in bad[0].getMessage()

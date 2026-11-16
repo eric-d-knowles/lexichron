@@ -24,6 +24,9 @@ from .worker import map_unit, set_inherited_mapper
 
 logger = logging.getLogger(__name__)
 
+# How often the parent republishes progress while it waits for a unit to finish.
+_REFRESH_EVERY_S = 5.0
+
 __all__ = ["Mapper", "RangeMapConfig", "RangeMapResult", "RangeMapError", "run_rangemap"]
 
 
@@ -134,6 +137,9 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
             progress.set_totals(files_total=len(units), files_skipped=len(done), prior=prior)
             log(f"{len(units)} work units: {len(done)} already done, {len(todo)} to process "
                 f"with {workers} workers")
+            logger.info("Work units: %d to scan, %d already in the destination, %d workers; each spools its unit as %s "
+                        "under %s", len(todo), len(done), workers,
+                        "one sorted SST file" if cfg.output == "sst" else "chunk files", spool_path)
 
             ingestor = ChunkIngestor(dst, marker_prefix=UNIT_MARKER_PREFIX)
             index_of = {u.unit_id: i for i, u in enumerate(units)}
@@ -154,12 +160,18 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                         fut = pool.submit(map_unit, index_of[u.unit_id], u.unit_id, u.start_key, u.end_key,
                                           str(cfg.src_db), None, spool_path, cfg.chunk_entries,
                                           cfg.read_profile, output=cfg.output,
-                                          sst_compression=cfg.sst_compression)
+                                          sst_compression=cfg.sst_compression, units_total=len(units))
                         futures[fut] = u
 
                 submit_next(max_in_flight)
                 while futures:
-                    ready, _ = wait(futures.keys(), return_when=FIRST_COMPLETED)
+                    # Wake every few seconds even if no unit has finished, to
+                    # republish progress: what the workers report of units
+                    # still being scanned, and a fresh "updated" time.
+                    ready, _ = wait(futures.keys(), timeout=_REFRESH_EVERY_S, return_when=FIRST_COMPLETED)
+                    if not ready:
+                        progress.refresh()
+                        continue
                     for fut in ready:
                         progress.file_parsed(futures[fut].unit_id)
                     for fut in ready:
@@ -167,10 +179,13 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                         tag = f"{index_of[u.unit_id]:05d}_{u.unit_id}"
                         chunk_paths: List[str] = []
                         try:
-                            chunk_paths, scanned, kept, secs, stats, entries, produced = fut.result()
+                            chunk_paths, scanned, kept, secs, stats, entries, produced, ledger = fut.result()
                             progress.file_ingesting(u.unit_id)
+                            # The marker records what the unit read and what it
+                            # emitted: the run's verification adds these up and
+                            # compares them with the source and the destination.
                             written = ingestor.ingest_file(u.unit_id, chunk_paths, entries=entries,
-                                                           extra={"scanned": scanned, "kept": kept, **stats})
+                                                           extra={"scanned": scanned, "kept": kept, **stats, **ledger})
                             scanned_total += scanned
                             kept_total += kept
                             produced_total += produced
@@ -184,14 +199,15 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                             progress.file_done(u.unit_id, entries=kept, chunks=len(chunk_paths),
                                                uncompressed_bytes=0,
                                                counters={"scanned": scanned, "kept": kept, "produced": produced,
-                                                         "inserted": written, **stats})
+                                                         "inserted": written, **stats, **ledger})
                             logger.info("Unit %s: scanned %s, kept %s, produced %s (%s entries after in-chunk merging), %.1fs",
                                         u.unit_id, f"{scanned:,}", f"{kept:,}", f"{produced:,}", f"{written:,}", secs)
                         except Exception as exc:
                             ChunkIngestor.discard(chunk_paths)
                             msg = f"{u.unit_id}: {exc}"
                             failed.append(msg)
-                            logger.error("Unit failed: %s", msg)
+                            logger.error("Unit %s was not ingested and is not marked (%s: %s); a re-run will scan it again",
+                                         u.unit_id, type(exc).__name__, exc)
                             progress.file_failed(u.unit_id, msg)
                         finally:
                             for ext in (".started", ".parsed"):
@@ -207,7 +223,11 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
                 # the database is already compacted).
                 with progress.long_phase("compacting"):
                     log("Compacting the destination database...")
+                    logger.info("Compacting: folding the units' SST files into one sorted database and summing the "
+                                "counts of records that arrived from more than one unit")
+                    t_compact = time.perf_counter()
                     dst.compact_all()
+                    logger.info("Compaction completed in %.0fs", time.perf_counter() - t_compact)
             if not failed:
                 # bookkeeping keys: one marker per unit plus the stored partition
                 progress.set_database(dst, compacted=bool(cfg.compact_after),
@@ -218,7 +238,12 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
     result = RangeMapResult(units_total=len(units), units_done=len(todo) - len(failed),
                             units_skipped=len(done), scanned=scanned_total, kept=kept_total, produced=produced_total,
                             seconds=time.perf_counter() - t_start, failed=failed)
+    logger.info("Work units and compaction finished in %.0fs: %d ingested, %d failed; %s records read, %s kept, %s made",
+                result.seconds, result.units_done, len(failed), f"{scanned_total:,}", f"{kept_total:,}",
+                f"{produced_total:,}")
     if failed:
+        logger.error("Stopping without compacting: %d work units failed. The destination holds the other units, "
+                     "each marked; a re-run scans only the missing ones", len(failed))
         progress.finish("failed", f"{len(failed)} work unit(s) failed")
         raise RangeMapError(f"{len(failed)} of {len(todo)} work units failed; completed units are "
                             f"in the database, re-run to retry the rest. First failure: {failed[0]}")

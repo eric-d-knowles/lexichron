@@ -47,7 +47,7 @@ filter:
   output_vocabulary_spell_check: true
   workers: 20
   mode: resume                 # resume | restart
-  compact_after_ingest: true
+  # verify_counts: true        # after compaction, check the database's counts against the run's own records
 
 tune:                          # hyperparameter search on sampled years (ngram_size 2-5)
   years: [1968, 2019]          # study period; sampled years are spread over it
