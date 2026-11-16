@@ -7,6 +7,40 @@ from lexichron.resources import available_cpus
 
 __all__ = ["filter_ngrams", "text_language_for", "combined_tokens_from_acquire"]
 
+# Languages in which a token's tag is used for its lemma (see
+# ngramprep.ngram_filter.lemmatizer.SpacyLemmatizer.TAG_LANGUAGES).
+TAG_LEMMA_LANGUAGES = ("en",)
+
+
+def _check_vocabulary_lemmas(vocabulary: str, by_tag: bool) -> None:
+    """Refuse a vocabulary whose lemmas were made the other way.
+
+    A vocabulary is a list of lemmas, and a token is kept only if its lemma
+    is on it. Lemmas made with tags differ from the lookup's for some words
+    ("building" the noun against "build"): filtering n-grams one way against
+    a vocabulary built the other would silently drop every such token. The
+    vocabulary's own record says how it was made; a file with no record
+    beside it (one you supplied) is taken as it is."""
+    from pathlib import Path
+    from lexichron.provenance import read_provenance
+    from ngramprep.ngram_filter.pipeline.orchestrator import LEMMAS_BY_TAG
+    record = read_provenance(Path(vocabulary).parent)
+    if not record or record.get("stage") != "filter":
+        return
+    if (record.get("settings") or {}).get("lemmatize", True) is False:
+        return                                      # a vocabulary of surface forms: nothing to compare
+    # The run records how it made its lemmas (its inputs' "lemmas"); a record
+    # from before tags were used has no such entry, and used the lookup.
+    made_by_tag = (record.get("inputs") or {}).get("lemmas") == LEMMAS_BY_TAG
+    if made_by_tag != by_tag:
+        how = {True: "with part-of-speech tags", False: "with the lookup table alone"}
+        raise ValueError(
+            f"The vocabulary {vocabulary} was built by lemmatizing {how[made_by_tag]}, and this run would "
+            f"lemmatize {how[by_tag]}: tokens whose lemma differs between the two would not be found on it "
+            f"and would be dropped. Run the unigram filter again so the vocabulary matches (it writes a new "
+            f"whitelist), or set lemmatize_by_tag: {str(made_by_tag).lower()} for this run.")
+
+
 # Google Books corpus id -> spaCy language code (stopwords and lemmatizer).
 _CORPUS_LANGUAGE = {
     "eng": "en", "eng-us": "en", "eng-gb": "en", "eng-fiction": "en",
@@ -29,6 +63,7 @@ def filter_ngrams(
     text_language: Optional[str] = None,
     lowercase: bool = True,
     lemmatize: bool = True,
+    lemmatize_by_tag: bool = True,
     drop_stopwords: bool = True,
     alpha_only: bool = True,
     ascii_only: Optional[bool] = None,
@@ -69,6 +104,21 @@ def filter_ngrams(
         lemmatize: Reduce tokens to their lemma (women -> woman) using spaCy's
             lookup tables for text_language. Also applied before a vocabulary
             lookup, since vocabularies are lists of lemmas.
+        lemmatize_by_tag: Use a token's part-of-speech tag when lemmatizing
+            (English, tagged n-grams). The lookup table has one lemma per
+            spelling, so the noun "building" and the verb both become
+            "build", and "leaves" is "leave" whether on a tree or out of a
+            room. With this on, a tagged noun, verb, adjective or adverb
+            gets the lemma spaCy's tables give for that part of speech
+            where they can vouch for it (an irregular form listed for it, or
+            a known base form), and the lookup's lemma otherwise: building
+            the noun stays "building", leaves the noun is "leaf", better the
+            adjective is "good". Nothing is ever stripped from a word the
+            tables do not know. A vocabulary must have been built the same
+            way as the n-grams filtered against it, so turning this on or
+            off means running the unigram filter again first; the stage
+            refuses a vocabulary made the other way. False = the lookup
+            alone, as before 0.12.
         drop_stopwords: Replace stopwords of text_language with <UNK>
         alpha_only: Replace tokens that are not purely alphabetic with <UNK>
         ascii_only: With alpha_only, also reject letters outside A-Z. Default:
@@ -94,7 +144,8 @@ def filter_ngrams(
             and stopword rules, so list every spelling you want kept (woman
             does not keep women). Tokens the acquire run combined
             (combined_multigrams) are added automatically from the raw
-            database's provenance record
+            database's provenance record, and those are not lemmatized
+            either: they stay as the acquire run's entries made them
         always_include_case: Spellings kept only when their capitalization
             matches exactly (AI keeps AI and not ai)
         output_vocabulary: Write a vocabulary file from the result
@@ -147,6 +198,9 @@ def filter_ngrams(
                 f"or set no_vocabulary to filter with the rules alone.")
         vocabulary = str(unigram)
         print(f"Vocabulary:   {vocabulary} (this corpus's unigram vocabulary)")
+    by_tag = bool(lemmatize and lemmatize_by_tag and lang in TAG_LEMMA_LANGUAGES)
+    if vocabulary and lemmatize:
+        _check_vocabulary_lemmas(vocabulary, by_tag)
 
     stop_set = None
     if drop_stopwords and vocabulary is None:
@@ -155,7 +209,8 @@ def filter_ngrams(
     lemma_gen = None
     if lemmatize:
         from ngramprep.ngram_filter.lemmatizer import CachedSpacyLemmatizer
-        lemma_gen = CachedSpacyLemmatizer(language=lang)
+        lemma_gen = CachedSpacyLemmatizer(language=lang, use_tags=by_tag)
+        print(f"Lemmas:       {'by part-of-speech tag where the tables vouch for it, else the lookup table' if by_tag else 'lookup table'}")
 
     paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     keep = [str(t) for t in (always_include or []) if str(t).strip()]
@@ -164,6 +219,9 @@ def filter_ngrams(
         print(f"Always keep:  {', '.join(handed)} (combined by the acquire run that made the raw database)")
         keep += handed
     keep_case = [str(t) for t in (always_include_case or []) if str(t).strip()]
+    combined = combined_tokens_from_acquire(paths["src_db"])
+    if combined and lemmatize:
+        print(f"Not lemmatized: {', '.join(combined)} (tokens the acquire run combined are kept as they were made)")
     filter_config = FilterConfig(
         lowercase=lowercase, alpha_only=alpha_only, ascii_alpha_only=ascii_only,
         filter_short=min_len > 1, filter_stops=drop_stopwords and stop_set is not None,
@@ -172,6 +230,7 @@ def filter_ngrams(
         whitelist_path=vocabulary, whitelist_top_n=vocabulary_top_n,
         always_include=set(keep) if keep else None,
         always_include_case=set(keep_case) if keep_case else None,
+        lemma_exempt=set(combined) if combined else None,
         bin_size=int(bin_size),
     )
     pipeline_config = PipelineConfig(
@@ -197,12 +256,16 @@ def combined_tokens_from_acquire(src_db) -> List[str]:
     record: each entry's target, or its words joined by hyphens. Empty when
     the database has no record or the run combined nothing. The filter
     stage keeps these automatically, since nothing else could: a unigram
-    vocabulary cannot contain them and the alphabetic rule would drop them."""
+    vocabulary cannot contain them and the alphabetic rule would drop them.
+    It does not lemmatize them either: each was made to the user's
+    specification, and stays as made (lowercased with everything else)."""
     from lexichron.provenance import read_provenance
     from ngramprep.ngram_acquire.io.parse import parse_multigram_entry
     record = read_provenance(src_db) or {}
     out: List[str] = []
-    for entry in (record.get("settings") or {}).get("combined_multigrams") or []:
+    settings = record.get("settings") or {}
+    # both lists: the sequences matched whatever their case, and those matched as written
+    for entry in list(settings.get("combined_multigrams") or []) + list(settings.get("combined_multigrams_case") or []):
         try:
             words, target = parse_multigram_entry(entry)
         except Exception:

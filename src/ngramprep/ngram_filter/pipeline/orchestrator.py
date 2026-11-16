@@ -30,6 +30,10 @@ from .whitelist import write_whitelist
 
 logger = logging.getLogger(__name__)
 
+# How a run made its lemmas, as recorded in its progress document and provenance.
+LEMMAS_BY_TAG = "by part-of-speech tag, else lookup table"
+LEMMAS_LOOKUP = "lookup table"
+
 __all__ = ["build_processed_db", "run_filter_pipeline", "derive_paths"]
 
 
@@ -93,9 +97,17 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
     logger.info("Source %s -> destination %s (mode %s, %s workers)", pc.src_db, pc.dst_db, pc.mode, pc.num_workers)
 
     vocab = getattr(filter_config, "whitelist_path", None)
+    # How lemmas were made is part of what this run's output is: a vocabulary
+    # built one way must not be used to filter n-grams lemmatized the other
+    # (lexichron.stages.filter reads this back from the vocabulary's record).
+    lemma_gen = filter_config.lemma_gen if filter_config.apply_lemmatization else None
+    lemmas = None
+    if lemma_gen is not None:
+        by_tag = getattr(lemma_gen, "_use_tags", getattr(lemma_gen, "use_tags", False))
+        lemmas = LEMMAS_BY_TAG if by_tag else LEMMAS_LOOKUP
     progress = ProgressReporter(progress_path, stage="filter", db_path=pc.dst_db, log_path=log_file,
                                 unit_label="work units",
-                                inputs={"source": pc.src_db, "vocabulary": vocab or None,
+                                inputs={"source": pc.src_db, "vocabulary": vocab or None, "lemmas": lemmas,
                                         "always_include": ", ".join(sorted(
                                             x.decode() if isinstance(x, bytes) else str(x)
                                             for x in (filter_config.always_include or ()))) or None,

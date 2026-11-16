@@ -36,6 +36,12 @@ class FilterConfig:
     always_include: Optional[AbstractSet[Union[str, bytes]]] = None
     always_include_case: Optional[AbstractSet[Union[str, bytes]]] = None
 
+    # Tokens that are never lemmatized, matched like always_include (on the
+    # spelling in the data, case-folded): the tokens an acquire run built
+    # from word sequences. Their form was chosen by the user, entry by entry;
+    # a lemmatizer has no business altering it.
+    lemma_exempt: Optional[AbstractSet[Union[str, bytes]]] = None
+
     # Year binning configuration
     bin_size: int = 1  # Aggregate years into bins (1 = annual data, 5 = 5-year bins, etc.)
 

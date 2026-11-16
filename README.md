@@ -512,7 +512,9 @@ Four things guard the counts.
 `lexichron filter` turns the acquired database (`<n>grams.db`, every raw
 n-gram as Google wrote it) into `<n>grams_processed.db`, where the text is
 normalized and the noise removed. Each token is lowercased, lemmatized
-(*women* → *woman*, with spaCy's tables for the corpus's language; the
+(*women* → *woman*, with spaCy's tables for the corpus's language, and
+for English with the token's part-of-speech tag where there is one: see
+*Lemmas and part of speech* below; the
 lemma is lowercased too, since spaCy's English table maps *truer* to
 `TRUE`) and then
 either checked against a vocabulary or put through the rule filters:
@@ -547,8 +549,40 @@ other; it only skips the rules that would drop it, so list every spelling you
 want kept (`woman` does not keep *women*). Tokens the acquire run built from
 word sequences (`combined_multigrams`, say `A.I.` and `working-class`) are kept
 without being listed, read from the raw database's provenance record; the UI
-shows them beside the list. In the UI the setting is an editor with a row per
-token and a *Match case* switch.
+shows them beside the list. Those tokens are not lemmatized either: each was
+made to your specification, entry by entry, and stays as made (lowercased
+with everything else). If you want a plural folded into its singular, say so
+where the token is made: `human beings => human-being`. In the UI the setting
+is an editor with a row per token and a *Match case* switch.
+
+**Lemmas and part of speech** (`lemmatize_by_tag`, on by default; English).
+spaCy's lookup table gives one lemma per spelling, whatever the word is doing:
+*building* becomes *build* whether it is a noun or a verb, and *leaves* is
+*leave* on a tree as much as out of a room. Google's tagged n-grams say which
+it is, and the filter uses that where spaCy's own tables can vouch for the
+answer. For a noun, verb, adjective or adverb:
+
+1. an irregular form listed for that part of speech wins (*leaves* the noun
+   is *leaf*; *better* the adjective is *good*);
+2. otherwise, if the lookup's lemma is one that part of speech can have, it
+   stands (*years* is *year*, *glasses* is *glass*, as before);
+3. otherwise the lookup's lemma belongs to another part of speech, and the
+   word keeps the form its own allows: *building* the noun stays *building*,
+   *left* the adjective stays *left*, *saw* the noun stays *saw*;
+4. a word the tables do not know, a tag of another kind, or no tag at all:
+   the lookup decides, as it always did.
+
+So the tag changes a lemma only when the lookup's answer is not a legitimate
+lemma for that part of speech, or an irregular form says otherwise. Nothing is
+ever stripped from a word the tables do not know, which is what spaCy's own
+rule lemmatizer does when it is given only a coarse tag (*business* →
+*busines*). The effect is that words the lookup merges across parts of speech
+come apart: *building* and *build*, *meeting* and *meet* are separate
+vocabulary items. A vocabulary must be made the same way as the n-grams
+filtered against it, or every such token would miss it; each run records how
+it made its lemmas, and the stage refuses a vocabulary made the other way, so
+after changing the setting (or on a corpus filtered before 0.12) run the
+unigram filter again first. `lemmatize_by_tag: false` is the lookup alone.
 
 The work is split into key ranges balanced by data volume (from the source
 database's own file metadata, so there is no pre-scan), worker processes

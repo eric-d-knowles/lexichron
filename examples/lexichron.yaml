@@ -31,6 +31,7 @@ filter:
   # text_language: en          # default: derived from the corpus (eng-us -> en)
   lowercase: true
   lemmatize: true
+  # lemmatize_by_tag: true     # English: use each token's tag (building the noun stays "building"); false = lookup table only
   drop_stopwords: true
   alpha_only: true
   # ascii_only: true           # default: on for English, off otherwise

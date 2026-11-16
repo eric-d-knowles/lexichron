@@ -80,3 +80,39 @@ def test_always_keep_matches_the_spelling_in_the_data_and_skips_every_rule():
     proc = build_processor(FilterConfig(lowercase=False, alpha_only=True, filter_short=True, min_len=3,
                                         always_include_case={"AI"}, always_include={"he"}, min_context_tokens=1))
     assert proc(b"AI He") == b"AI He"                             # no lowercasing: kept as they were
+
+
+# ---- the token's tag reaches the lemmatizer; combined tokens never do --------------
+
+class RecordingLemmatizer:
+    """Says what it was asked: the lemma is the word with its tag appended."""
+    def __init__(self): self.calls = []
+    def lemmatize(self, word, pos=None):
+        self.calls.append((word, pos))
+        return {"buildings": "building", "women": "woman"}.get(word, word)
+
+
+def test_kernel_hands_the_lemmatizer_each_tokens_own_tag():
+    lem = RecordingLemmatizer()
+    proc = build_processor(FilterConfig(lemma_gen=lem, lowercase=True, filter_stops=False, filter_short=False,
+                                        alpha_only=False, min_context_tokens=1))
+    assert proc(b"Buildings_NOUN building_VERB tall_ADJ quickly_ADV Paris_PROPN the_DET plain") == \
+        b"building building tall quickly paris the plain"
+    assert lem.calls == [("buildings", "NOUN"), ("building", "VERB"), ("tall", "ADJ"), ("quickly", "ADV"),
+                         ("paris", "PROPN"), ("the", "DET"),
+                         ("plain", None)]            # an untagged token is not taken for a noun
+
+
+def test_tokens_combined_at_acquisition_are_never_lemmatized():
+    """Their form was chosen by the user, entry by entry: the filter lowercases
+    them with everything else and otherwise leaves them as they were made."""
+    lem = RecordingLemmatizer()
+    proc = build_processor(FilterConfig(lemma_gen=lem, lowercase=True, filter_stops=False, filter_short=False,
+                                        alpha_only=False, min_context_tokens=1,
+                                        lemma_exempt={"Human-Beings", "women"}))
+    assert proc(b"Human-Beings_NOUN women_NOUN buildings_NOUN") == b"human-beings women building"
+    assert lem.calls == [("buildings", "NOUN")]          # the exempt ones were never asked about
+    # without the exemption the same tokens are lemmatized like any other
+    plain = build_processor(FilterConfig(lemma_gen=RecordingLemmatizer(), lowercase=True, filter_stops=False,
+                                         filter_short=False, alpha_only=False, min_context_tokens=1))
+    assert plain(b"women_NOUN") == b"woman"

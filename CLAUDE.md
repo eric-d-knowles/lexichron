@@ -107,6 +107,16 @@ in the image; tests create their own.
   read in full. Do not weaken any of this for speed; `spool_format="chunk"`
   is the old replay path, kept as the reference the SST path is tested
   against.
+- **Lemmas use the tag only where spaCy's tables vouch for it.** The lookup
+  table has one lemma per spelling; `ngram_filter/lemmatizer.py` lets a
+  token's Google tag override it only when an irregular form is listed for
+  that part of speech, or the lookup's lemma is not a base form that part
+  of speech has (English; nouns, verbs, adjectives, adverbs). spaCy's rule
+  lemmatizer is never run: with a coarse tag alone it strips suffixes from
+  words it should leave (business -> busines). A vocabulary and the n-grams
+  filtered against it must be lemmatized the same way; each filter run
+  records how (`inputs.lemmas`) and the stage refuses a mismatch. Tokens an
+  acquire run combined are never lemmatized: the user made them.
 - **Scores are files.** A tuning search keeps one JSON file per scored
   cell-year (`scores/`) and per year pair (`pairs/`); `results.tsv`,
   `pairs.tsv`, `summary.*` are exports. Readers derive from the files.

@@ -53,6 +53,8 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
     # case-folded list is held lowercased (bytes.lower, as the pipeline folds)
     always_include_b = {b.lower() for b in _to_bytes_set(cfg.always_include)} if cfg.always_include else None
     always_include_case_b = _to_bytes_set(cfg.always_include_case) if cfg.always_include_case else None
+    lemma_exempt = getattr(cfg, "lemma_exempt", None)
+    lemma_exempt_b = {b.lower() for b in _to_bytes_set(lemma_exempt)} if lemma_exempt else None
 
     outbuf = bytearray()  # reused per-processor
     import array
@@ -80,6 +82,7 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
             whitelist=cfg.whitelist,
             always_include=always_include_b,
             always_include_case=always_include_case_b,
+            lemma_exempt=lemma_exempt_b,
             outbuf=outbuf,
             stats=stats,
         )

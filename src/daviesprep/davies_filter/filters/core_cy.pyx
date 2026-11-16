@@ -199,8 +199,8 @@ cpdef bytes process_sentence(
                 pass  # Token is protected, skip lemmatization
             else:
                 tok_s = _decode_token(tok_b)
-                # Default to NOUN for Davies data (no POS tags)
-                res = lemma_gen.lemmatize(tok_s, pos="NOUN")
+                # Davies data carries no POS tags: the lookup table decides
+                res = lemma_gen.lemmatize(tok_s, pos=None)
                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)
                 if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")
                     tok_b = tok_b.lower()

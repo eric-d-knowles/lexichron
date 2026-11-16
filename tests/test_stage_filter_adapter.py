@@ -140,13 +140,15 @@ def test_filter_keeps_what_the_acquire_run_combined(rocks, no_spacy, tmp_path):
     db = fake_rocks.open(str(paths["src_db"]), mode="rw", create_if_missing=True)
     import struct
     with db.write_batch() as wb:
-        for key in (b"A.I.", b"a.i.", b"Working-Class", b"cats", b"xyzzy"):
+        for key in (b"A.I.", b"a.i.", b"Working-Class", b"cats", b"xyzzy", b"Running-Women", b"women"):
             wb.put(key, struct.pack("<3Q", 1990, 3, 1))
     db.close()
     (paths["src_db"] / "lexichron.json").write_text(json.dumps({
         "format": 1, "stage": "acquire",
-        "settings": {"combined_multigrams": ["a . i . => A.I.", "working class"]}}))
-    assert stage.combined_tokens_from_acquire(paths["src_db"]) == ["A.I.", "working-class"]
+        "settings": {"combined_multigrams": ["a . i . => A.I.", "working class"],
+                     "combined_multigrams_case": ["Running Women", "wo men => women"]}}))
+    # both lists: the sequences matched whatever their case, and those matched as written
+    assert stage.combined_tokens_from_acquire(paths["src_db"]) == ["A.I.", "working-class", "Running-Women", "women"]
     vocab = tmp_path / "vocab.txt"
     vocab.write_text("cat\t100\n")
     out = stage.filter_ngrams(1, "20200217", "eng", str(stub), vocabulary=str(vocab), workers=2, mode="restart",
@@ -154,5 +156,71 @@ def test_filter_keeps_what_the_acquire_run_combined(rocks, no_spacy, tmp_path):
     data = fake_rocks.dump(out)
     # A.I. and a.i. both match the handed-over spelling case-folded and are lowercased; Working-Class likewise;
     # cats -> cat is in the vocabulary; xyzzy is kept by the case list
-    assert set(data) == {b"a.i.", b"working-class", b"cat", b"xyzzy"}
+    # A combined token is not lemmatized either: "women", made by the user's own entry, stays "women"
+    # (the lemmatizer here would make it "woman"), and so does the hyphenated one
+    assert set(data) == {b"a.i.", b"working-class", b"cat", b"xyzzy", b"running-women", b"women"}
     assert stage.combined_tokens_from_acquire(tmp_path / "nowhere") == []
+
+
+def test_a_vocabulary_lemmatized_the_other_way_is_refused(rocks, no_spacy, tmp_path):
+    """A vocabulary is a list of lemmas. Lemmas made with tags differ from the
+    lookup's for some words, so n-grams filtered one way against a vocabulary
+    built the other would silently lose those tokens: the stage says so."""
+    import json
+    stub = tmp_path / "corpora"
+    uni = derive_paths(str(stub), 1, "20200217", "eng")
+    uni["dst_db"].mkdir(parents=True)
+    uni["whitelist"].write_text("cat\t100\n")
+    record = {"format": 1, "stage": "filter", "settings": {"repo_corpus_id": "eng"}, "inputs": {}}   # before 0.12
+    (uni["dst_db"] / "lexichron.json").write_text(json.dumps(record))
+    with pytest.raises(ValueError, match="built by lemmatizing with the lookup table alone.*Run the unigram filter again"):
+        stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, spool_dir=str(tmp_path))
+    with pytest.raises(ValueError, match="lookup table alone"):
+        stage._check_vocabulary_lemmas(str(uni["whitelist"]), True)
+    stage._check_vocabulary_lemmas(str(uni["whitelist"]), False)                # the same way: fine
+
+    # a run records how it made its lemmas, whether or not the setting was spelled out
+    from ngramprep.ngram_filter.pipeline.orchestrator import LEMMAS_BY_TAG, LEMMAS_LOOKUP
+    record["inputs"]["lemmas"] = LEMMAS_BY_TAG
+    (uni["dst_db"] / "lexichron.json").write_text(json.dumps(record))
+    stage._check_vocabulary_lemmas(str(uni["whitelist"]), True)
+    with pytest.raises(ValueError, match="built by lemmatizing with part-of-speech tags"):
+        stage._check_vocabulary_lemmas(str(uni["whitelist"]), False)
+    record["inputs"]["lemmas"] = LEMMAS_LOOKUP
+    (uni["dst_db"] / "lexichron.json").write_text(json.dumps(record))
+    stage._check_vocabulary_lemmas(str(uni["whitelist"]), False)
+    # a vocabulary of surface forms, and a file with no record beside it, are taken as they are
+    record["settings"]["lemmatize"] = False
+    (uni["dst_db"] / "lexichron.json").write_text(json.dumps(record))
+    stage._check_vocabulary_lemmas(str(uni["whitelist"]), True)
+    loose = tmp_path / "mine.txt"; loose.write_text("cat\n")
+    stage._check_vocabulary_lemmas(str(loose), True)
+
+
+def test_a_run_records_how_it_made_its_lemmas(rocks, tmp_path, monkeypatch):
+    """In the progress document's inputs, from where the provenance record takes it."""
+    import json
+    import ngramprep.ngram_filter.stopwords as sw
+    import ngramprep.ngram_filter.lemmatizer as lm
+    from ngramprep.ngram_filter.pipeline.orchestrator import LEMMAS_BY_TAG, LEMMAS_LOOKUP
+    made = []
+
+    class Lemmatizer(FakeLemmatizer):
+        def __init__(self, language=None, use_tags=True, **kw):
+            self._use_tags = use_tags; made.append((language, use_tags))
+
+    monkeypatch.setattr(sw, "load_stopwords", lambda lang: ({"the", "of"}, lang))
+    monkeypatch.setattr(lm, "CachedSpacyLemmatizer", Lemmatizer)
+    for corpus, setting, expected in (("eng", True, LEMMAS_BY_TAG), ("eng", False, LEMMAS_LOOKUP), ("ger", True, LEMMAS_LOOKUP)):
+        stub = tmp_path / f"{corpus}-{setting}"
+        paths = derive_paths(str(stub), 1, "20200217", corpus)
+        db = fake_rocks.open(str(paths["src_db"]), mode="rw", create_if_missing=True)
+        import struct
+        with db.write_batch() as wb:
+            wb.put(b"cats_NOUN", struct.pack("<3Q", 1990, 3, 1))
+        db.close()
+        progress = stub / "p.json"
+        stage.filter_ngrams(1, "20200217", corpus, str(stub), workers=2, mode="restart", spool_dir=str(tmp_path),
+                            lemmatize_by_tag=setting, progress_path=str(progress), output_vocabulary=False)
+        assert json.loads(progress.read_text())["inputs"]["lemmas"] == expected, (corpus, setting)
+    assert made == [("en", True), ("en", False), ("de", False)]      # tags are used in English only

@@ -121,7 +121,8 @@ cpdef bytes process_tokens(
     object always_include = None,
     object always_include_case = None,
     bytearray outbuf = None,
-    unsigned long long[::1] stats = None
+    unsigned long long[::1] stats = None,
+    object lemma_exempt = None
 ):
     """
     Bytes-only token pipeline:
@@ -136,6 +137,9 @@ cpdef bytes process_tokens(
                     other; it only skips the rules that replace tokens by
                     <UNK>: the vocabulary, alphabetic, length and stopword checks.
     always_include_case: the same, but the spelling must match exactly
+    lemma_exempt: tokens that are never lemmatized (lowercased bytes, matched
+        case-folded like always_include): the tokens an acquire run combined
+        from word sequences. They are still lowercased with opt_lower.
                     (b"AI" protects AI and not ai).
     stats: optional array of STAT_SLOTS unsigned 64-bit counters (see STAT_*)
            that this call adds to: what became of each token and the n-gram.
@@ -155,7 +159,9 @@ cpdef bytes process_tokens(
     cdef bint do_whitelist = (whitelist is not None)
     cdef bint do_always = (always_include is not None)
     cdef bint do_always_case = (always_include_case is not None)
+    cdef bint do_exempt = (lemma_exempt is not None)
     cdef bint protected
+    cdef bint exempt
     cdef bint do_alpha  = opt_alpha
     cdef bint do_shorts = opt_shorts
     cdef bint do_stops  = (opt_stops and stop_set is not None)
@@ -221,13 +227,20 @@ cpdef bytes process_tokens(
         elif do_always and base_b.lower() in always_include:
             protected = True
 
+        # A token built from a word sequence at acquisition is never
+        # lemmatized: its form was chosen by the user (matched like the
+        # case-folded always-keep list, on the spelling in the data)
+        exempt = do_exempt and base_b.lower() in lemma_exempt
+
         # Normalize token first (always needed)
         if do_lower:
             base_b = base_b.lower()
-        if do_lemmas:
+        if do_lemmas and not exempt:
             tok_s = _decode_token(base_b)
-            pos_s = wn_pos if wn_pos is not None else "NOUN"
-            res = lemma_gen.lemmatize(tok_s, pos=pos_s)
+            # The token's own tag, or None for a token without one: the
+            # lemmatizer uses a tag only where its tables can vouch for the
+            # result, and an untagged token must not be taken for a noun.
+            res = lemma_gen.lemmatize(tok_s, pos=wn_pos)
             normalized_token = _encode_token(<str> res, False)
             # a lookup lemmatizer can change case (spaCy's English table maps
             # truer/truest -> "TRUE", falser/falsest -> "FALSE"): lowercase

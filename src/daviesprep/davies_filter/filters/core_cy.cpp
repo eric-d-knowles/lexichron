@@ -3633,7 +3633,7 @@ namespace {
     PyObject *__pyx_slice[1];
     PyObject *__pyx_tuple[4];
     PyObject *__pyx_codeobj_tab[1];
-    PyObject *__pyx_string_tab[123];
+    PyObject *__pyx_string_tab[122];
     PyObject *__pyx_number_tab[5];
 /* #### Code section: module_state_contents ### */
 /* PyFrozenDict.module_state_decls */
@@ -3711,101 +3711,100 @@ static __pyx_mstatetype * const __pyx_mstate_global = &__pyx_mstate_global_stati
 #define __pyx_kp_u_unable_to_allocate_shape_and_str __pyx_string_tab[25]
 #define __pyx_n_u_ASCII __pyx_string_tab[26]
 #define __pyx_n_u_Ellipsis __pyx_string_tab[27]
-#define __pyx_n_u_NOUN __pyx_string_tab[28]
-#define __pyx_n_u_SENTINEL_B __pyx_string_tab[29]
-#define __pyx_n_u_Sequence __pyx_string_tab[30]
-#define __pyx_n_u_View_MemoryView __pyx_string_tab[31]
-#define __pyx_n_u_Pyx_PyDict_NextRef __pyx_string_tab[32]
-#define __pyx_n_u_annotate __pyx_string_tab[33]
-#define __pyx_n_u_class __pyx_string_tab[34]
-#define __pyx_n_u_class_getitem __pyx_string_tab[35]
-#define __pyx_n_u_dict __pyx_string_tab[36]
-#define __pyx_n_u_func __pyx_string_tab[37]
-#define __pyx_n_u_getstate __pyx_string_tab[38]
-#define __pyx_n_u_import __pyx_string_tab[39]
-#define __pyx_n_u_len __pyx_string_tab[40]
-#define __pyx_n_u_main __pyx_string_tab[41]
-#define __pyx_n_u_module __pyx_string_tab[42]
-#define __pyx_n_u_name_2 __pyx_string_tab[43]
-#define __pyx_n_u_new __pyx_string_tab[44]
-#define __pyx_n_u_pyx_checksum __pyx_string_tab[45]
-#define __pyx_n_u_pyx_state __pyx_string_tab[46]
-#define __pyx_n_u_pyx_type __pyx_string_tab[47]
-#define __pyx_n_u_pyx_unpickle_Enum __pyx_string_tab[48]
-#define __pyx_n_u_pyx_vtable __pyx_string_tab[49]
-#define __pyx_n_u_qualname __pyx_string_tab[50]
-#define __pyx_n_u_reduce __pyx_string_tab[51]
-#define __pyx_n_u_reduce_cython __pyx_string_tab[52]
-#define __pyx_n_u_reduce_ex __pyx_string_tab[53]
-#define __pyx_n_u_set_name __pyx_string_tab[54]
-#define __pyx_n_u_setstate __pyx_string_tab[55]
-#define __pyx_n_u_setstate_cython __pyx_string_tab[56]
-#define __pyx_n_u_test __pyx_string_tab[57]
-#define __pyx_n_u_is_coroutine __pyx_string_tab[58]
-#define __pyx_n_u_abc __pyx_string_tab[59]
-#define __pyx_n_u_allocate_buffer __pyx_string_tab[60]
-#define __pyx_n_u_always_include __pyx_string_tab[61]
-#define __pyx_n_u_append __pyx_string_tab[62]
-#define __pyx_n_u_asyncio_coroutines __pyx_string_tab[63]
-#define __pyx_n_u_base __pyx_string_tab[64]
-#define __pyx_n_u_c __pyx_string_tab[65]
-#define __pyx_n_u_clear __pyx_string_tab[66]
-#define __pyx_n_u_cline_in_traceback __pyx_string_tab[67]
-#define __pyx_n_u_count __pyx_string_tab[68]
-#define __pyx_n_u_daviesprep_davies_filter_filters __pyx_string_tab[69]
-#define __pyx_n_u_dtype_is_object __pyx_string_tab[70]
-#define __pyx_n_u_encode __pyx_string_tab[71]
-#define __pyx_n_u_enumerate __pyx_string_tab[72]
-#define __pyx_n_u_error __pyx_string_tab[73]
-#define __pyx_n_u_extend __pyx_string_tab[74]
-#define __pyx_n_u_flags __pyx_string_tab[75]
-#define __pyx_n_u_format __pyx_string_tab[76]
-#define __pyx_n_u_fortran __pyx_string_tab[77]
-#define __pyx_n_u_id __pyx_string_tab[78]
-#define __pyx_n_u_index __pyx_string_tab[79]
-#define __pyx_n_u_isalpha __pyx_string_tab[80]
-#define __pyx_n_u_items __pyx_string_tab[81]
-#define __pyx_n_u_itemsize __pyx_string_tab[82]
-#define __pyx_n_u_lemma_gen __pyx_string_tab[83]
-#define __pyx_n_u_lemmatize __pyx_string_tab[84]
-#define __pyx_n_u_lower __pyx_string_tab[85]
-#define __pyx_n_u_memview __pyx_string_tab[86]
-#define __pyx_n_u_min_context_tokens __pyx_string_tab[87]
-#define __pyx_n_u_min_len __pyx_string_tab[88]
-#define __pyx_n_u_mode __pyx_string_tab[89]
-#define __pyx_n_u_name __pyx_string_tab[90]
-#define __pyx_n_u_ndim __pyx_string_tab[91]
-#define __pyx_n_u_obj __pyx_string_tab[92]
-#define __pyx_n_u_opt_alpha __pyx_string_tab[93]
-#define __pyx_n_u_opt_ascii_alpha_only __pyx_string_tab[94]
-#define __pyx_n_u_opt_lemmas __pyx_string_tab[95]
-#define __pyx_n_u_opt_lower __pyx_string_tab[96]
-#define __pyx_n_u_opt_shorts __pyx_string_tab[97]
-#define __pyx_n_u_opt_stops __pyx_string_tab[98]
-#define __pyx_n_u_outbuf __pyx_string_tab[99]
-#define __pyx_n_u_pack __pyx_string_tab[100]
-#define __pyx_n_u_pop __pyx_string_tab[101]
-#define __pyx_n_u_pos __pyx_string_tab[102]
-#define __pyx_n_u_process_sentence __pyx_string_tab[103]
-#define __pyx_n_u_register __pyx_string_tab[104]
-#define __pyx_n_u_sentence __pyx_string_tab[105]
-#define __pyx_n_u_setdefault __pyx_string_tab[106]
-#define __pyx_n_u_shape __pyx_string_tab[107]
-#define __pyx_n_u_size __pyx_string_tab[108]
-#define __pyx_n_u_start __pyx_string_tab[109]
-#define __pyx_n_u_step __pyx_string_tab[110]
-#define __pyx_n_u_stop __pyx_string_tab[111]
-#define __pyx_n_u_stop_set __pyx_string_tab[112]
-#define __pyx_n_u_struct __pyx_string_tab[113]
-#define __pyx_n_u_unpack __pyx_string_tab[114]
-#define __pyx_n_u_update __pyx_string_tab[115]
-#define __pyx_n_u_values __pyx_string_tab[116]
-#define __pyx_n_u_whitelist __pyx_string_tab[117]
-#define __pyx_n_u_x __pyx_string_tab[118]
-#define __pyx_kp_b__5 __pyx_string_tab[119]
-#define __pyx_kp_b_UNK __pyx_string_tab[120]
-#define __pyx_n_b_O __pyx_string_tab[121]
-#define __pyx_kp_b_iso88591_r_A_q_d_G1_T_j_q_wc_fA_aq_Ba_b __pyx_string_tab[122]
+#define __pyx_n_u_SENTINEL_B __pyx_string_tab[28]
+#define __pyx_n_u_Sequence __pyx_string_tab[29]
+#define __pyx_n_u_View_MemoryView __pyx_string_tab[30]
+#define __pyx_n_u_Pyx_PyDict_NextRef __pyx_string_tab[31]
+#define __pyx_n_u_annotate __pyx_string_tab[32]
+#define __pyx_n_u_class __pyx_string_tab[33]
+#define __pyx_n_u_class_getitem __pyx_string_tab[34]
+#define __pyx_n_u_dict __pyx_string_tab[35]
+#define __pyx_n_u_func __pyx_string_tab[36]
+#define __pyx_n_u_getstate __pyx_string_tab[37]
+#define __pyx_n_u_import __pyx_string_tab[38]
+#define __pyx_n_u_len __pyx_string_tab[39]
+#define __pyx_n_u_main __pyx_string_tab[40]
+#define __pyx_n_u_module __pyx_string_tab[41]
+#define __pyx_n_u_name_2 __pyx_string_tab[42]
+#define __pyx_n_u_new __pyx_string_tab[43]
+#define __pyx_n_u_pyx_checksum __pyx_string_tab[44]
+#define __pyx_n_u_pyx_state __pyx_string_tab[45]
+#define __pyx_n_u_pyx_type __pyx_string_tab[46]
+#define __pyx_n_u_pyx_unpickle_Enum __pyx_string_tab[47]
+#define __pyx_n_u_pyx_vtable __pyx_string_tab[48]
+#define __pyx_n_u_qualname __pyx_string_tab[49]
+#define __pyx_n_u_reduce __pyx_string_tab[50]
+#define __pyx_n_u_reduce_cython __pyx_string_tab[51]
+#define __pyx_n_u_reduce_ex __pyx_string_tab[52]
+#define __pyx_n_u_set_name __pyx_string_tab[53]
+#define __pyx_n_u_setstate __pyx_string_tab[54]
+#define __pyx_n_u_setstate_cython __pyx_string_tab[55]
+#define __pyx_n_u_test __pyx_string_tab[56]
+#define __pyx_n_u_is_coroutine __pyx_string_tab[57]
+#define __pyx_n_u_abc __pyx_string_tab[58]
+#define __pyx_n_u_allocate_buffer __pyx_string_tab[59]
+#define __pyx_n_u_always_include __pyx_string_tab[60]
+#define __pyx_n_u_append __pyx_string_tab[61]
+#define __pyx_n_u_asyncio_coroutines __pyx_string_tab[62]
+#define __pyx_n_u_base __pyx_string_tab[63]
+#define __pyx_n_u_c __pyx_string_tab[64]
+#define __pyx_n_u_clear __pyx_string_tab[65]
+#define __pyx_n_u_cline_in_traceback __pyx_string_tab[66]
+#define __pyx_n_u_count __pyx_string_tab[67]
+#define __pyx_n_u_daviesprep_davies_filter_filters __pyx_string_tab[68]
+#define __pyx_n_u_dtype_is_object __pyx_string_tab[69]
+#define __pyx_n_u_encode __pyx_string_tab[70]
+#define __pyx_n_u_enumerate __pyx_string_tab[71]
+#define __pyx_n_u_error __pyx_string_tab[72]
+#define __pyx_n_u_extend __pyx_string_tab[73]
+#define __pyx_n_u_flags __pyx_string_tab[74]
+#define __pyx_n_u_format __pyx_string_tab[75]
+#define __pyx_n_u_fortran __pyx_string_tab[76]
+#define __pyx_n_u_id __pyx_string_tab[77]
+#define __pyx_n_u_index __pyx_string_tab[78]
+#define __pyx_n_u_isalpha __pyx_string_tab[79]
+#define __pyx_n_u_items __pyx_string_tab[80]
+#define __pyx_n_u_itemsize __pyx_string_tab[81]
+#define __pyx_n_u_lemma_gen __pyx_string_tab[82]
+#define __pyx_n_u_lemmatize __pyx_string_tab[83]
+#define __pyx_n_u_lower __pyx_string_tab[84]
+#define __pyx_n_u_memview __pyx_string_tab[85]
+#define __pyx_n_u_min_context_tokens __pyx_string_tab[86]
+#define __pyx_n_u_min_len __pyx_string_tab[87]
+#define __pyx_n_u_mode __pyx_string_tab[88]
+#define __pyx_n_u_name __pyx_string_tab[89]
+#define __pyx_n_u_ndim __pyx_string_tab[90]
+#define __pyx_n_u_obj __pyx_string_tab[91]
+#define __pyx_n_u_opt_alpha __pyx_string_tab[92]
+#define __pyx_n_u_opt_ascii_alpha_only __pyx_string_tab[93]
+#define __pyx_n_u_opt_lemmas __pyx_string_tab[94]
+#define __pyx_n_u_opt_lower __pyx_string_tab[95]
+#define __pyx_n_u_opt_shorts __pyx_string_tab[96]
+#define __pyx_n_u_opt_stops __pyx_string_tab[97]
+#define __pyx_n_u_outbuf __pyx_string_tab[98]
+#define __pyx_n_u_pack __pyx_string_tab[99]
+#define __pyx_n_u_pop __pyx_string_tab[100]
+#define __pyx_n_u_pos __pyx_string_tab[101]
+#define __pyx_n_u_process_sentence __pyx_string_tab[102]
+#define __pyx_n_u_register __pyx_string_tab[103]
+#define __pyx_n_u_sentence __pyx_string_tab[104]
+#define __pyx_n_u_setdefault __pyx_string_tab[105]
+#define __pyx_n_u_shape __pyx_string_tab[106]
+#define __pyx_n_u_size __pyx_string_tab[107]
+#define __pyx_n_u_start __pyx_string_tab[108]
+#define __pyx_n_u_step __pyx_string_tab[109]
+#define __pyx_n_u_stop __pyx_string_tab[110]
+#define __pyx_n_u_stop_set __pyx_string_tab[111]
+#define __pyx_n_u_struct __pyx_string_tab[112]
+#define __pyx_n_u_unpack __pyx_string_tab[113]
+#define __pyx_n_u_update __pyx_string_tab[114]
+#define __pyx_n_u_values __pyx_string_tab[115]
+#define __pyx_n_u_whitelist __pyx_string_tab[116]
+#define __pyx_n_u_x __pyx_string_tab[117]
+#define __pyx_kp_b__5 __pyx_string_tab[118]
+#define __pyx_kp_b_UNK __pyx_string_tab[119]
+#define __pyx_n_b_O __pyx_string_tab[120]
+#define __pyx_kp_b_iso88591_r_A_q_d_G1_T_j_q_wc_fA_aq_Ba_b __pyx_string_tab[121]
 #define __pyx_int_0 __pyx_number_tab[0]
 #define __pyx_int_neg_1 __pyx_number_tab[1]
 #define __pyx_int_2 __pyx_number_tab[2]
@@ -3843,7 +3842,7 @@ static CYTHON_SMALL_CODE int __pyx_m_clear(PyObject *m) {
   for (int i=0; i<1; ++i) { Py_CLEAR(clear_module_state->__pyx_slice[i]); }
   for (int i=0; i<4; ++i) { Py_CLEAR(clear_module_state->__pyx_tuple[i]); }
   for (int i=0; i<1; ++i) { Py_CLEAR(clear_module_state->__pyx_codeobj_tab[i]); }
-  for (int i=0; i<123; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
+  for (int i=0; i<122; ++i) { Py_CLEAR(clear_module_state->__pyx_string_tab[i]); }
   for (int i=0; i<5; ++i) { Py_CLEAR(clear_module_state->__pyx_number_tab[i]); }
 /* #### Code section: module_state_clear_contents ### */
 /* CommonTypesMetaclass.module_state_clear */
@@ -3885,7 +3884,7 @@ static CYTHON_SMALL_CODE int __pyx_m_traverse(PyObject *m, visitproc visit, void
   for (int i=0; i<1; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_slice[i]); }
   for (int i=0; i<4; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_tuple[i]); }
   for (int i=0; i<1; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_codeobj_tab[i]); }
-  for (int i=0; i<123; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
+  for (int i=0; i<122; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_string_tab[i]); }
   for (int i=0; i<5; ++i) { __Pyx_VISIT_CONST(traverse_module_state->__pyx_number_tab[i]); }
 /* #### Code section: module_state_traverse_contents ### */
 /* CommonTypesMetaclass.module_state_traverse */
@@ -19855,8 +19854,8 @@ static PyObject *__pyx_f_10daviesprep_13davies_filter_7filters_7core_cy_process_
  *                 pass  # Token is protected, skip lemmatization
  *             else:
  *                 tok_s = _decode_token(tok_b)             # <<<<<<<<<<<<<<
- *                 # Default to NOUN for Davies data (no POS tags)
- *                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")
+ *                 # Davies data carries no POS tags: the lookup table decides
+ *                 res = lemma_gen.lemmatize(tok_s, pos=None)
 */
       /*else*/ {
         __pyx_t_5 = __pyx_f_10daviesprep_13davies_filter_7filters_7core_cy__decode_token(__pyx_v_tok_b); if (unlikely(!__pyx_t_5)) __PYX_ERR(0, 201, __pyx_L1_error)
@@ -19866,8 +19865,8 @@ static PyObject *__pyx_f_10daviesprep_13davies_filter_7filters_7core_cy_process_
 
         /* "daviesprep/davies_filter/filters/core_cy.pyx":203
  *                 tok_s = _decode_token(tok_b)
- *                 # Default to NOUN for Davies data (no POS tags)
- *                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")             # <<<<<<<<<<<<<<
+ *                 # Davies data carries no POS tags: the lookup table decides
+ *                 res = lemma_gen.lemmatize(tok_s, pos=None)             # <<<<<<<<<<<<<<
  *                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)
  *                 if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")
 */
@@ -19875,7 +19874,7 @@ static PyObject *__pyx_f_10daviesprep_13davies_filter_7filters_7core_cy_process_
         __Pyx_INCREF(__pyx_t_1);
         __pyx_t_6 = 0;
         {
-          PyObject *__pyx_callargs[3] = {__pyx_t_1, __pyx_v_tok_s, __pyx_mstate_global->__pyx_n_u_NOUN};
+          PyObject *__pyx_callargs[3] = {__pyx_t_1, __pyx_v_tok_s, Py_None};
           #if CYTHON_VECTORCALL
           __pyx_t_12 = __pyx_mstate_global->__pyx_tuple[2];
           if (unlikely(!__pyx_t_12)) __PYX_ERR(0, 203, __pyx_L1_error)
@@ -19898,8 +19897,8 @@ static PyObject *__pyx_f_10daviesprep_13davies_filter_7filters_7core_cy_process_
         __pyx_t_5 = 0;
 
         /* "daviesprep/davies_filter/filters/core_cy.pyx":204
- *                 # Default to NOUN for Davies data (no POS tags)
- *                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")
+ *                 # Davies data carries no POS tags: the lookup table decides
+ *                 res = lemma_gen.lemmatize(tok_s, pos=None)
  *                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)             # <<<<<<<<<<<<<<
  *                 if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")
  *                     tok_b = tok_b.lower()
@@ -19910,7 +19909,7 @@ static PyObject *__pyx_f_10daviesprep_13davies_filter_7filters_7core_cy_process_
         __pyx_t_5 = 0;
 
         /* "daviesprep/davies_filter/filters/core_cy.pyx":205
- *                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")
+ *                 res = lemma_gen.lemmatize(tok_s, pos=None)
  *                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)
  *                 if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")             # <<<<<<<<<<<<<<
  *                     tok_b = tok_b.lower()
@@ -19932,7 +19931,7 @@ static PyObject *__pyx_f_10daviesprep_13davies_filter_7filters_7core_cy_process_
           __pyx_t_5 = 0;
 
           /* "daviesprep/davies_filter/filters/core_cy.pyx":205
- *                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")
+ *                 res = lemma_gen.lemmatize(tok_s, pos=None)
  *                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)
  *                 if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")             # <<<<<<<<<<<<<<
  *                     tok_b = tok_b.lower()
@@ -22957,8 +22956,8 @@ static int __Pyx_InitCachedConstants(__pyx_mstatetype *__pyx_mstate) {
 
   /* "daviesprep/davies_filter/filters/core_cy.pyx":203
  *                 tok_s = _decode_token(tok_b)
- *                 # Default to NOUN for Davies data (no POS tags)
- *                 res = lemma_gen.lemmatize(tok_s, pos="NOUN")             # <<<<<<<<<<<<<<
+ *                 # Davies data carries no POS tags: the lookup table decides
+ *                 res = lemma_gen.lemmatize(tok_s, pos=None)             # <<<<<<<<<<<<<<
  *                 tok_b = _encode_token(<str> res, opt_ascii_alpha_only)
  *                 if do_lower:                 # a lookup lemma can change case (spaCy: truer -> "TRUE")
 */
@@ -23042,38 +23041,38 @@ static int __Pyx_InitConstants(__pyx_mstatetype *__pyx_mstate) {
   int __pyx_clineno = 0;
   CYTHON_UNUSED_VAR(__pyx_mstate);
   {
-    const struct { const unsigned int length: 8; } str_length_index[] = {{6},{8},{1},{2},{15},{23},{25},{32},{20},{22},{1},{1},{37},{45},{22},{179},{8},{15},{7},{6},{2},{9},{50},{48},{30},{37},{5},{8},{4},{10},{8},{15},{20},{12},{9},{17},{8},{8},{12},{10},{7},{8},{10},{8},{7},{14},{11},{10},{19},{14},{12},{10},{17},{13},{12},{12},{19},{8},{13},{3},{15},{14},{6},{18},{4},{1},{5},{18},{5},{40},{15},{6},{9},{5},{6},{5},{6},{7},{2},{5},{7},{5},{8},{9},{9},{5},{7},{18},{7},{4},{4},{4},{3},{9},{20},{10},{9},{10},{9},{6},{4},{3},{3},{16},{8},{8},{10},{5},{4},{5},{4},{4},{8},{6},{6},{6},{6},{9},{1}};
+    const struct { const unsigned int length: 8; } str_length_index[] = {{6},{8},{1},{2},{15},{23},{25},{32},{20},{22},{1},{1},{37},{45},{22},{179},{8},{15},{7},{6},{2},{9},{50},{48},{30},{37},{5},{8},{10},{8},{15},{20},{12},{9},{17},{8},{8},{12},{10},{7},{8},{10},{8},{7},{14},{11},{10},{19},{14},{12},{10},{17},{13},{12},{12},{19},{8},{13},{3},{15},{14},{6},{18},{4},{1},{5},{18},{5},{40},{15},{6},{9},{5},{6},{5},{6},{7},{2},{5},{7},{5},{8},{9},{9},{5},{7},{18},{7},{4},{4},{4},{3},{9},{20},{10},{9},{10},{9},{6},{4},{3},{3},{16},{8},{8},{10},{5},{4},{5},{4},{4},{8},{6},{6},{6},{6},{9},{1}};
     const struct { const unsigned int length: 10; } bytes_length_index[] = {{0},{5},{1},{707}};
     #ifndef CYTHON_COMPRESS_STRINGS
       #define CYTHON_COMPRESS_STRINGS 90
     #endif
-    #if (CYTHON_COMPRESS_STRINGS) == 1 /* compression: zlib (1340 bytes) */
-static const char cstring[] = "x\332}TAo\0239\024\246K\272\0045@CCK\240\200[P#V\020\266lA\210\255@\201\r\253j\227B\266\300\036G\216\347%1\235\330\223\261\247M\220V\342\230\343\034\3478\3079\346\310q\217\034{\234c~B\177\302>\317$mY\241F\023\373\371\371\371\363{\337{\317\204j\362s\237\310\346G`\372Y\365)\331|\r]\351\r>p\330\047\262E6\231\024\232\267}\351+B\205Ml\356\031\303\377\253\271\230n(\355q\033\354\023\306Dz\247\356\177\253;\262|\366\374%\025BjB\225\342mA\264$\036P\373\276\024\316\200tS\047\367\320\311-\261G\035n\223\256\264\341\036\201\276\213g\021\252\302*\346\336JKz\332\243\242r\217\264\021jj\254:\324\005\274\212\320>Wd[j \272\203L\274\034\350\216\024\004u68\274\t\036\325\200\267\031\377\020\3253F\202\274\255\277\275\277\361d#\365\326\003\303\233\"\312o2\007\035\005eHk\372\334\321\210\256\007.\250*\331j\221\201\364\211\000\364\013\243p\321\356\344\001\335\001A\024h#\220J\0323\325\\\n\013\217s\321\256Lh\342{`N\277\242\216\202*\265m\013\355\200I\3071{R\250*m2\233+\332t\000\204\031\333\214\253L\262\205\304\200Z\324w4\261,\017l\237\201e\021\333O\021\205\024\3671\300=N\035\334e\\pmY\312c\017l\212\004+\327\003w\"Z-\214\013\274\007\331\244\0360\351\201\305\006Uw\320\367\323\213\014\034u\034\311\2207B=\217\016\210M5\255~g7K\201\3410\313\276\252\326v^nm\325\035\207\273\212\253\3557\357\267w\352\333\357\266\266\353\177Z/v\240\347\203``\252\262z\\\240\226\365v\320\307\377o\230\035k\033\372\372/hY\326\204A\214\020\2431\034\037\013m\320\\C\327(ls\006\177-_03\343\226\232\236\342]\027\313\306H\016\0103u)\317fi\373Nj\"h7\233\215\027\226\205\014X\254\003lW\371\335l5\0013\242)\203L\362\205\313\331.\"\324\305\324nO\033j\014F\317\247\316\024v\232\243#\211\245\225yB\001}\263\300\2629rE\235\210\340H>>\247A\231\220\270\2620m\322\307\372\004\254\230i>\254\246\337ja\275;\373t\240,.\230\343\333@]\027\204M\325@0.\253G\307T\223*`\314\001\3521\007\327hna\2231hR\266\313\244/\364q\345T\277\251\234\352\244r\252\223\312\261Sj\320\245\354\375\301\024c\027\003r\223v\036x\036\232\365Qm\267\034\332V\330\313]\252\047\035\315m|"")\000\333\227:n\207\232\254\252l\370\004\016t\273\024\023*RA\033\215\334\007\017\337\014\363`t\321[\363z!\260\245\345.\010e4\230h\363\202\030.\361\001\352\242?\322\325V\212\235\n\212q\236--\363\000\031]\212\256R\311\300\033Au\320\271T\245\264t\025\322\205\264\272\310\212+]W\"!\222\001\226!\266\245\211\025<hse\370\230\2541k\2236M\273\303\304\202YDD\rn\n\210\377,\265\236\3174\026\023\"\373.v\030\340\263\346\203\332\357 \005\016B\3667\337o\377\361\354\315\347\231\361\225\305\004?\262\222,.\031\001\307\233\267\222\205\222\021\226\256\232o\371\006\216\207\253gf\313a>\312\3073I\356\334go\2700\254%\371K\303\336\341\217gf\257\207+I\356z\370kd\307?\215~\377\262\236\344\256\031\315\265L\3754z\027\227G\225/\305$w3\374\030\237\213{I\356v\364\334h\314\341\374\347\375!\013\212I\276\030\224\303\225q\376\342\260\025\324\314\306\322\301\342ZD\243\3368w5\234\031\347V#D#\321\314a\351\314\354\334pu\370bH\215q3\370!X\r\352\341\2558\027\327\342w\243\205Q-)\024\r\336\334\360\341p\047\230I\n\027\222|)@oO3\276\034\254\340\235\347\213\007\363w\343b\\\031]\0315\277\314\375\373\344\353\303\257\r\243\277\034\030_\317\027\206\353I\241\204\000\213a\3570o\326\217\203\005\204.\\\t\032\343\013\027\223\302\245\341^\360wX\033\317/\004\033\007Kw\343\205\370U\032y\351F\330\230\000\214\321\310?(\255!Yk\243\263\243\365$\263\275\207\0165\306\245\245\3000Z^\215\212\210_\276\226,\337\211^\217\212\243\225d\371V\250\017no\214j\243FB\320G\264\272\261\026M@7\206\373\201\215l\177\007\372\021&\355l\3640j\234\360\341\024\363\307\341BX\373\256\351\301\245\225\250\024}\210\177\211)n\025\313\341\205\250\021\321\361\374b\300\303O)g%tm\376j\252o\305\365Q\321\340\255\047\245\345\260\036-F\275#\3760\233I\241\034\026\307F\032c\2326\003/,&\205\313A%,\342U\230\247v\320\010h\222\317\310\230\275\023m\306\036\302a\335\375\023\2740\033Xw\343\334\334\360Q0\023\024\377\003AUJ+";
-    PyObject *data = __Pyx_DecompressString(cstring, 1340, 1);
+    #if (CYTHON_COMPRESS_STRINGS) == 1 /* compression: zlib (1335 bytes) */
+static const char cstring[] = "x\332}TAo\023G\024&\305)F1\020c\223`\0100\t(\026\025\230\206\006\204h\0042\324TQK\212\033J\217\253\361\354\263=d=\263\336\231Ml\244J\034}\334\343\036\367\270G\0379\366\3101\307=\372\047\344\047\364\315\256\235\204\na\255g\336\274y\363\315{\337{o\010\325\344\307\001\221\255\367\300\364\263\332S\262\365\032z\322\033\276\343p@d\233l1)4\357\370\322W\204\n\233\330\3343\206\377Ws1\333P\332\3436\330\247\214\211\364\276\271\377\245\356\330\362\331\363\227T\010\251\tU\212w\004\321\222x@\355\373R8C\322K\235\334G\047\267\305>u\270Mz\322\206{\004\006.\236E\250*\253\232{\253m\351i\217\212\352=\322A\250\231\261\352R\027\360*B\007\\\221\035\251\201\350.2\361r\250\273R\020\324\331\340\360\026xT\003\336f\374CT\317\030\t\362\246\361\346\376\346\223\315\324[\017\014o\212(\277\305\034t\024\224!\255\345sG#\272\036\272\240jd\273M\206\322\047\002\320/\214\302E\273\323\007t\027\004Q\240\215@\252i\314Ts),<\316E\247:\245\211\357\2039\375\212:\nj\324\266-\264\003&\035\307\354I\241j\264\305l\256h\313\001\020f\3540\2562\311\026\022\003jS\337\321\304\262<\260}\006\226El?E\024R\334\307\000\3679up\227q\301\265e)\217=\260)\022\254\\\017\334\251h\2651.\360\036d\223z\300\244\007\026\033\326\334\341\300O/2p\324q$C\336\010\365<:$6\325\264\366\225\335,\005\206\303,\373\252V\337}\271\275\335p\034\356*\256v\033;o\267w\032\277[/v\241\357\203``*\262vR\234\226\365f8\300\377/\230\031k\007\006\372Oh[\326\224=\214\016#1\374\236\010\035\320\\C\317(ls\006\177m_03\343\226\232\235\342=\027K\306H\016\0103\365(\317fi\373Nj\"h/\233\215\027\226\205\321[\254\013lO\371\275l5\0053\242)\201L\362\205\313\331\036\"4\304\314n_\033Z\014F\337\247\316\014v\226\237c\211\245UyJ\001\003\263\300\2229vE\235\212\340X>9\247A\231\220\270\2620e\322\307\332\004\254\226Y.\254\226\337nc\255;\007t\250,.\230\343\333@]\027\204M\325P0.k\307\307T\213*`\314\001\3521\007\327hna\2031hQ\266\307\244/\364I\325\324\276\250\232\332\264jj\323\252\261Sj\320\245\354\355\301\024c\007\003r\223v\035x\036\232\rPm\267\035\332Q\330\307=\252\247\335\314m|%\000[""\227:n\227\232\254\252l\370\000\016\364z\024\023*RA\033\215<\000\017\337\013\363X\364\320[\363r!\260\245\345\036\010e4\230h\363z\030.\361\361\351\241?\322\325V\212\235\n\212q\236--\363\370\030]\212\256R\311\300\033Au\321\271T\245\264t\025\322\205\264\272\310\212+]W\"!\222\001\226!\266\244\211\025<\350pe\370\230\2561k\323\026M;\303\304\202YDD\rn\n\210\377,\265\236\3174\026\023\"\373.v\027\340\223\346\203:\350\"\005\016B\016\266\376\332\371\355\331\037\037\347&W\226\022\374\310j\262\264l\004\034o\336JJe#,_5\337\312\r\034\217\326\316\314W\302|\224\217\347\222\334\271\217\336\2504\252\047\371K\243\376\321\367g\346\257\207\253I\356z\370sd\307?\214\177\375\264\221\344\256\031\315\265L\3754z\033W\306\325O\305$w3|\037\237\213\373I\356v\364\334h\314\341\374\307\203\021\013\212I\276\030T\302\325I\376\342\250\035\324\315\306\362\341\322zD\243\376$w5\234\233\344\326\"D#\321\334Q\371\314\374\302hm\364bD\215q+\370.X\013\032\341\2558\027\327\343\267\343\322\270\236\024\212\006oa\364p\264\033\314%\205\013I\276\034\240\267\3372\276\034\254\342\235\347\213\207\213w\343b\\\035_\031\267>-\374\373\344\363\303\317M\243\277\034\030_\317\027F\033I\241\214\000Ka\377(o\326\217\203\022B\027\256\004\315\311\205\213I\341\322h?\370;\254O\026K\301\346\341\362\335\270\024\277J#/\337\010\233S\200\t\032\371\207\345u$k}|v\274\221d\266\367\320\241\346\244\274\034\030F+kQ\021\361+\327\222\225;\321\353qq\274\232\254\334\n\365\341\355\315q}\334L\010\372\210V7\326\243)\350\346\350 \260\221\355\257@?\302\244\235\215\036F\315S>|\303\374qX\n\353_5=\274\264\032\225\243w\361O1\305\255b%\274\0205#:Y\\\nx\370!\345\254\214\256-^M\365\355\2701.\032\274\215\244\274\0226\242\245\250\177\314\037f3)T\302\342\304H\023L\323V\340\205\305\244p9\250\206E\274\n\363\324\t\232\001M\362\031\031\363w\242\255\330C8\254\273\177\202\027f\003\353n\222[\030=\n\346\202\342\177\345\250H\353";
+    PyObject *data = __Pyx_DecompressString(cstring, 1335, 1);
     #define __Pyx_DecompressString_LZSS_UNUSED
     if (unlikely(!data)) __PYX_ERR(0, 1, __pyx_L1_error)
     const char* const bytes = __Pyx_PyBytes_AsString(data);
     #if !CYTHON_ASSUME_SAFE_MACROS
     if (likely(bytes)); else { Py_DECREF(data); __PYX_ERR(0, 1, __pyx_L1_error) }
     #endif
-    #elif (CYTHON_COMPRESS_STRINGS) > 0 && (CYTHON_COMPRESS_STRINGS) <= 90 /* compression: lzss (1731 bytes) */
-static const char cstring[] = "\377 at 0x o\377bject>.:\377 <Memory\377View of \377<contigu\377ous and gdir%\001\007\rin\021\005\177strided\"\010o or \004\031><(\t\376A\006>?Canno\377t assign\377 to read\177-only m\240\002\375v\242\000Invali\377d mode, \347exp\305\000|\000\047c\047\376t\001\047fortra\237n\047, gH\000%\005s\357hape\222\000 ax\377is Note \373th\207 Cytho\373n \021\000delib\237eratek\000\320\001c\367ter!\001n PE\337P-484\212\"re\376\264!s subcl\366\246\000es\261!buil\373ti\260\000ypes.\377 If you \223ne\224 \303\000p\316\000%\tt\177hen set\200\000\367e \047\357\002atio\377n_typing\355\047\355$iv\242\000o F\377alse.add}_\231 ecoll\266@\376+\000s.abcdi\177sableen\002\001\357gcis\004\003dno\377 default\377 __reduc\277e__ duM\002n\367on-\262@vial\376\033\000cinit__\277src/da\336 soprep\004\004_f\325\000\367er/\001\003s/co\377re_cy.py\363xun\002\241Aallo\375c\265  array? data.\013\020\375#\374\317a\254cs.ASCI\377IEllipsi\377sNOUNSEN\377TINEL_BS\177equence\222\204\001}.\227\204\007__Pyx\001\000\377Dict_Nex?tRef__\273$\337\000\333__\220B__\001\005ge_titem\r\001d0\001\236\027\000func\035\001\030\000s9t\354@)\001imp\264`3\001wlen:\001mai\002\003\357odulT\002nam\346\002\003ew[\001\377\000_ch\037ecksu[\000\n\001F\004\360\025\001\305@\354 \037\001unpi\333ck?\000En \005vt<\256A\237\001qualO\005\234Eb\245Fc\225\204\002\306\001\270Dex\323\001\202\264`_\203\005\300`\271\006\003\006.\007t{es\325@_is_\264@?outine\257`\246E\377_buffera\377lways_in\377cludeapp\377endasync\367io..\006sbas\377ecclearc\371lD\000,\000_trac\377ebackcouKnt\260g.\277c\263d.\263d\205.\263dd\226\"\220\000\372\207\003\340@o\347dee\231 \365\205\002err\366\336`xt\201\000flag\177sformat\313\206\004\377idindexi\277salpha\322As\376\000\002izelemm_a_gen\004\002t\016\001\177owermem\255\207\001\361m\310@\321\210\001\254`_tok\207ens\016\001\346@\276\207\001\323An\377dimobjop\363t_W\002\004\002scii\"\t\003_\375\207\001\031\001b\002s\005\002[\001\276,\001short\016\002sOtops\343 \324 p\223 \377poppospr\377ocess_se\375n\322\000ceregi\357ster""\010\005sett\240\206\004\234\210\002s\311\000staO\000\247tepL\002R\000_\342Br\347uct\312`\355 upd\377atevalue\177swhitelP\000\377x<UNK>O\200\337\001\340\025\026\330\000\000 !\347\330\026\027\005\001\003\000\036\037\330\273\023\024\013\001\027\030\330\000\000\034\375\035\003\000\360\"\000\005\031\230\377\010\240\010\250\001\330\004\007\377\200r\210\023\210A\330\010\377\017\210q\360\006\000\005\033\377\230!\330\004\033\230;\240\377d\250*\260G\2701\330\363\004\032\016\001\000\002\033\230:\240\377T\250\031\260\047\270\021\330\377\004\036\230j\250\007\250q\237\330\004#\240?\016\0019\001\010\377\200w\210c\220\021\330\010\377\021\220\031\230!\340\010\016\357\210f\220AR\001\027\320\026\377&\240a\240q\340\004\030\277\230\001\340\004\"\240b\000 \377\240\001\360\024\000\005\013\210\337\"\210B\210a)\001b\220\377\002\220\"\220E\230\037\250\377\004\250A\250T\260\023\260\357A\330\014\021L\001\013\2102\377\210S\220\001\330\014\r\330\267\010\024\220\253\000\016\210\023\027\022\373\220!\307\000\t\021\320\020)\377\250\021\250\047\260\025\260b\377\270\013\3008\3102\310Q\356\024\001\022\220\021\033\001\014\2101\367\330\014\024k\000\026\230q\360\377\010\000\t\014\2106\220\023\376X\000\014\025\220Q\340\r\016\377\330\014\017\210v\220W\230\377A\340\020\023\2204\320\027\337)\250\023\250F\365\002\024\035\353\230Q:\004\340\"\000u\320\024\375&\252 &\260\003\2601\330\372&\003,\273\000Q\340\024\027\220\336\316!\031\"\240\021]\000\031\032\377\330\034$\240M\260\021\260\377!\330\034\037\230t\320#\1774\260A\260Q\330 \241\000\356\365 \035&\240N\0044\210w\323\220d\202@H\0205\262@\003\240\3172\240Q\330z\007\024\0306\230\367\023\230A\026\022\320\017!\240\177\024\240V\2503\250a\361@\377\021\031\230\r\240Q\240a\177\340\020\026\220i\230z\257\"\355\024\230\000\020\030\023\002f\250E\373\260\021\326\0011\330\024\034\230\237E\240\026\240q\267&\313@\330\277\014\031\230\021\340\014\324A\010\377\013\210<\220r\230\021\330?\014\022\220\047\230\021\307`\377@\177g\220Q\220a\330\010\207#?\005$\240<\250rL\000\365`\347}""\220B\025\001\365`\340\004\013?\2105\220\001\220\021";
-    PyObject *data = __Pyx_DecompressString_LZSS(cstring, 1731, 2208);
+    #elif (CYTHON_COMPRESS_STRINGS) > 0 && (CYTHON_COMPRESS_STRINGS) <= 90 /* compression: lzss (1727 bytes) */
+static const char cstring[] = "\377 at 0x o\377bject>.:\377 <Memory\377View of \377<contigu\377ous and gdir%\001\007\rin\021\005\177strided\"\010o or \004\031><(\t\376A\006>?Canno\377t assign\377 to read\177-only m\240\002\375v\242\000Invali\377d mode, \347exp\305\000|\000\047c\047\376t\001\047fortra\237n\047, gH\000%\005s\357hape\222\000 ax\377is Note \373th\207 Cytho\373n \021\000delib\237eratek\000\320\001c\367ter!\001n PE\337P-484\212\"re\376\264!s subcl\366\246\000es\261!buil\373ti\260\000ypes.\377 If you \223ne\224 \303\000p\316\000%\tt\177hen set\200\000\367e \047\357\002atio\377n_typing\355\047\355$iv\242\000o F\377alse.add}_\231 ecoll\266@\376+\000s.abcdi\177sableen\002\001\357gcis\004\003dno\377 default\377 __reduc\277e__ duM\002n\367on-\262@vial\376\033\000cinit__\277src/da\336 soprep\004\004_f\325\000\367er/\001\003s/co\377re_cy.py\363xun\002\241Aallo\375c\265  array? data.\013\020\375#\374\317a\254cs.ASCI\377IEllipsi\377sSENTINE\377L_BSeque\327nce\216\204\001.\223\204\007__\367Pyx\001\000Dict\377_NextRef\263__\267$\333\000__\214B_\375_\001\005getite\345m\r\001d0\001\027\000fun\231c\035\001\030\000st\350@)\001ismp\260`3\001len:\001\367mai\002\003odulnT\002nam\002\003ew[\001\376\373\000_checks\001u[\000\n\001F\004\025\001\301@\350 \037\001\277unpick?\000E\315n \005vt\252A\237\001qu#alO\005\230E\241Fc\221\204\002\306\001&\264Dex\323\001\260`_\203\005\274`\270\271\006\003\006.\007tes\321@_\367is_\260@outi\363ne\253`\242E_buf\377feralway\377s_includ\377eappenda\177syncio..\006\377sbaseccl\237earclD\000,\000_\377tracebac\277kcount\254g.T\273c\257d.\257d.\257dd\226\"x\220\000\366\207\003\340@odee\231 n\361\205\002err\332`xt\201\000\377flagsfor\367mat\307\206\004idin\377dexisalp\353ha\322As\000\002ize\377lemma_ge\365n\004\002t\016\001ower\027mem\251\207\001m\310@\315\210\001\254`\177_tokens\016\001\370\346@\272\207\001\323Andimo?bjopt_W\002\004\002/scii\t\003_\371\207\001\031\001\342b\002s\005\002[\001,\001sho\373rt\016\002stops\364\343 \324 p\223 popp\377osproces\337s_sen\322\000ce\377regis""terN\010\005set\234\206\004\230\210\002s\311\000wstaO\000tepL\002zR\000_\342Bruct\312`\376\355 updatev\377alueswhi\367telP\000x<UN\377K>O\200\001\340\025\026}\330\000\000 !\330\026\027\005\001\276\003\000\036\037\330\023\024\013\001\027\333\030\330\000\000\034\035\003\000\360\"\377\000\005\031\230\010\240\010\250\377\001\330\004\007\200r\210\023\377\210A\330\010\017\210q\360\377\006\000\005\033\230!\330\004\377\033\230;\240d\250*\260?G\2701\330\004\032\016\001\000\002\377\033\230:\240T\250\031\260\377\047\270\021\330\004\036\230j\377\250\007\250q\330\004#\240\371?\016\0019\001\010\200w\210c\377\220\021\330\010\021\220\031\230\377!\340\010\016\210f\220A\376R\001\027\320\026&\240a\240\377q\340\004\030\230\001\340\004\373\"\240b\000 \240\001\360\024\377\000\005\013\210\"\210B\210\375a)\001b\220\002\220\"\220\377E\230\037\250\004\250A\250\377T\260\023\260A\330\014\021\376L\001\013\2102\210S\220\001\177\330\014\r\330\010\024\220\253\000\273\016\210\023\027\022\220!\307\000\t\377\021\320\020)\250\021\250\047\377\260\025\260b\270\013\3008\357\3102\310Q\024\001\022\220\021~\033\001\014\2101\330\014\024k\000\377\026\230q\360\010\000\t\014\357\2106\220\023X\000\014\025\220\377Q\340\r\016\330\014\017\210\377v\220W\230A\340\020\023\377\2204\320\027)\250\023\250\275F\365\002\024\035\230Q:\004\340\336\"\000u\320\024&\252 &\260\257\003\2601\330&\003,\273\000Q\357\340\024\027\220\316!\031\"\240\375\021]\000\031\032\330\034$\240\377M\260\021\260!\330\034\037\377\230t\320#4\260A\260\347Q\330 \241\000\365 \035&\240>N\0044\210w\220d\202@H\020\3755\262@\003\2402\240Q\330|z\007\024\0306\230\023\230A\026\022\377\320\017!\240\024\240V\250\3673\250a\361@\021\031\230\r\377\240Q\240a\340\020\026\220\327i\230z\257\"\024\230\000\020\030\276\023\002f\250E\260\021\326\0011\377\330\024\034\230E\240\026\240\371q\267&\313@\330\014\031\230\021\373\340\014\324A\010\013\210<\220\377r\230\021\330\014\022\220\047\363\230\021\307`\377@g\220Q\220\367a\330\010\207#\005$\240<s\250rL\000\365`}\220B\025\001""\376\365`\340\004\013\2105\220\001\003\220\021";
+    PyObject *data = __Pyx_DecompressString_LZSS(cstring, 1727, 2204);
     #define __Pyx_DecompressString_UNUSED
     if (unlikely(!data)) __PYX_ERR(0, 1, __pyx_L1_error)
     const char* const bytes = __Pyx_PyBytes_AsString(data);
     #if !CYTHON_ASSUME_SAFE_MACROS
     if (likely(bytes)); else { Py_DECREF(data); __PYX_ERR(0, 1, __pyx_L1_error) }
     #endif
-    #else /* compression: none (2208 bytes) */
-static const char bytes[] = " at 0x object>.: <MemoryView of <contiguous and direct><contiguous and indirect><strided and direct or indirect><strided and direct><strided and indirect>>?Cannot assign to read-only memoryviewInvalid mode, expected \047c\047 or \047fortran\047, got Invalid shape in axis Note that Cython is deliberately stricter than PEP-484 and rejects subclasses of builtin types. If you need to pass subclasses then set the \047annotation_typing\047 directive to False.add_notecollections.abcdisableenablegcisenabledno default __reduce__ due to non-trivial __cinit__src/daviesprep/davies_filter/filters/core_cy.pyxunable to allocate array data.unable to allocate shape and strides.ASCIIEllipsisNOUNSENTINEL_BSequenceView.MemoryView__Pyx_PyDict_NextRef__annotate____class____class_getitem____dict____func____getstate____import____len____main____module____name____new____pyx_checksum__pyx_state__pyx_type__pyx_unpickle_Enum__pyx_vtable____qualname____reduce____reduce_cython____reduce_ex____set_name____setstate____setstate_cython____test___is_coroutineabcallocate_bufferalways_includeappendasyncio.coroutinesbasecclearcline_in_tracebackcountdaviesprep.davies_filter.filters.core_cydtype_is_objectencodeenumerateerrorextendflagsformatfortranidindexisalphaitemsitemsizelemma_genlemmatizelowermemviewmin_context_tokensmin_lenmodenamendimobjopt_alphaopt_ascii_alpha_onlyopt_lemmasopt_loweropt_shortsopt_stopsoutbufpackpopposprocess_sentenceregistersentencesetdefaultshapesizestartstepstopstop_setstructunpackupdatevalueswhitelistx<UNK>O\200\001\340\025\026\330\025\026\330 !\330\026\027\330\025\026\330\026\027\330\036\037\330\023\024\330\026\027\330\027\030\330\027\030\330\034\035\330\027\030\360\"\000\005\031\230\010\240\010\250\001\330\004\007\200r\210\023\210A\330\010\017\210q\360\006\000\005\033\230!\330\004\033\230;\240d\250*\260G\2701\330\004\032\230!\330\004\032\230!\330\004\033\230:\240T\250\031\260\047\270\021\330\004\036\230j\250\007\250q\330\004#\240?\260\047\270\021\360\006\000\005\010\200w\210c""\220\021\330\010\021\220\031\230!\340\010\016\210f\220A\360\006\000\005\027\320\026&\240a\240q\340\004\030\230\001\340\004\"\240!\330\004 \240\001\360\024\000\005\013\210\"\210B\210a\340\010\016\210b\220\002\220\"\220E\230\037\250\004\250A\250T\260\023\260A\330\014\021\220\021\330\010\013\2102\210S\220\001\330\014\r\330\010\024\220A\330\010\016\210b\220\002\220\"\220E\230\037\250\004\250A\250T\260\023\260A\330\014\021\220\021\330\010\022\220!\360\006\000\t\021\320\020)\250\021\250\047\260\025\260b\270\013\3008\3102\310Q\360\006\000\t\022\220\021\360\006\000\t\014\2101\330\014\024\220E\230\026\230q\360\010\000\t\014\2106\220\023\220A\330\014\025\220Q\340\r\016\330\014\017\210v\220W\230A\340\020\023\2204\320\027)\250\023\250F\260\047\270\021\330\024\035\230Q\360\006\000\t\014\2101\340\014\017\210u\320\024&\240d\250&\260\003\2601\330\020\023\2204\320\027,\250A\250Q\340\024\027\220q\360\006\000\031\"\240\021\360\010\000\031\032\330\034$\240M\260\021\260!\330\034\037\230t\320#4\260A\260Q\330 )\250\021\360\006\000\035&\240Q\360\006\000\t\014\2104\210w\220d\230!\330\014\017\210u\320\024&\240d\250&\260\003\2601\330\020\023\2205\230\010\240\003\2402\240Q\330\024\035\230Q\360\006\000\t\014\2104\210w\220d\230!\330\014\017\210u\320\024&\240d\250&\260\003\2601\330\020\023\2206\230\023\230A\330\024\035\230Q\360\006\000\t\014\2104\210w\220d\230!\330\014\017\320\017!\240\024\240V\2503\250a\360\006\000\021\031\230\r\240Q\240a\340\020\026\220i\230z\250\021\250\047\260\024\260Q\330\020\030\230\r\240Q\240f\250E\260\021\330\020\023\2201\330\024\034\230E\240\026\240q\360\006\000\t\014\2101\330\014\030\230\001\330\014\031\230\021\340\014\030\230\001\340\010\013\210<\220r\230\021\330\014\022\220\047\230\021\230!\330\010\016\210g\220Q\220a\330\010\027\220q\360\006\000\005$\240<\250r\260\021\330\004\007\200}\220B\220a\330\010\017\210q\340\004\013\2105\220\001\220\021";
+    #else /* compression: none (2204 bytes) */
+static const char bytes[] = " at 0x object>.: <MemoryView of <contiguous and direct><contiguous and indirect><strided and direct or indirect><strided and direct><strided and indirect>>?Cannot assign to read-only memoryviewInvalid mode, expected \047c\047 or \047fortran\047, got Invalid shape in axis Note that Cython is deliberately stricter than PEP-484 and rejects subclasses of builtin types. If you need to pass subclasses then set the \047annotation_typing\047 directive to False.add_notecollections.abcdisableenablegcisenabledno default __reduce__ due to non-trivial __cinit__src/daviesprep/davies_filter/filters/core_cy.pyxunable to allocate array data.unable to allocate shape and strides.ASCIIEllipsisSENTINEL_BSequenceView.MemoryView__Pyx_PyDict_NextRef__annotate____class____class_getitem____dict____func____getstate____import____len____main____module____name____new____pyx_checksum__pyx_state__pyx_type__pyx_unpickle_Enum__pyx_vtable____qualname____reduce____reduce_cython____reduce_ex____set_name____setstate____setstate_cython____test___is_coroutineabcallocate_bufferalways_includeappendasyncio.coroutinesbasecclearcline_in_tracebackcountdaviesprep.davies_filter.filters.core_cydtype_is_objectencodeenumerateerrorextendflagsformatfortranidindexisalphaitemsitemsizelemma_genlemmatizelowermemviewmin_context_tokensmin_lenmodenamendimobjopt_alphaopt_ascii_alpha_onlyopt_lemmasopt_loweropt_shortsopt_stopsoutbufpackpopposprocess_sentenceregistersentencesetdefaultshapesizestartstepstopstop_setstructunpackupdatevalueswhitelistx<UNK>O\200\001\340\025\026\330\025\026\330 !\330\026\027\330\025\026\330\026\027\330\036\037\330\023\024\330\026\027\330\027\030\330\027\030\330\034\035\330\027\030\360\"\000\005\031\230\010\240\010\250\001\330\004\007\200r\210\023\210A\330\010\017\210q\360\006\000\005\033\230!\330\004\033\230;\240d\250*\260G\2701\330\004\032\230!\330\004\032\230!\330\004\033\230:\240T\250\031\260\047\270\021\330\004\036\230j\250\007\250q\330\004#\240?\260\047\270\021\360\006\000\005\010\200w\210c\220""\021\330\010\021\220\031\230!\340\010\016\210f\220A\360\006\000\005\027\320\026&\240a\240q\340\004\030\230\001\340\004\"\240!\330\004 \240\001\360\024\000\005\013\210\"\210B\210a\340\010\016\210b\220\002\220\"\220E\230\037\250\004\250A\250T\260\023\260A\330\014\021\220\021\330\010\013\2102\210S\220\001\330\014\r\330\010\024\220A\330\010\016\210b\220\002\220\"\220E\230\037\250\004\250A\250T\260\023\260A\330\014\021\220\021\330\010\022\220!\360\006\000\t\021\320\020)\250\021\250\047\260\025\260b\270\013\3008\3102\310Q\360\006\000\t\022\220\021\360\006\000\t\014\2101\330\014\024\220E\230\026\230q\360\010\000\t\014\2106\220\023\220A\330\014\025\220Q\340\r\016\330\014\017\210v\220W\230A\340\020\023\2204\320\027)\250\023\250F\260\047\270\021\330\024\035\230Q\360\006\000\t\014\2101\340\014\017\210u\320\024&\240d\250&\260\003\2601\330\020\023\2204\320\027,\250A\250Q\340\024\027\220q\360\006\000\031\"\240\021\360\010\000\031\032\330\034$\240M\260\021\260!\330\034\037\230t\320#4\260A\260Q\330 )\250\021\360\006\000\035&\240Q\360\006\000\t\014\2104\210w\220d\230!\330\014\017\210u\320\024&\240d\250&\260\003\2601\330\020\023\2205\230\010\240\003\2402\240Q\330\024\035\230Q\360\006\000\t\014\2104\210w\220d\230!\330\014\017\210u\320\024&\240d\250&\260\003\2601\330\020\023\2206\230\023\230A\330\024\035\230Q\360\006\000\t\014\2104\210w\220d\230!\330\014\017\320\017!\240\024\240V\2503\250a\360\006\000\021\031\230\r\240Q\240a\340\020\026\220i\230z\250\021\250\047\260\024\260Q\330\020\030\230\r\240Q\240f\250E\260\021\330\020\023\2201\330\024\034\230E\240\026\240q\360\006\000\t\014\2101\330\014\030\230\001\330\014\031\230\021\340\014\030\230\001\340\010\013\210<\220r\230\021\330\014\022\220\047\230\021\230!\330\010\016\210g\220Q\220a\330\010\027\220q\360\006\000\005$\240<\250r\260\021\330\004\007\200}\220B\220a\330\010\017\210q\340\004\013\2105\220\001\220\021";
     PyObject *data = NULL;
     #define __Pyx_DecompressString_UNUSED
     #define __Pyx_DecompressString_LZSS_UNUSED
     #endif
     PyObject **stringtab = __pyx_mstate->__pyx_string_tab;
     Py_ssize_t pos = 0;
-    for (int i = 0; i < 119; i++) {
+    for (int i = 0; i < 118; i++) {
       Py_ssize_t bytes_length = str_length_index[i].length;
       PyObject *string = PyUnicode_DecodeUTF8(bytes + pos, bytes_length, NULL);
       if (likely(string) && i >= 26) PyUnicode_InternInPlace(&string);
@@ -23084,8 +23083,8 @@ static const char bytes[] = " at 0x object>.: <MemoryView of <contiguous and dir
       stringtab[i] = string;
       pos += bytes_length;
     }
-    for (int i = 119; i < 123; i++) {
-      Py_ssize_t bytes_length = bytes_length_index[i-119].length;
+    for (int i = 118; i < 122; i++) {
+      Py_ssize_t bytes_length = bytes_length_index[i-118].length;
       PyObject *string = PyBytes_FromStringAndSize(bytes + pos, bytes_length);
       stringtab[i] = string;
       pos += bytes_length;
@@ -23095,14 +23094,14 @@ static const char bytes[] = " at 0x object>.: <MemoryView of <contiguous and dir
       }
     }
     Py_XDECREF(data);
-    for (Py_ssize_t i = 0; i < 123; i++) {
+    for (Py_ssize_t i = 0; i < 122; i++) {
       if (unlikely(PyObject_Hash(stringtab[i]) == -1)) {
         __PYX_ERR(0, 1, __pyx_L1_error)
       }
     }
     #if CYTHON_IMMORTAL_CONSTANTS
     {
-      PyObject **table = stringtab + 119;
+      PyObject **table = stringtab + 118;
       for (Py_ssize_t i=0; i<4; ++i) {
         #if PY_VERSION_HEX >= 0x030F0000
         PyUnstable_SetImmortal(table[i]);

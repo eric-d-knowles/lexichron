@@ -70,7 +70,7 @@ GRID_AXES = ("vector_size", "window", "min_count", "epochs", "approach", "weight
 ORDER = ["release", "language", "ngram_size", "db_path_stub",
          "ngram_type", "combined_multigrams", "overwrite_db", "file_range",
          # filter
-         "lowercase", "lemmatize", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
+         "lowercase", "lemmatize", "lemmatize_by_tag", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
          "min_context_tokens", "bin_size", "vocabulary", "no_vocabulary", "always_include",
          "pivot", "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
          "workers"]
@@ -112,6 +112,7 @@ LABELS: Dict[str, str] = {
     "text_language": "Text language",
     "lowercase": "Lowercase",
     "lemmatize": "Lemmatize",
+    "lemmatize_by_tag": "Lemmatize by tag",
     "drop_stopwords": "Drop stopwords",
     "alpha_only": "Letters only",
     "ascii_only": "ASCII letters only",
@@ -211,6 +212,11 @@ HELP: Dict[str, str] = {
     "text_language": "Language for stopwords and lemmatization (spaCy code). Default: from the corpus.",
     "lowercase": "Lowercase every token.",
     "lemmatize": "Reduce tokens to their lemma (women -> woman). Also applied before the vocabulary lookup.",
+    "lemmatize_by_tag": ("Use each token's part-of-speech tag for its lemma (English, tagged n-grams): building the "
+                         "noun stays 'building' while the verb becomes 'build'; leaves the noun is 'leaf'. Only where "
+                         "spaCy's tables vouch for the result; otherwise the lookup table decides, as with this off. "
+                         "The unigram vocabulary must be built the same way, so run the unigram filter again after "
+                         "changing this."),
     "drop_stopwords": "Replace stopwords with <UNK>.",
     "alpha_only": "Replace tokens that are not purely alphabetic (numbers, punctuation) with <UNK>.",
     "ascii_only": "With 'Letters only', also reject letters outside A-Z. Default: on for English only.",
