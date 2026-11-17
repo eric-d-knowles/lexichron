@@ -93,6 +93,19 @@ def _runtime_preamble(preferred: str) -> List[str]:
     ]
 
 
+def _workers_in_settings(project_yaml: str | os.PathLike, stage: str) -> Optional[int]:
+    """The stage's ``workers`` as the settings file gives it, or None when it
+    is absent, blank or unreadable (the job's CPU count then decides)."""
+    try:
+        import yaml
+        with open(project_yaml, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        value = (data.get(stage) or {}).get("workers")
+        return int(value) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
 def write_sbatch(
     project_yaml: str | os.PathLike,
     stage: str,
@@ -106,7 +119,9 @@ def write_sbatch(
 
     ``slurm`` holds account, partition, cpus, mem, time, job_name, jobs (see
     ``schema.SLURM_FIELDS``). Missing optional keys are omitted from the
-    script. ``extra_sets`` are passed through as ``--set`` overrides.
+    script. ``extra_sets`` are passed through as ``--set`` overrides. The
+    stage's worker count follows the job's CPUs (``$SLURM_CPUS_PER_TASK``)
+    unless the settings file or an override sets ``<stage>.workers``.
     With ``jobs`` above 1, for a stage in ``ARRAY_STAGES``, the script is a
     job array of that many tasks, each running the stage on its share of
     the years (``array_task`` / ``array_count`` set from Slurm's task
@@ -161,10 +176,20 @@ def write_sbatch(
     if cmd[0] in RUNTIMES:
         lines += _runtime_preamble(cmd[0])
         cmd[0] = '"$runtime"'
-    # Let the job's CPU count drive the worker count unless the project sets it.
+    # Let the job's CPU count drive the worker count unless the project sets
+    # it: in an override passed here, or in the settings file itself. A count
+    # saved there is the user's decision (the Submit tab's advice for a job
+    # short of memory is to set one), and the memory estimate is worked out
+    # from it; overriding it here would run a different job from the one
+    # described.
     sets = list(extra_sets or [])
+    pinned = _workers_in_settings(project_yaml, stage)
     if stage in ("acquire", "filter", "tune", "train", "measure") and not any(s.startswith(f"{stage}.workers=") for s in sets):
-        sets.append(f"{stage}.workers=$SLURM_CPUS_PER_TASK")
+        if pinned is None:
+            sets.append(f"{stage}.workers=$SLURM_CPUS_PER_TASK")
+        else:
+            lines.append(f"# {stage}.workers is set to {pinned} in the settings file, so the job's CPU count does not "
+                         f"change it")
     if tasks > 1:
         sets = [s for s in sets if not s.startswith((f"{stage}.array_task=", f"{stage}.array_count=",
                                                      f"{stage}.mode="))]

@@ -148,3 +148,32 @@ def test_labels_can_differ_by_stage():
     train_name = next(f for f in train_stage.fields if f.name == "name")
     assert train_name.title == "Ensemble name"
     assert "models/<name>" in train_name.help
+
+
+def test_a_worker_count_saved_in_the_settings_is_not_overridden_by_the_cpus(tmp_path, monkeypatch):
+    """The Submit tab works its memory estimate out from the stage's saved
+    worker count, and tells a user short of memory to set one. The script
+    used to end with --set <stage>.workers=$SLURM_CPUS_PER_TASK regardless, so
+    the job ran one worker per CPU whatever the settings file said."""
+    from lexichron.resources import memory_estimate
+    monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
+    slurm = {"account": "a", "cpus": 80, "mem": "60G", "time": "01:00:00"}
+
+    pinned = tmp_path / "pinned.yaml"
+    pinned.write_text("corpus: {}\nacquire:\n  overwrite_db: true\n  workers: 20\nfilter: {}\n")
+    text = write_sbatch(pinned, "acquire", slurm).read_text()
+    assert "acquire.workers=$SLURM_CPUS_PER_TASK" not in text                 # the saved 20 stands
+    assert "# acquire.workers is set to 20 in the settings file" in text
+    assert memory_estimate("acquire", {"workers": 20}, slurm).processes == 20   # and is what the estimate describes
+    # another stage of the same file has no count of its own: its job follows the CPUs
+    assert "--set filter.workers=$SLURM_CPUS_PER_TASK" in write_sbatch(pinned, "filter", slurm).read_text()
+
+    # no count, a blank one, or a file that cannot be read: the CPUs decide, as the estimate assumes
+    for body in ("corpus: {}\n", "corpus: {}\nacquire:\n  workers:\n", "corpus: {}\nacquire:\n", ": not yaml ["):
+        free = tmp_path / "free.yaml"; free.write_text(body)
+        assert "--set acquire.workers=$SLURM_CPUS_PER_TASK" in write_sbatch(free, "acquire", slurm).read_text(), body
+    assert memory_estimate("acquire", {}, slurm).processes == 80
+    # an override given at submit time still wins over both
+    text = write_sbatch(pinned, "acquire", slurm, extra_sets=["acquire.workers=7"]).read_text()
+    assert "--set acquire.workers=7" in text and "SLURM_CPUS_PER_TASK" not in text.split("lexichron")[-1]
