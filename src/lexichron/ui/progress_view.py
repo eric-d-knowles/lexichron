@@ -372,6 +372,26 @@ def warnings(doc: Dict[str, Any], *, state: Optional[str] = None, stopped: bool 
     return out
 
 
+def bar_state(doc: Dict[str, Any], info: Dict[str, Any]) -> Tuple[Optional[int], int]:
+    """(total, progress) for the run's progress bar; a total of None is a bar
+    that shows activity without an amount.
+
+    The amount is how far the files have come (by size where sizes are
+    known). A run that declares its steps has work after the files
+    (compaction, the count check) whose length nothing measures: while one of
+    those runs, the bar shows activity, because a full bar there reads as a
+    finished run. It is full once the run is done."""
+    steps = [str(x) for x in (doc.get("steps") or [])]
+    phase = str(doc.get("phase") or "")
+    if doc.get("state") == "running" and not info.get("stopped") and phase in steps[1:]:
+        return None, 0
+    if info.get("by_size") and info.get("fraction") is not None:
+        return 1000, round(1000 * info["fraction"])
+    if info.get("total"):
+        return int(info["total"]), int(info["done"]) + int(info["failed"])
+    return None, 0
+
+
 def notice_text(info: Dict[str, Any]) -> str:
     """The lines shown under a run's headline: its warnings, then the run's
     own last message unless a warning already says it (a run that ends over

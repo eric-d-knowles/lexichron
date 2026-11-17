@@ -660,3 +660,22 @@ def test_filter_checks_cover_the_destination_and_the_source():
     (w,) = summarize(doc, now)["warnings"]
     assert w.startswith("2 work units failed (unit_a, unit_b). The run will finish the other work units and then stop")
     assert notice_text(summarize(doc, now)) == w
+
+
+def test_the_bar_is_not_full_while_a_later_step_is_still_running():
+    """Once every file is in, the bar by size is at 100%, but compaction and
+    the count check are still to run: a full bar there reads as a finished
+    run. It shows activity without an amount until the run is done."""
+    from lexichron.ui.progress_view import bar_state
+    doc, now = _acq(phase="ingesting", files_done=5, bytes_done=500, in_flight={"lines": 0, "bytes": 100})
+    assert bar_state(doc, summarize(doc, now)) == (1000, 600)
+    for phase in ("compacting", "verifying"):
+        doc, now = _acq(phase=phase, files_done=10, bytes_done=1000, in_flight={"lines": 0, "bytes": 0})
+        doc["phase_started"] = doc["started"]
+        assert bar_state(doc, summarize(doc, now)) == (None, 0)
+    doc, now = _acq(phase="verifying", state="done", files_done=10, bytes_done=1000,
+                    in_flight={"lines": 0, "bytes": 0}, finished=now.isoformat(timespec="seconds"))
+    assert bar_state(doc, summarize(doc, now)) == (1000, 1000)
+    # a run with no declared steps, counted by files
+    doc, now = _doc()
+    assert bar_state(doc, summarize(doc, now)) == (14, 4)
