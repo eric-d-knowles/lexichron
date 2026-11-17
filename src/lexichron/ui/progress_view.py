@@ -334,6 +334,11 @@ def warnings(doc: Dict[str, Any], *, state: Optional[str] = None, stopped: bool 
                 out.append("The source was not read exactly once: the work units read occurrences differing from the "
                            f"source's by {int(read.get('match_total', 0)) - int(source['expected']['match_total']):+,}. "
                            "Do not use this database.")
+            balance = verification.get("balance") or {}
+            if balance.get("status") == "mismatch":
+                out.append("What the filter kept and what it dropped do not add up to what it read: occurrences differ by "
+                           f"{int(balance['difference']['match_total']):+,}. Counts were lost or made inside the filter. "
+                           "Do not use this database.")
             bad = int(found.get("disordered", 0)) + int(found.get("malformed", 0)) + int(source.get("disordered", 0))
             if bad:
                 out.append(f"{bad:,} values are malformed or have years out of order. Do not use this database.")
@@ -590,9 +595,26 @@ def filter_checks(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, 
     else:
         src = ("pending", "") if running else ("not reached", "")
 
+    # read = kept + dropped: that filtering only moved counts. The share dropped is shown as the run goes.
+    balance = verification.get("balance") or {}
+    read_now = int(ledger.get("source_match", counters.get("source_match", 0)))
+    dropped_now = int(ledger.get("dropped_match", counters.get("dropped_match", 0)))
+    share = f"{_pct(dropped_now, read_now)} dropped" if read_now and ("dropped_match" in ledger or "dropped_match" in counters) else ""
+    if status == "skipped" or checks.get("verify_counts") is False:
+        bal = ("not checked", share)
+    elif balance.get("status") == "verified":
+        bal = ("adds up", share)
+    elif balance.get("status") == "mismatch":
+        bal = ("DOES NOT ADD UP", difference({"match_total": balance["difference"]["match_total"],
+                                              "volume_total": balance["difference"]["volume_total"]}, {}))
+    elif balance.get("status") == "unknown":
+        bal = ("not known", share)
+    else:
+        bal = (("pending", share) if running else ("not reached", share))
+
     occurrences = int(found.get("match_total", ledger.get("match_total", counters.get("match_total", 0))))
     reordered = int(ledger.get("reordered", counters.get("reordered", 0)))
-    tiles = [("Counts", counts[0], counts[1]), ("Source", src[0], src[1]),
+    tiles = [("Counts", counts[0], counts[1]), ("Source", src[0], src[1]), ("Kept + dropped", bal[0], bal[1]),
              ("Occurrences", f"{occurrences:,}", ""),
              ("Reordered values", f"{reordered:,}", "corrected" if reordered else "")]
     unledgered = int(ledger.get("unledgered", 0))

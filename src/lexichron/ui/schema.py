@@ -203,9 +203,10 @@ HELP: Dict[str, str] = {
                       "totals every file recorded as it was read. A file taken in twice, a lost record or a "
                       "wrong sum fails the run. Leave on."),
     "filter.verify_counts": ("After compaction, read the whole database once and check that its counts equal what "
-                             "the work units recorded emitting, and that what they read adds up to what the source "
-                             "database holds. A unit taken in twice, a lost record, or a key range skipped by the "
-                             "partition fails the run. Leave on."),
+                             "the work units recorded emitting, that what they read adds up to what the source "
+                             "database holds, and that what they kept plus what they dropped is what they read. A "
+                             "unit taken in twice, a lost record, a key range skipped by the partition, or a count "
+                             "lost inside the filter fails the run. Leave on."),
     "allow_unparsed_lines": ("A line whose counts cannot be read in full is logged and counted, and its n-gram "
                              "is undercounted. Off = a run that met any such line finishes, then fails and says "
                              "how many. On = accept them (the number is still recorded)."),

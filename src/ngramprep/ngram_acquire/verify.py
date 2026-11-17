@@ -46,11 +46,15 @@ def ledger_totals(db, marker_prefix: bytes = PROCESSED_PREFIX) -> Dict[str, int]
     version that did not record them. With any of those the database cannot
     be checked against its ledger (the scan still checks every value's form).
     A range-map unit's marker also holds what the unit *read* from its
-    source (``source_match``, ``source_volume``, ``source_disordered``).
+    source (``source_match``, ``source_volume``, ``source_disordered``) and
+    what its mapper *dropped* (``dropped_match``, ``dropped_volume``);
+    ``undropped`` counts ledgered markers from before the dropped totals
+    were kept.
     """
     out = {"shards": 0, "unledgered": 0, "entries": 0, "lines": 0, "match_total": 0, "volume_total": 0,
            "problem_lines": 0, "reordered": 0, "scanned": 0, "kept": 0,
-           "source_match": 0, "source_volume": 0, "source_disordered": 0}
+           "source_match": 0, "source_volume": 0, "source_disordered": 0,
+           "dropped_match": 0, "dropped_volume": 0, "undropped": 0}
     for _key, raw in prefix_scan(db, marker_prefix):
         out["shards"] += 1
         try:
@@ -61,8 +65,10 @@ def ledger_totals(db, marker_prefix: bytes = PROCESSED_PREFIX) -> Dict[str, int]
             out["unledgered"] += 1
             continue
         for name in ("entries", "lines", "match_total", "volume_total", "problem_lines", "reordered", "scanned",
-                     "kept", "source_match", "source_volume", "source_disordered"):
+                     "kept", "source_match", "source_volume", "source_disordered", "dropped_match", "dropped_volume"):
             out[name] += int(doc.get(name, 0))
+        if "source_match" in doc and "dropped_match" not in doc:
+            out["undropped"] += 1
     return out
 
 

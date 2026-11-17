@@ -109,9 +109,11 @@ in the image; tests create their own.
   against. The filter stage (`rangemap`) follows the same rules: every unit
   is an SST file ingested with its marker, compaction is mandatory, a
   source that was never compacted is refused, and each unit's marker holds
-  the totals of what it read and of what it emitted. The destination must
-  hold the emitted totals, and the read totals must add up to the source's
-  verified total (a key range skipped or repeated by the partition).
+  the totals of what it read, of what it emitted and of what it dropped,
+  each counted on its own. The destination must hold the emitted totals,
+  the read totals must add up to the source's verified total (a key range
+  skipped or repeated by the partition), and read must equal emitted plus
+  dropped (a count lost inside the mapper).
 - **Lemmas use the tag only where spaCy's tables vouch for it.** The lookup
   table has one lemma per spelling; `ngram_filter/lemmatizer.py` lets a
   token's Google tag override it only when an irregular form is listed for

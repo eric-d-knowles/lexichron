@@ -561,7 +561,7 @@ def _flt(**over):
              in_flight={"lines": 400_000, "bytes": 0},
              counters={"scanned": 2_000_000, "kept": 500_000, "produced": 500_000, "inserted": 450_000,
                        "match_total": 9_000, "volume_total": 800, "source_match": 30_000, "source_volume": 2_000,
-                       "reordered": 0, "source_disordered": 0},
+                       "reordered": 0, "source_disordered": 0, "dropped_match": 21_000, "dropped_volume": 1_200},
              checks={"verify_counts": True, "source_known": True},
              current=["u1", "u2"], phases={"queued": 0, "parsing": 2, "parsed": 0, "ingesting": 0},
              inputs={"source": "/x/5grams.db"}, message="", db_path="/x/5grams_pivoted.db", log_path=None,
@@ -597,8 +597,9 @@ def test_filter_checks_cover_the_destination_and_the_source():
         return {label: (value, note) for label, value, note in dict(meters(doc, summarize(doc, now)))["Checks"]}
 
     doc, now = _flt()
-    assert checks(doc, now) == {"Counts": ("pending", ""), "Source": ("pending", ""), "Occurrences": ("9,000", ""),
-                                "Reordered values": ("0", "")}
+    assert checks(doc, now) == {"Counts": ("pending", ""), "Source": ("pending", ""),
+                                "Kept + dropped": ("pending", "70.0% dropped"),      # the share is shown as the run goes
+                                "Occurrences": ("9,000", ""), "Reordered values": ("0", "")}
     doc["checks"]["source_known"] = False                       # a source made before counts were verified
     assert checks(doc, now)["Source"] == ("total not known", "")
     doc["checks"]["source_known"] = True
@@ -608,10 +609,26 @@ def test_filter_checks_cover_the_destination_and_the_source():
     good = {"status": "verified", "ledger": {"shards": 80, "match_total": 36_000, "volume_total": 3_000},
             "database": {"records": 10, "match_total": 36_000, "volume_total": 3_000, "disordered": 0, "malformed": 0},
             "source": {"status": "verified", "read": {"match_total": 120_000, "volume_total": 8_000},
-                       "expected": {"match_total": 120_000, "volume_total": 8_000}, "disordered": 0}}
+                       "expected": {"match_total": 120_000, "volume_total": 8_000}, "disordered": 0},
+            "balance": {"status": "verified", "read": {"match_total": 120_000, "volume_total": 8_000},
+                        "emitted": {"match_total": 36_000, "volume_total": 3_000},
+                        "dropped": {"match_total": 84_000, "volume_total": 5_000},
+                        "difference": {"match_total": 0, "volume_total": 0}}}
+    good["ledger"].update(source_match=120_000, dropped_match=84_000)
     doc.update(state="done", verification=good)
     tiles = checks(doc, now)
     assert tiles["Counts"] == ("verified", "") and tiles["Source"] == ("read in full", "")
+    assert tiles["Kept + dropped"] == ("adds up", "70.0% dropped")
+    # a count lost inside the filter: the other two checks pass, this one does not
+    lost = dict(good, status="mismatch", balance=dict(good["balance"], status="mismatch",
+                                                      difference={"match_total": -500, "volume_total": -20}))
+    doc.update(state="failed", verification=lost)
+    tiles = checks(doc, now)
+    assert tiles["Counts"] == ("verified", "") and tiles["Source"] == ("read in full", "")
+    assert tiles["Kept + dropped"] == ("DOES NOT ADD UP", "occurrences -500; volume counts -20")
+    (w,) = summarize(doc, now)["warnings"]
+    assert w.startswith("What the filter kept and what it dropped do not add up to what it read: occurrences differ by -500")
+    doc.update(state="done", verification=good)
     assert tiles["Occurrences"] == ("36,000", "") and summarize(doc, now)["warnings"] == []
 
     # the destination holds more than the units emitted: a unit taken in twice

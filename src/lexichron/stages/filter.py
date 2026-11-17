@@ -176,8 +176,10 @@ def filter_ngrams(
             emitted, with every value's years in order; and what the units
             read must add up to what the source database holds, where the
             acquisition that made it verified its own counts (a key range
-            skipped or read twice by the partition shows there). A
-            difference fails the run. Turn it off only to save the pass on
+            skipped or read twice by the partition shows there); and what
+            the units read must equal what they kept plus what they
+            dropped, each counted separately (a count lost in binning or in
+            the pivot shows there). A difference fails the run. Turn it off only to save the pass on
             a database you will check another way.
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)

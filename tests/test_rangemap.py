@@ -364,3 +364,54 @@ def test_worker_log_entries_name_the_unit_and_what_is_being_done(rocks, tmp_path
     assert good[-1].startswith("unit unit_a_m (3 of 8): done in") and "in 1 SST file; waiting for the parent to ingest it" in good[-1]
     bad = [r for r in records if "unit_bad" in r.getMessage() and r.levelname == "ERROR"]
     assert len(bad) == 1 and "failed after" in bad[0].getMessage() and "poisoned record" in bad[0].getMessage()
+
+
+def test_what_a_unit_dropped_is_counted_on_its_own(rocks, tmp_path, monkeypatch):
+    """Read, emitted and dropped are three separate totals, so that
+    read = emitted + dropped is something that can fail. The dropped total
+    comes from the dropped records themselves, whatever the batch they fall in."""
+    from ngramprep.ngram_filter.pipeline.orchestrator import _check_balance
+    from ngramprep.ngram_acquire.verify import ledger_totals
+    from ngramprep.rangemap import UNIT_MARKER_PREFIX, worker as worker_mod
+    monkeypatch.setattr(worker_mod, "_BATCH", 7)            # dropped records land on and around batch boundaries
+    src, dst = tmp_path / "src.db", tmp_path / "dst.db"
+    _make_source(str(src))
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=LowerMapper(), num_units=8, workers=2,
+                                smart_partitioning=False, chunk_entries=64, spool_dir=tmp_path, output="sst"))
+    markers = fake_rocks.markers(dst)
+    assert (sum(m["dropped_match"] for m in markers.values()), sum(m["dropped_volume"] for m in markers.values())) == (90, 90)
+    for m in markers.values():                              # and it holds unit by unit
+        assert m["source_match"] == m["match_total"] + m["dropped_match"]
+        assert m["source_volume"] == m["volume_total"] + m["dropped_volume"]
+    ledger = ledger_totals(fake_rocks._REGISTRY[str(dst)], UNIT_MARKER_PREFIX)
+    balance = _check_balance(ledger)
+    assert balance["status"] == "verified" and balance["dropped"] == {"match_total": 90, "volume_total": 90}
+    assert balance["difference"] == {"match_total": 0, "volume_total": 0}
+    # units from before the dropped totals were kept: nothing to test against
+    assert _check_balance(dict(ledger, undropped=2))["status"] == "unknown"
+
+
+def test_a_mapper_that_loses_counts_breaks_the_balance(rocks, tmp_path):
+    """What the two other checks cannot see: the destination holds exactly what
+    was emitted, and the source was read in full, but a count went missing in between."""
+    from ngramprep.ngram_filter.pipeline.orchestrator import _check_balance
+    from ngramprep.ngram_acquire.verify import verify_database
+    from ngramprep.rangemap import UNIT_MARKER_PREFIX
+
+    class Lossy(Mapper):
+        def build(self):
+            def fn(key, value):
+                if b"drop" in key:
+                    return None
+                return key.lower(), value[:24]              # keeps the first year only
+            return fn
+
+    src, dst = tmp_path / "src.db", tmp_path / "dst.db"
+    _make_source(str(src))
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=Lossy(), num_units=4, workers=2,
+                                smart_partitioning=False, spool_dir=tmp_path, output="sst"))
+    v = verify_database(str(dst), 2, marker_prefix=UNIT_MARKER_PREFIX)
+    assert v["status"] == "verified"                        # what was emitted is all there
+    balance = _check_balance(v["ledger"])
+    assert balance["status"] == "mismatch"
+    assert balance["difference"] == {"match_total": -500 * 2, "volume_total": -500 * 2}    # the (2000, 2, 2) of every 'word'

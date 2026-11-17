@@ -175,10 +175,15 @@ def test_a_filter_run_verifies_its_counts_and_that_it_read_the_whole_source(rock
     assert (v["database"]["match_total"], v["database"]["volume_total"]) == KEPT
     assert (v["ledger"]["match_total"], v["ledger"]["volume_total"]) == KEPT
     assert v["source"] == {"status": "verified", "read": SOURCE, "expected": SOURCE, "disordered": 0}
+    # read = kept + dropped, each counted on its own: 'the', 'a1' and 'ox' were dropped
+    dropped = {"match_total": 100 + 1 + 1, "volume_total": 50 + 1 + 1}
+    assert v["balance"]["status"] == "verified" and v["balance"]["dropped"] == dropped
+    assert v["balance"]["emitted"] == {"match_total": KEPT[0], "volume_total": KEPT[1]} and v["balance"]["read"] == SOURCE
     assert doc["steps"] == ["ingesting", "compacting", "verifying", "whitelist"] and doc["phase"] == "whitelist"
     assert doc["checks"] == {"verify_counts": True, "source_known": True}
     out = capsys.readouterr().out
     assert "Counts verified" in out and "Source read in full" in out
+    assert "Filtering accounted for: of 130 occurrences read, 28 were kept and 102 dropped (78.5%)" in out
     assert "compact_after_ingest is ignored" in out               # a complete run always compacts
     store = fake_rocks._REGISTRY[str(paths["dst_db"])]
     assert store.compactions == 1 and store.ingests >= 1          # the unigram run hands over SST files too
@@ -227,3 +232,31 @@ def test_a_source_that_was_never_compacted_is_refused(rocks, tmp_path):
     src.compact_all()
     _run(stub, tmp_path)
     assert set(fake_rocks.dump(paths["dst_db"])) == {b"cat", b"woman", b"run"}
+
+
+def test_counts_lost_inside_the_filter_fail_the_run(rocks, tmp_path, monkeypatch, capsys):
+    """Binning and pivoting rewrite every kept value. A count lost there would
+    pass the other checks: the source is read in full and the destination holds
+    what was emitted. Kept plus dropped no longer equals read, and the run fails."""
+    from ngramprep.ngram_filter.pipeline import mapper as mapper_mod
+    from ngramprep.ngram_filter.pipeline.orchestrator import FilterError
+    monkeypatch.setattr(mapper_mod, "bin_year_records", lambda value, bin_size: value[:24])    # loses every later year
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    _raw_unigrams(str(paths["src_db"]))
+    progress = tmp_path / "p.json"
+    with pytest.raises(FilterError, match="counts do not match"):
+        build_processed_db(
+            filter_config=FilterConfig(stop_set={"the"}, lemma_gen=FakeLemmatizer(), min_len=3, min_context_tokens=1,
+                                       bin_size=5),
+            pipeline_config=PipelineConfig(ngram_size=1, repo_release_id="20200217", repo_corpus_id="eng",
+                                           db_path_stub=str(stub), num_workers=2, num_initial_work_units=4,
+                                           use_smart_partitioning=False, mode="restart", source_totals=SOURCE,
+                                           output_whitelist_path="default"),
+            progress_path=str(progress), spool_dir=str(tmp_path))
+    v = read_progress(progress)["verification"]
+    assert v["status"] == "mismatch" and v["source"]["status"] == "verified"
+    assert v["balance"]["status"] == "mismatch" and v["balance"]["difference"] == {"match_total": -5, "volume_total": -1}
+    out = capsys.readouterr().out
+    assert "KEPT AND DROPPED DO NOT ADD UP TO WHAT WAS READ" in out and "(difference -5; volume counts -1)" in out
+    assert "Counts verified" in out and not paths["whitelist"].exists()

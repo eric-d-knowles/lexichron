@@ -87,7 +87,9 @@ def build_record(stage: str, settings: Dict[str, Any], doc: Dict[str, Any]) -> D
                                  "values_reordered": int(ledger.get("reordered", 0)),
                                  "source": source.get("status"),
                                  "source_occurrences_read": (source.get("read") or {}).get("match_total"),
-                                 "source_occurrences": (source.get("expected") or {}).get("match_total")}
+                                 "source_occurrences": (source.get("expected") or {}).get("match_total"),
+                                 "balance": (verification.get("balance") or {}).get("status"),
+                                 "occurrences_dropped": ((verification.get("balance") or {}).get("dropped") or {}).get("match_total")}
     database = dict(doc.get("database") or {})
     database["path"] = doc.get("db_path")
     inputs = _describe_inputs(stage, settings, doc)
@@ -252,6 +254,8 @@ def format_provenance(p: Dict[str, Any]) -> List[str]:
                 line += f"; {int(counts['occurrences']):,} occurrences"
             line += {"verified": "; the source was read in full", "mismatch": "; THE SOURCE WAS NOT READ EXACTLY ONCE",
                      "unknown": "; the source's own total is not known"}.get(counts.get("source"), "")
+            line += {"verified": "; kept and dropped add up to what was read",
+                     "mismatch": "; KEPT AND DROPPED DO NOT ADD UP TO WHAT WAS READ"}.get(counts.get("balance"), "")
             lines.append(line)
     db = p.get("database") or {}
     if db.get("records") is not None:

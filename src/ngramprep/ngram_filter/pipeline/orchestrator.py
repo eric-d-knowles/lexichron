@@ -117,6 +117,32 @@ def _check_source(ledger: dict, source_totals: Optional[dict]) -> dict:
     return out
 
 
+def _check_balance(ledger: dict) -> dict:
+    """What the work units read, against what they emitted plus what they dropped.
+
+    Filtering only moves counts: a kept n-gram goes out with every count it
+    came in with (lowercased, lemmatized, binned, split into one record per
+    year, but not a count more or less), and a dropped one goes nowhere. The
+    three totals are taken separately, the dropped one from the dropped
+    records themselves, so read = emitted + dropped is a test and not a
+    definition. It fails if the mapper loses or invents a count (in binning,
+    in the pivot), or a record is neither emitted nor dropped. ``unknown``
+    when some units predate the dropped totals."""
+    read = (int(ledger.get("source_match", 0)), int(ledger.get("source_volume", 0)))
+    emitted = (int(ledger.get("match_total", 0)), int(ledger.get("volume_total", 0)))
+    dropped = (int(ledger.get("dropped_match", 0)), int(ledger.get("dropped_volume", 0)))
+    out = {"read": {"match_total": read[0], "volume_total": read[1]},
+           "emitted": {"match_total": emitted[0], "volume_total": emitted[1]},
+           "dropped": {"match_total": dropped[0], "volume_total": dropped[1]},
+           "difference": {"match_total": emitted[0] + dropped[0] - read[0],
+                          "volume_total": emitted[1] + dropped[1] - read[1]}}
+    if ledger.get("unledgered") or ledger.get("undropped"):
+        out["status"] = "unknown"
+    else:
+        out["status"] = "verified" if out["difference"] == {"match_total": 0, "volume_total": 0} else "mismatch"
+    return out
+
+
 def describe_filter_verification(v: dict) -> list:
     """The verification record of a filter run in sentences."""
     ledger, found, source = v.get("ledger") or {}, v.get("database") or {}, v.get("source") or {}
@@ -155,6 +181,19 @@ def describe_filter_verification(v: dict) -> list:
                      f"{int(read.get('match_total', 0)):,} occurrences; nothing to compare that with.")
     if source.get("disordered"):
         lines.append(f"{int(source['disordered']):,} values in the SOURCE have years out of order.")
+    balance = v.get("balance") or {}
+    if balance.get("status") == "verified":
+        r, e, d = (int(balance[k]["match_total"]) for k in ("read", "emitted", "dropped"))
+        lines.append(f"Filtering accounted for: of {r:,} occurrences read, {e:,} were kept and {d:,} dropped "
+                     f"({100.0 * d / r:.1f}%), and the two add up." if r else "Filtering accounted for: nothing was read.")
+    elif balance.get("status") == "mismatch":
+        r, e, d = (int(balance[k]["match_total"]) for k in ("read", "emitted", "dropped"))
+        lines.append(f"KEPT AND DROPPED DO NOT ADD UP TO WHAT WAS READ: read {r:,} occurrences, kept {e:,}, dropped "
+                     f"{d:,} (difference {int(balance['difference']['match_total']):+,}; volume counts "
+                     f"{int(balance['difference']['volume_total']):+,}). Counts were lost or made inside the filter.")
+    elif balance.get("status") == "unknown" and not ledger.get("unledgered"):
+        lines.append("Kept and dropped not checked against what was read: some work units were filtered before "
+                     "dropped counts were kept.")
     if ledger.get("reordered"):
         lines.append(f"{int(ledger['reordered']):,} emitted values had years out of order and were put in order.")
     return lines
@@ -258,7 +297,8 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
             t_verify = time.perf_counter()
             verification = verify_database(str(pc.dst_db), pc.num_workers, marker_prefix=UNIT_MARKER_PREFIX)
             verification["source"] = _check_source(verification["ledger"], pc.source_totals)
-            if verification["source"]["status"] == "mismatch" and verification["status"] != "mismatch":
+            verification["balance"] = _check_balance(verification["ledger"])
+            if "mismatch" in (verification["source"]["status"], verification["balance"]["status"]):
                 verification["status"] = "mismatch"
             verification["seconds"] = round(time.perf_counter() - t_verify, 1)
         for line in describe_filter_verification(verification):

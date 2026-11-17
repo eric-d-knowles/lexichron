@@ -31,9 +31,10 @@ def set_inherited_mapper(mapper) -> None:
 # the mapper's own counters for the unit (a dict, empty if it keeps none).
 # ledger holds the counts the run is verified against: ``match_total`` and
 # ``volume_total`` of everything the unit emitted, ``source_match`` and
-# ``source_volume`` of everything it read, ``reordered`` (emitted values
-# whose years had to be put in order) and ``source_disordered`` (source
-# values whose years were not in order).
+# ``source_volume`` of everything it read, ``dropped_match`` and
+# ``dropped_volume`` of the source records the mapper dropped, ``reordered``
+# (emitted values whose years had to be put in order) and
+# ``source_disordered`` (source values whose years were not in order).
 UnitResult = Tuple[list, int, int, float, dict, int, int, dict]
 
 try:
@@ -84,13 +85,18 @@ def map_unit(
     database's merge operator does the same. With ``output="sst"`` the chunks
     are sorted SST files of merge operands that the parent ingests as files.
 
-    The unit keeps two sets of totals, both sums of frequencies and of
+    The unit keeps three sets of totals, all sums of frequencies and of
     document counts over all years. Of what it *read*: every source record,
     kept or not, so that all units together must add up to what the source
     holds (a key range skipped or read twice by the partition shows there).
     Of what it *emitted*: every record handed to the spool, before repeated
     keys are summed, so that the finished destination must hold exactly the
-    units' emitted totals. Emitted values are also checked to have their
+    units' emitted totals. And of what it *dropped*: the source records the
+    mapper returned nothing for, counted on their own and not by
+    subtraction, so that a mapper which only moves counts (as filtering,
+    binning and pivoting do) can be held to it: read = emitted + dropped. A
+    count lost inside the mapper, or a record neither emitted nor dropped,
+    breaks that. Emitted values are also checked to have their
     years in ascending order, as the merge operator assumes, and put in
     order if not (see ngram_acquire.spool._Checked).
     """
@@ -115,16 +121,23 @@ def map_unit(
         writer = CheckedChunkWriter(spool_dir, tag, chunk_entries, merge_fn)
     scanned = kept = produced = 0
     source_match = source_volume = source_disordered = 0
+    dropped_match = dropped_volume = 0
     batch = []                                            # source values not yet totalled
+    dropped = []                                          # values of dropped records, likewise
     last_report = last_logged = t0
 
     def tally() -> None:
-        nonlocal source_match, source_volume, source_disordered, batch
+        nonlocal source_match, source_volume, source_disordered, batch, dropped_match, dropped_volume, dropped
         match, volume, bad = check_values(batch)
         source_match += match
         source_volume += volume
         source_disordered += len(bad)
         batch = []
+        if dropped:
+            match, volume, _bad = check_values(dropped)
+            dropped_match += match
+            dropped_volume += volume
+            dropped = []
 
     try:
         with open_db(src_db, mode="r", profile=read_profile) as db:
@@ -135,7 +148,8 @@ def map_unit(
                 if is_bookkeeping(key):
                     continue
                 scanned += 1
-                batch.append(bytes(value))
+                raw = bytes(value)
+                batch.append(raw)
                 if len(batch) >= _BATCH:
                     tally()
                     now = time.perf_counter()
@@ -148,6 +162,7 @@ def map_unit(
                                      which, now - t0, f"{scanned:,}", f"{kept:,}")
                 out = fn(key, value)
                 if out is None:
+                    dropped.append(raw)             # (not batch[-1]: the batch may just have been totalled)
                     continue
                 kept += 1
                 if type(out) is tuple:
@@ -157,7 +172,7 @@ def map_unit(
                     for k, v in out:
                         writer.add(k, v)
                     produced += len(out)
-        if batch:
+        if batch or dropped:
             tally()
         _report(marker, scanned)                      # the whole unit, while it waits to be ingested
         scan_s = time.perf_counter() - t0
@@ -174,7 +189,8 @@ def map_unit(
     stats_fn = getattr(fn, "stats_dict", None)
     stats = {k: int(v) for k, v in stats_fn().items()} if stats_fn else {}
     ledger = {"match_total": writer.match_total, "volume_total": writer.volume_total, "reordered": writer.reordered,
-              "source_match": source_match, "source_volume": source_volume, "source_disordered": source_disordered}
+              "source_match": source_match, "source_volume": source_volume, "source_disordered": source_disordered,
+              "dropped_match": dropped_match, "dropped_volume": dropped_volume}
     seconds = time.perf_counter() - t0
     if chunk_paths:
         log.info("%s: done in %.0fs (scan %.0fs, spool %.0fs): read %s records, kept %s, made %s as %s entries "

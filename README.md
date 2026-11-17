@@ -608,8 +608,8 @@ message saying to run that stage again.
 
 **The run checks its own counts** (`verify_counts`, on by default), in the
 same way an acquisition does. Filtering only ever moves counts and adds them
-together, so two totals must come out exactly, and each unit records both in
-its marker:
+together, so three totals must fit together exactly, and each unit records
+all of them in its marker:
 
 - **What was read.** Every unit totals the occurrences and volume counts of
   every source record in its range, kept or not. Each record lies in exactly
@@ -625,6 +625,15 @@ its marker:
   every value's years in ascending order (workers check that as they spool,
   and put right any value that is not). A unit taken in twice, or a record
   lost on the way, shows as a difference.
+- **What was dropped.** Every unit also totals the n-grams it drops, from
+  those records themselves and not by subtraction. A kept n-gram goes out
+  with every count it came in with (lowercased, lemmatized, binned, split
+  into one record per year, but not a count more or less), so what was read
+  must equal what was kept plus what was dropped. The two checks above
+  cannot see a count lost in between, in binning or in the pivot: the
+  source would still be read in full and the destination would still hold
+  what was emitted. This one can. It also gives the share of occurrences
+  the filter removed, shown on the Progress tab as the run goes.
 
 A difference fails the run and no vocabulary is written from it. The outcome
 is recorded in the database's provenance and shown on the Progress tab.
