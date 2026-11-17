@@ -457,7 +457,12 @@ only the parent ever writes to the database:
 5. **The parent compacts the database.** Each file arrived as its own SST
    file and auto-compaction is off in the write profile, so this is what
    folds them together. It is not optional: until then an n-gram that
-   arrived from several files exists as several partial records.
+   arrived from several files exists as several partial records. The one
+   case in which it is skipped is a re-run that adds no file to a database
+   a previous run already compacted (a job that ended during the count
+   check, say): every SST file is then in one sorted level, no n-gram can
+   be held twice, and compacting again would rewrite the whole database to
+   produce the same records.
 6. **The counts are verified** (`verify_counts`, on by default; see below).
 7. **The parent archives the database** when `archive_path_stub` is set,
    as a `.tar.zst` under `<stub>/<release>/<corpus>/<n>gram_files/`.
@@ -465,6 +470,11 @@ only the parent ever writes to the database:
 A file that fails all its attempts does not stop the others. The run reports
 it at the end and exits with an error, skipping compaction, verification and
 archiving; re-running resumes with only the missing files.
+
+The log records what the job's memory holds after the files and before and
+after the count check: how much of the Slurm job's limit is in use, split
+into memory held by processes and file cache, which the kernel drops when it
+needs the room. A job killed for memory can then be explained from its log.
 
 **Counts are summed, never replaced.** Every record is written as a *merge*:
 when a key is already in the database, its per-year counts are added. Without

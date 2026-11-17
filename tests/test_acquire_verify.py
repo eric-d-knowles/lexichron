@@ -1,3 +1,4 @@
+import sys
 """The whole acquisition, and the checks that make its counts trustworthy:
 both spool formats build the same database, a complete run always compacts,
 and the finished database is verified against the totals every file recorded.
@@ -258,3 +259,33 @@ def test_the_progress_document_carries_what_the_screen_shows(monkeypatch, tmp_pa
     doc = read_progress(stub / "progress.json")
     assert doc["steps"] == ["ingesting", "compacting", "verifying", "archiving"] and doc["state"] == "done"
     assert doc["files_skipped"] == 3 and doc["corpus"]["match_total"] == EXPECTED_MATCH and doc["bytes_total"] is None
+
+
+def test_a_rerun_that_adds_nothing_does_not_compact_again_but_still_verifies(monkeypatch, tmp_path, store, caplog):
+    """A job that ends during the count check leaves a complete, compacted
+    database. The re-run finds every file done: compacting again would
+    rewrite the whole database for the same records (longer than the first
+    time, on a large one), so it goes straight to the check."""
+    import logging
+    path = acquire(monkeypatch, tmp_path)
+    before = store.dump(path)
+    assert store.open(path).compactions == 1
+    with caplog.at_level(logging.INFO):
+        acquire(monkeypatch, tmp_path)
+    doc = acquire.progress
+    assert store.open(path).compactions == 1 and store.dump(path) == before
+    assert "Compaction skipped" in caplog.text
+    # the log says what the job's memory held at each step (on Linux; elsewhere the line is left out)
+    if sys.platform.startswith("linux"):
+        assert "Memory after the files: " in caplog.text and "Memory before the count check: " in caplog.text
+    assert doc["state"] == "done" and doc["verification"]["status"] == "verified" and doc["database"]["compacted"]
+
+
+def test_a_rerun_compacts_a_database_that_was_never_compacted(monkeypatch, tmp_path, store):
+    """Every file in, but the previous run ended before compacting: its files
+    are still in level 0, and the re-run must fold them."""
+    path = acquire(monkeypatch, tmp_path)
+    db = store.open(path)
+    db.compactions, db.level0 = 0, 3            # as if the first run had stopped short
+    acquire(monkeypatch, tmp_path)
+    assert store.open(path).compactions == 1 and acquire.progress["verification"]["status"] == "verified"

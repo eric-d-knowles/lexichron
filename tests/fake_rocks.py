@@ -73,7 +73,10 @@ class DB:
         self.compactions = 0
         self.closed = False
 
+    pending = 0          # writes not yet flushed (the memtable)
+
     def _apply(self, op, k, v):
+        self.pending += 1
         if op == "put" or k not in self.data:
             self.data[k] = v
         else:
@@ -97,11 +100,14 @@ class DB:
 
     def finalize_bulk(self):
         self.flushes += 1
-        self.level0 += 1
+        if self.pending:                 # flushing an empty memtable writes no file
+            self.level0 += 1
+        self.pending = 0
 
     def compact_all(self):
         self.compactions += 1
         self.level0 = 0
+        self.pending = 0
 
     def ingest(self, paths, move=True, write_global_seqno=False):
         import os
@@ -130,6 +136,15 @@ class DB:
             return str(sum(len(k) + len(v) for k, v in self.data.items()))
         if name == "rocksdb.num-files-at-level0":
             return str(self.level0)
+        if name.startswith("rocksdb.num-files-at-level"):
+            # a compaction leaves everything in the last level; nothing else
+            # puts files below level 0 in the fake
+            last = name.endswith("level6")
+            return str(1 if last and self.data and self.compactions else 0)
+        if name == "rocksdb.num-entries-active-mem-table":
+            return str(self.pending)
+        if name == "rocksdb.num-entries-imm-mem-tables":
+            return "0"
         return str(len(self.data))        # estimate-num-keys: exact for the fake
 
     # SST metadata as rocks-shim 0.6 reports it: the fake pretends the sorted

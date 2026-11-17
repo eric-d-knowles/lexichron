@@ -21,6 +21,7 @@ from ngramprep.ngram_acquire.executor import process_files
 from ngramprep.ngram_acquire.progress import ProgressReporter
 from ngramprep.ngram_acquire.worker import DEFAULT_CHUNK_ENTRIES, SPOOL_FORMATS
 from ngramprep.ngram_acquire.verify import verify_database, describe_verification
+from ngramprep.utilities.memory import memory_report
 from ngramprep.ngram_acquire.reporter import print_pipeline_header, print_final_summary
 from ngramprep.ngram_acquire.io.parse import prepare_multigrams
 from ngramprep.ngram_acquire.utils.filters import make_ngram_type_predicate
@@ -316,8 +317,17 @@ def download_and_ingest_to_rocksdb(
         # Compaction, whenever every file is in (a run with failures leaves
         # the database incomplete, and the re-run that completes it compacts).
         # On a large database this is the longest single step of the run.
+        _log_memory("after the files")
         compaction_error = None
-        if not failure:
+        if not failure and not success and _already_compacted(db):
+            # A re-run that found every file done, on a database a previous
+            # run compacted (typically one that ended during the count
+            # check). Compacting again would rewrite the whole database to
+            # produce the same records.
+            logger.info("Compaction skipped: this run added no file and the database is already compacted "
+                        "(all of its SST files are in one sorted level, so no n-gram is held twice)")
+            print("\nCompaction skipped: nothing was added and the database is already compacted.")
+        elif not failure:
             with progress.long_phase("compacting"):
                 compaction_error = _perform_compaction(db, db_path)
         # bookkeeping keys: one resume marker per file done, in any job
@@ -370,6 +380,7 @@ def download_and_ingest_to_rocksdb(
             print(format_banner("Count Verification"))
             sys.stdout.flush()
             t0 = time.time()
+            _log_memory("before the count check")
             logger.info("Verifying the counts: reading the whole database once with up to %d processes "
                         "and comparing its totals with the files' recorded totals", workers)
             verification = verify_database(db_path, workers)
@@ -378,6 +389,7 @@ def download_and_ingest_to_rocksdb(
             print(line)
             logger.info("%s", line)
         print(f"Verification took {timedelta(seconds=int(verification['seconds']))}")
+        _log_memory("after the count check")
         logger.info("Verification took %s; outcome: %s", timedelta(seconds=int(verification["seconds"])),
                     verification["status"])
         progress.set_verification(verification)
@@ -423,6 +435,38 @@ def download_and_ingest_to_rocksdb(
     # Return None to avoid Jupyter displaying the path
     # (the path is already printed in the summary)
     return None
+
+
+_LEVELS = 7        # RocksDB's default number of levels
+
+
+def _log_memory(when: str) -> None:
+    """Log what the job's memory holds (see utilities/memory.py): at the
+    start of each step, so an out-of-memory kill can be read from the log."""
+    report = memory_report()
+    if report:
+        logger.info("Memory %s: %s", when, report)
+
+
+def _already_compacted(db) -> bool:
+    """True when the database provably needs no compaction: nothing is
+    waiting in memory and every SST file is in one level below level 0.
+
+    The files of such a level are a single sorted run with no key in two
+    files, so every n-gram has exactly one record, its counts summed: what
+    a full compaction leaves. Files a run ingested and never compacted sit
+    in level 0 or are stacked over several levels wherever their key ranges
+    overlap, and fail this test. Any doubt (a property that cannot be read)
+    answers False, and the database is compacted."""
+    try:
+        if int(db.get_property("rocksdb.num-entries-active-mem-table") or 0) or \
+                int(db.get_property("rocksdb.num-entries-imm-mem-tables") or 0):
+            return False
+        per_level = [int(db.get_property(f"rocksdb.num-files-at-level{i}")) for i in range(_LEVELS)]
+    except Exception:
+        return False
+    occupied = [i for i, n in enumerate(per_level) if n > 0]
+    return len(occupied) == 1 and occupied[0] > 0
 
 
 def _perform_compaction(db, db_path: str) -> Optional[str]:
