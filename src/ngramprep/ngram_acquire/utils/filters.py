@@ -1,5 +1,4 @@
 from __future__ import annotations
-from functools import partial
 from typing import Callable
 
 DEFAULT_TAGS: tuple[str, ...] = (
@@ -27,6 +26,41 @@ def _pred_untagged(line: str, *, suffixes: tuple[str, ...]) -> bool:
     return toks != [] and all(not _is_tagged(t, suffixes) for t in toks)
 
 
+_PREDICATES = {"all", "tagged", "untagged"}
+
+
+class NgramTypePredicate:
+    """predicate(text) -> bool for one n-gram type, carrying its own
+    description (``ngram_type``, ``suffixes``) so the compiled parser can
+    apply the same filter without calling back into Python (see
+    io/parse_cy.pyx).
+
+    It is a class, not a ``functools.partial`` with attributes set on it,
+    because it travels to the worker processes: multiprocessing pickles a
+    partial with its own reducer, which rebuilds it from the function and its
+    arguments and drops everything else. The description was lost on the way
+    and every worker ran the Python parser."""
+
+    __slots__ = ("ngram_type", "suffixes")
+
+    def __init__(self, ngram_type: str, suffixes: tuple[str, ...]):
+        self.ngram_type = ngram_type
+        self.suffixes = tuple(suffixes)
+
+    def __call__(self, line: str) -> bool:
+        if self.ngram_type == "tagged":
+            return _pred_tagged(line, suffixes=self.suffixes)
+        if self.ngram_type == "untagged":
+            return _pred_untagged(line, suffixes=self.suffixes)
+        return _pred_all_nonempty(line)
+
+    def __reduce__(self):
+        return (NgramTypePredicate, (self.ngram_type, self.suffixes))
+
+    def __repr__(self) -> str:
+        return f"NgramTypePredicate({self.ngram_type!r})"
+
+
 def make_ngram_type_predicate(
     ngram_type: str,
     tags: tuple[str, ...] = DEFAULT_TAGS,
@@ -45,18 +79,6 @@ def make_ngram_type_predicate(
         '_NOUN_'      -> NOT tagged (tag not at token end)
     """
     suffixes = tuple(f"_{t}" for t in tags)
-
-    if ngram_type == "all":
-        pred = partial(_pred_all_nonempty)
-    elif ngram_type == "tagged":
-        # functools.partial is picklable when the underlying function and args are picklable
-        pred = partial(_pred_tagged, suffixes=suffixes)
-    elif ngram_type == "untagged":
-        pred = partial(_pred_untagged, suffixes=suffixes)
-    else:
+    if ngram_type not in _PREDICATES:
         raise ValueError("ngram_type must be 'tagged', 'untagged', or 'all'.")
-    # Describe the predicate so the compiled parser can apply the same filter
-    # without calling back into Python (see io/parse_cy.pyx).
-    pred.ngram_type = ngram_type
-    pred.suffixes = suffixes
-    return pred
+    return NgramTypePredicate(ngram_type, suffixes)

@@ -295,3 +295,23 @@ def test_worker_uses_fast_path_and_matches_python(tmp_path, monkeypatch):
 
     for mode in MODES:
         assert run(True, mode) == run(False, mode), mode
+
+
+def test_the_predicate_keeps_its_description_on_the_way_to_a_worker():
+    """The worker picks the compiled parser from the predicate's ngram_type.
+    A process pool pickles its arguments with multiprocessing's pickler, which
+    rebuilds a functools.partial without its attributes: the description must
+    survive that, or every worker falls back to the Python parser unnoticed."""
+    import pickle
+    from concurrent.futures import ProcessPoolExecutor
+    from multiprocessing.reduction import ForkingPickler
+    from ngramprep.ngram_acquire import worker as worker_mod
+
+    for mode in ("all", "tagged", "untagged"):
+        pred = make_ngram_type_predicate(mode)
+        there = pickle.loads(bytes(ForkingPickler.dumps(pred)))
+        assert there.ngram_type == mode and there.suffixes == pred.suffixes
+        assert worker_mod._FAST_MODES.get(getattr(there, "ngram_type", None)) is not None
+        assert there("cat_NOUN sat_VERB") == pred("cat_NOUN sat_VERB")
+    with ProcessPoolExecutor(1) as pool:
+        assert pool.submit(getattr, make_ngram_type_predicate("tagged"), "ngram_type", None).result() == "tagged"
