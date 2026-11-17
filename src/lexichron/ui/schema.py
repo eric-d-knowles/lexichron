@@ -443,8 +443,10 @@ SLURM_FIELDS = Section("slurm", [
     Field("cpus", "int", 40, True, help="CPUs for the job (also the worker count unless set). Each stage has its "
           "own default: 40 for acquire and filter (acquisition gains little beyond that), 64 for tune and train "
           "(a 64-core slice starts within minutes). Saved for the stage shown.", label="CPUs"),
-    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; "
-          "tune and train default to 64G, mostly reclaimable page cache. The Submit tab shows the estimate.",
+    Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; filtering "
+          "about 0.9G per worker plus 4G when it pivots (0.4G for unigrams); tune and train default to 64G, mostly "
+          "reclaimable page cache. The Submit tab shows the estimate. Slurm's own MaxRSS reads much higher than a "
+          "job needs: it counts the pages forked workers share once per worker.",
           label="Memory"),
     Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS or D-HH:MM:SS. Defaults: 12 hours for "
           "acquire and filter, two days for tune, one day for train.", label="Time limit"),

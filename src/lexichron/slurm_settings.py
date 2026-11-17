@@ -36,11 +36,12 @@ USER_KEYS = ("account", "partition")                   # about the person
 STAGE_KEYS = ("cpus", "mem", "time", "jobs", "job_name")   # about the stage
 
 STAGE_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    # Acquisition throughput flattens out around 40 workers (the single merging
-    # parent becomes the limit); 28G covers 40 workers on 5-grams. Filtering
-    # streams the database with the same shape of job.
+    # 28G covers 40 acquisition workers on 5-grams. Filtering has the same
+    # shape of job but a heavier worker when it pivots: at the end of each
+    # unit it merges a thousand or two spooled parts, about 0.9G at the peak
+    # (see resources.py, where it was measured), so 40 workers need 40G.
     "acquire": {"cpus": 40, "mem": "28G", "time": "12:00:00"},
-    "filter": {"cpus": 40, "mem": "28G", "time": "12:00:00"},
+    "filter": {"cpus": 40, "mem": "40G", "time": "12:00:00"},
     # A 64-core slice starts within minutes where a whole node waits hours;
     # the memory is page cache from the database scan and reclaimable.
     "tune": {"cpus": 64, "mem": "64G", "time": "2-00:00:00", "jobs": 8},

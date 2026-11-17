@@ -30,10 +30,21 @@ def test_acquire_workers_follow_the_cpus_and_can_outgrow_the_memory():
 
 
 def test_filter_and_tune_models():
-    est = memory_estimate("filter", {}, {"cpus": 40, "mem": "28G"})
-    assert est.fits and est.processes == 40
-    est = memory_estimate("filter", {}, {"cpus": 96, "mem": "8G"})
-    assert not est.fits and "filter.workers to 16" in est.describe()
+    # a pivoted run (anything longer than a unigram, unless pivot is turned off): 0.9G a worker plus 4G,
+    # from a measurement on real 5-grams. The stage's default job fits; the job that ran out of memory does not
+    est = memory_estimate("filter", {"ngram_size": 5}, {"cpus": 40, "mem": "40G"})
+    assert est.fits and est.processes == 40 and est.per_mb == 900
+    est = memory_estimate("filter", {"ngram_size": 5}, {"cpus": 100, "mem": "30G"})
+    assert not est.fits and "about 92G needed" in est.describe() and "filter.workers to 29" in est.describe()
+    assert not memory_estimate("filter", {"ngram_size": 5}, {"cpus": 40, "mem": "28G"}).fits
+    assert memory_estimate("filter", {}, {"cpus": 40, "mem": "40G"}).per_mb == 900          # size unknown: the larger figure
+    # a run keyed by n-gram (unigrams, or pivot off) merges a few parts per unit: 0.4G a worker
+    est = memory_estimate("filter", {"ngram_size": 1}, {"cpus": 40, "mem": "28G"})
+    assert est.fits and est.per_mb == 400
+    assert memory_estimate("filter", {"ngram_size": 5, "pivot": False}, {"cpus": 40, "mem": "28G"}).per_mb == 400
+    assert memory_estimate("filter", {"ngram_size": 1, "pivot": True}, {"cpus": 40, "mem": "28G"}).per_mb == 900
+    est = memory_estimate("filter", {"ngram_size": 1}, {"cpus": 96, "mem": "8G"})
+    assert not est.fits and "filter.workers to 10" in est.describe()
     # tune: trainers = workers / threads per model
     est = memory_estimate("tune", {"workers_per_model": 16}, {"cpus": 64, "mem": "16G"})
     assert est.processes == 4 and est.fits and "training processes" in est.describe()

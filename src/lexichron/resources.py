@@ -33,12 +33,31 @@ def available_cpus() -> int:
 
 # Working figures, in MB. Acquire: a worker streams one file through
 # on-disk chunks of ``chunk_entries`` packed entries (the default is 200k)
-# plus its decompression buffers; the parent ingests. Filter: a worker scans
-# its key range with a small cache; the parent merges. Tune: a training
+# plus its decompression buffers; the parent ingests. Tune: a training
 # process holds the vocabulary and the model; the corpus writer and the
 # scorer are in the parent.
+#
+# Filter, measured on the eng 5-grams (2026-11-17, each worker's own memory
+# sampled every 2 s as PSS, which does not count shared pages twice):
+# a worker holds about 280 MB while it scans (the lemmatizer's model, the
+# source opened with a small cache, the batch it is filling), and at the end
+# of its unit merges the sorted parts it spooled into one file, all of them
+# open at once: about 0.25 MB a part on top. A pivoted run makes one record
+# per n-gram and year, so a unit of the default partition (4 units a worker)
+# spools 750 to 2,300 parts of 200k records and peaks at 500 to 840 MB; the
+# fewer the workers, the larger the units and the higher each worker's peak.
+# A unigram run's units are a few parts each. 100 workers at 250 MB each (the
+# figure here before) ran out of memory in 30G.
+#
+# Slurm's own MaxRSS reads far higher than this for the same job (about 2.4
+# times while scanning): it adds up every process's resident pages, and
+# forked workers share most of theirs. A job's cgroup also fills with page
+# cache from the spool files, which is reclaimed under pressure and is not
+# part of the need.
 ACQUIRE_BASE, ACQUIRE_PER_WORKER, ACQUIRE_CHUNK_ENTRIES = 3_000, 600, 200_000
-FILTER_BASE, FILTER_PER_WORKER = 4_000, 250
+FILTER_BASE = 4_000
+FILTER_PER_WORKER = 400            # a run keyed by n-gram (the unigram run): scanning, and a small merge
+FILTER_PER_WORKER_PIVOT = 900      # a pivoted run: the end-of-unit merge of a thousand or two parts
 TUNE_BASE, TUNE_PER_TRAINER = 3_000, 600
 TRAIN_PER_WRITER = 500          # a corpus writer streams the pivoted database with a small cache
 
@@ -109,11 +128,17 @@ def memory_estimate(stage: str, kwargs: Dict[str, Any], slurm: Dict[str, Any]) -
         return MemoryEstimate(need, have, workers, "worker", per, ACQUIRE_BASE, fix)
     if stage == "filter":
         workers = _int(kwargs.get("workers"), cpus)
-        need = FILTER_BASE + FILTER_PER_WORKER * workers
-        fit_workers = max(1, ((have or 0) - FILTER_BASE) // FILTER_PER_WORKER) if have else 0
+        # Pivoted (one record per n-gram and year) unless told otherwise: the
+        # stage's own default is to pivot everything longer than a unigram.
+        pivot = kwargs.get("pivot")
+        if pivot is None:
+            pivot = _int(kwargs.get("ngram_size"), 5) > 1
+        per = FILTER_PER_WORKER_PIVOT if pivot else FILTER_PER_WORKER
+        need = FILTER_BASE + per * workers
+        fit_workers = max(1, ((have or 0) - FILTER_BASE) // per) if have else 0
         fix = (f"Ask for {fmt_gb(need)}, or set filter.workers to {fit_workers} so the script does not tie "
                f"the worker count to the {cpus} CPUs.")
-        return MemoryEstimate(need, have, workers, "worker", FILTER_PER_WORKER, FILTER_BASE, fix)
+        return MemoryEstimate(need, have, workers, "worker", per, FILTER_BASE, fix)
     if stage in ("tune", "train"):
         total = _int(kwargs.get("workers"), cpus)
         threads = max(1, _int(kwargs.get("workers_per_model"), 4))

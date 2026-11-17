@@ -595,9 +595,16 @@ every unit is in, the parent compacts the destination, which is what folds
 the units' files into one sorted database and sums the counts of records
 that arrived from more than one unit. Compaction is not optional. A worker
 holds the source open with rocks-shim's `scan` profile (only the files its
-range touches, nothing pinned, a small cache), so it needs about 200 MB
-however large the database is, and all the CPUs of an allocation can be
-used: 40 workers fit in the default 28G. A run that is interrupted resumes
+range touches, nothing pinned, a small cache), so its memory does not grow
+with the database: about 280 MB while it scans, and more for a moment at the
+end of each unit, when it merges the sorted parts it spooled into one file.
+For a pivoted run that is a thousand or two parts and a peak of 0.5 to
+0.85 GB (measured on the English 5-grams); the Submit tab's estimate allows
+0.9 GB a worker plus 4 GB, so 40 workers fit in the default 40G, and 0.4 GB
+a worker for a unigram run. Slurm's own `MaxRSS` will read much higher than
+that for the same job, because it counts the pages forked workers share once
+per worker, and a job's memory also fills with page cache from the spool
+files, which is given back under pressure. A run that is interrupted resumes
 from the units it had finished (`mode: resume`); `mode: restart` starts over,
 after deleting the destination database, and both the UI and the command
 line ask before it does (see [Command line](#command-line)).
@@ -693,8 +700,7 @@ Tabs:
 - **Submit** — Slurm account, partition, CPUs, memory, time and, for tune
   and train, the number of jobs. The values come from three layers and a
   line under the form says where each came from: lexichron's defaults per
-  stage (40 CPUs and 28G for acquire and filter, where acquisition stops
-  gaining from more workers; a 64-CPU, 64G slice for a day or two, split
+  stage (40 CPUs for acquire and filter, with 28G and 40G; a 64-CPU, 64G slice for a day or two, split
   over a job array, for tune and train); your own account and partition,
   kept in `~/.lexichron/slurm.yaml` for every corpus (the first account you
   save goes there; *Use account as my default* moves a later change there);
