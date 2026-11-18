@@ -522,6 +522,10 @@ def test_a_job_array_shares_the_years_and_the_pairs_between_tasks(rocks, tmp_pat
                   similarity_dataset=str(d / "simlex999.txt"), axis_lexicon="none")
     with pytest.raises(ValueError, match="restart"):
         tune.tune_models(5, "20200217", "eng", str(stub), mode="restart", array_task=0, array_count=2, **common)
+    # an unnamed search would be named by each task's own start time: refused before anything is written
+    with pytest.raises(ValueError, match="need a name for the search"):
+        tune.tune_models(5, "20200217", "eng", str(stub), array_task=0, array_count=2, **dict(common, name=None))
+    assert not (stub / "20200217" / "eng" / "5gram_files" / "tuning").exists()
     # task 0 of 2: years 1990 and 2010 (round-robin)
     tune.tune_models(5, "20200217", "eng", str(stub), array_task=0, array_count=2,
                      progress_path=str(tmp_path / "t0.json"), **common)

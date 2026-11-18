@@ -177,6 +177,10 @@ def train_models(
                          "others are writing): delete the directory first, then run the array in resume mode, "
                          "or run the restart as one job")
     corpus_dir = db_path.parent
+    if task is not None and not (name and str(name).strip()):
+        raise ValueError("the tasks of a job array need a name for the ensemble (name): an unnamed ensemble is "
+                         "named by the time it starts, so every task would start its own under models/ and "
+                         "none would see the others' models")
     name = name or datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = corpus_dir / "models" / name
     if mode == "restart" and out_dir.exists():

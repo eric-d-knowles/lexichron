@@ -729,7 +729,11 @@ Tabs:
   tasks each take every N-th year of the run and write into the same
   output, so a run too long for one job's time limit, or one that should
   spread over several nodes, is one submission; the grid summary on the
-  Settings tab says how the years would split. The acquire and filter
+  Settings tab says how the years would split. An array needs the search or
+  ensemble to have a name (*Search name*, *Ensemble name* on the Settings
+  tab): an unnamed one is named by the time it starts, so each task would
+  start its own and none would see the others' models. Submit refuses it,
+  and so does the stage. *Job name* is only what Slurm calls the job. The acquire and filter
   stages write one database and run as one job, parallel inside it. Run, Write
   batch script and Submit all check first whether the settings would make
   the stage delete its earlier output (a database, a tuning search); if so,

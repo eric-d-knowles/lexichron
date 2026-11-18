@@ -161,6 +161,9 @@ def test_a_job_array_shares_the_years(rocks, tmp_path):
                   seeds_per_corpus=1, name="arr", workers=1, axis_lexicon="none", train_fn=fake_train)
     with pytest.raises(ValueError, match="restart"):
         train.train_models(5, "20200217", "eng", str(stub), mode="restart", array_task=0, array_count=2, **common)
+    with pytest.raises(ValueError, match="need a name for the ensemble"):
+        train.train_models(5, "20200217", "eng", str(stub), array_task=0, array_count=2, **dict(common, name=""))
+    assert not (stub / "20200217" / "eng" / "5gram_files" / "models").exists()
     out = Path(train.train_models(5, "20200217", "eng", str(stub), array_task=0, array_count=2,
                                   progress_path=str(tmp_path / "t0.json"), **common))
     doc0 = read_progress(tmp_path / "t0.json")

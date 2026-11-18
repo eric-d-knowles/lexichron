@@ -1,4 +1,6 @@
 import os
+
+import pytest
 import stat
 
 from lexichron.ui.schema import stage_sections, parse_args_doc, SLURM_FIELDS
@@ -113,7 +115,7 @@ def test_write_sbatch_job_array_splits_a_tune_search(tmp_path, monkeypatch):
     """slurm.jobs above 1 makes the script a job array whose tasks run the
     stage in resume mode on their share of the years; the other stages
     ignore it."""
-    yaml_path = tmp_path / "project.yaml"; yaml_path.write_text("corpus: {}\n")
+    yaml_path = tmp_path / "project.yaml"; yaml_path.write_text("corpus: {}\ntune:\n  name: grid1\n")
     monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
     monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
     text = write_sbatch(yaml_path, "tune", {"account": "a", "cpus": 16, "mem": "32G", "time": "08:00:00",
@@ -177,3 +179,23 @@ def test_a_worker_count_saved_in_the_settings_is_not_overridden_by_the_cpus(tmp_
     # an override given at submit time still wins over both
     text = write_sbatch(pinned, "acquire", slurm, extra_sets=["acquire.workers=7"]).read_text()
     assert "--set acquire.workers=7" in text and "SLURM_CPUS_PER_TASK" not in text.split("lexichron")[-1]
+
+
+def test_a_job_array_is_refused_without_a_name_for_the_search_or_ensemble(tmp_path, monkeypatch):
+    """An unnamed search or ensemble is named by the time it starts. The
+    tasks of an array start at different seconds, so each would make its
+    own directory and none would see the others' models: no year pair could
+    be scored. (A job name on the Submit tab is not the search's name.)"""
+    from lexichron.config import ConfigError
+    monkeypatch.delenv("APPTAINER_CONTAINER", raising=False)
+    monkeypatch.delenv("SINGULARITY_CONTAINER", raising=False)
+    slurm = {"account": "a", "cpus": 16, "mem": "32G", "time": "08:00:00", "jobs": 4, "job_name": "occfem_tuning1"}
+    bare = tmp_path / "project.yaml"; bare.write_text("corpus: {}\ntune:\n  name: ''\n")
+    for stage, label in (("tune", "Search name"), ("train", "Ensemble name")):
+        with pytest.raises(ConfigError, match=f"needs a name.*'{label}'"):
+            write_sbatch(bare, stage, slurm)
+        # a name given as an override, or one job, is fine
+        assert "--array=0-3" in write_sbatch(bare, stage, slurm, extra_sets=[f"{stage}.name=run1"]).read_text()
+        assert "--array" not in write_sbatch(bare, stage, dict(slurm, jobs=1)).read_text()
+    named = tmp_path / "named.yaml"; named.write_text("corpus: {}\ntrain:\n  name: ens1\n")
+    assert "--array=0-3" in write_sbatch(named, "train", slurm).read_text()

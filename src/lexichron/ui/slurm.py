@@ -106,6 +106,27 @@ def _workers_in_settings(project_yaml: str | os.PathLike, stage: str) -> Optiona
         return None
 
 
+# Stages whose output directory is named by ``name`` and, without one, by
+# the time the run starts: the tasks of an array would each start their own.
+_NAMED_BY_TIME = {"tune": ("search", "Search name"), "train": ("ensemble", "Ensemble name")}
+
+
+def _name_in_settings(project_yaml, stage: str, sets: List[str]) -> Optional[str]:
+    """The stage's ``name`` as an override gives it, else as the settings
+    file does; None when neither has one."""
+    for s in reversed(sets):
+        if s.startswith(f"{stage}.name="):
+            return s.split("=", 1)[1].strip() or None
+    try:
+        import yaml
+        with open(project_yaml, "r", encoding="utf-8") as fh:
+            data = yaml.safe_load(fh) or {}
+        value = (data.get(stage) or {}).get("name")
+        return str(value).strip() or None if value is not None else None
+    except Exception:
+        return None
+
+
 def write_sbatch(
     project_yaml: str | os.PathLike,
     stage: str,
@@ -190,6 +211,12 @@ def write_sbatch(
         else:
             lines.append(f"# {stage}.workers is set to {pinned} in the settings file, so the job's CPU count does not "
                          f"change it")
+    if tasks > 1 and stage in _NAMED_BY_TIME and not _name_in_settings(project_yaml, stage, sets):
+        what, label = _NAMED_BY_TIME[stage]
+        raise ConfigError(f"a job array needs a name for the {what}: fill in '{label}' on the Settings tab "
+                          f"({stage}.name). Without one each of the {tasks} tasks would name its own {what} by "
+                          f"the time it started, and none would see the others' models. ('Job name' on the "
+                          f"Submit tab is only what Slurm calls the job.)")
     if tasks > 1:
         sets = [s for s in sets if not s.startswith((f"{stage}.array_task=", f"{stage}.array_count=",
                                                      f"{stage}.mode="))]
