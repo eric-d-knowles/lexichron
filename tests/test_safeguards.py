@@ -134,3 +134,51 @@ def test_sbatch_carries_yes_only_when_confirmed(tmp_path, monkeypatch):
     assert "--yes" not in write_sbatch(proj, "filter", {"account": "a"}).read_text()
     text = write_sbatch(proj, "filter", {"account": "a"}, assume_yes=True).read_text()
     assert text.rstrip().splitlines()[-1].endswith("--yes")
+
+
+def test_a_run_refused_before_it_starts_leaves_a_record_with_the_reason(tmp_path):
+    """A stage checks its inputs before it reports any progress. A run it
+    refuses there must still leave a progress record, or a submitted job
+    just vanishes from the UI with its reason buried in the job's error file."""
+    from lexichron.ui.progress_view import notice_text, summarize
+    from ngramprep.ngram_acquire.progress import ProgressReporter, read_progress
+
+    path = tmp_path / "runs" / "r1" / "progress.json"
+    cli._record_failure(str(path), "filter", ValueError("The vocabulary was built another way. Run the unigram filter again."))
+    doc = read_progress(path)
+    assert doc["stage"] == "filter" and doc["state"] == "failed" and doc["finished"] and doc["before_start"]
+    info = summarize(doc)
+    assert info["headline"].startswith("failed before it started")
+    assert "Run the unigram filter again." in notice_text(info)
+
+    # an unexpected error names its type
+    cli._record_failure(str(tmp_path / "r2" / "progress.json"), "tune", KeyError("years"))
+    assert read_progress(tmp_path / "r2" / "progress.json")["message"] == "KeyError: 'years'"
+
+    # a run that had started and died is closed, keeping what it had recorded
+    started = tmp_path / "r3" / "progress.json"
+    rep = ProgressReporter(str(started), stage="acquire")
+    rep.doc["files_done"] = 7
+    rep._write(force=True)
+    cli._record_failure(str(started), "acquire", OSError("disk full"))
+    doc = read_progress(started)
+    assert (doc["state"], doc["files_done"], doc["message"]) == ("failed", 7, "disk full") and "before_start" not in doc
+
+    # a record the stage closed itself keeps its own message
+    rep = ProgressReporter(str(tmp_path / "r4" / "progress.json"), stage="acquire")
+    rep.finish("failed", "the counts do not match")
+    cli._record_failure(str(tmp_path / "r4" / "progress.json"), "acquire", RuntimeError("something later"))
+    assert read_progress(tmp_path / "r4" / "progress.json")["message"] == "the counts do not match"
+
+    cli._record_failure(None, "filter", ValueError("x"))            # no record to write: nothing happens
+
+
+def test_the_command_line_records_the_failure_and_still_raises(project, monkeypatch):
+    def refusing(ngram_size, repo_release_id, repo_corpus_id, db_path_stub, mode="resume", progress_path=None):
+        raise ValueError("the vocabulary does not match")
+    monkeypatch.setattr(cli, "_resolve", lambda dotted: refusing)
+    with pytest.raises(ValueError, match="does not match"):
+        cli.main(["filter", str(project), "--set", "filter.mode=resume"])
+    from ngramprep.ngram_acquire.progress import read_progress
+    runs = sorted((project.parent / ".lexichron" / "runs").glob("*_filter/progress.json"))
+    assert runs and read_progress(runs[-1])["message"] == "the vocabulary does not match"

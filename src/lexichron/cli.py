@@ -93,6 +93,38 @@ def _confirm_overwrite(stage: str, kwargs: Dict[str, Any], *, assume_yes: bool =
     return False
 
 
+def _record_failure(progress_path, stage: str, exc: BaseException) -> None:
+    """Make sure a run that ended in an error says so in its progress record.
+
+    A stage checks its inputs before it starts its own progress reporting
+    (a vocabulary lemmatized another way, a source that was never compacted,
+    a missing file), so a run refused there left no record at all: in the UI
+    a submitted job simply vanished from the queue, and the reason was only
+    in the batch job's error file. This writes the record, or completes one
+    the stage left as running, with the error as its message. A record the
+    stage itself already closed keeps its own message. Advisory: it never
+    raises."""
+    if not progress_path:
+        return
+    try:
+        from ngramprep.ngram_acquire.progress import ProgressReporter, read_progress
+        expected = isinstance(exc, (ValueError, RuntimeError, OSError))
+        text = str(exc).strip() or type(exc).__name__
+        if not expected:
+            text = f"{type(exc).__name__}: {text}"
+        doc = read_progress(progress_path)
+        if doc and doc.get("state") != "running" and doc.get("message"):
+            return
+        reporter = ProgressReporter(progress_path, stage=stage)
+        if doc:
+            reporter.doc.update(doc)
+        else:
+            reporter.doc["before_start"] = True      # nothing had begun: the UI shows the reason, not empty meters
+        reporter.finish("failed", text)
+    except Exception:
+        pass
+
+
 def _run_stage(stage: str, args: argparse.Namespace) -> int:
     dotted, _ = STAGES[stage]
     func = _resolve(dotted)
@@ -128,7 +160,11 @@ def _run_stage(stage: str, args: argparse.Namespace) -> int:
     # Logging is left to the stage: each pipeline writes a log file next to
     # its output and keeps the console to its banner, progress and warnings.
     print(f"lexichron {__version__}: running stage '{stage}'", flush=True)
-    func(**kwargs)
+    try:
+        func(**kwargs)
+    except Exception as exc:
+        _record_failure(kwargs.get("progress_path"), stage, exc)
+        raise
     if kwargs.get("progress_path"):
         # The database carries its own record of how it was made (see
         # lexichron.provenance); `lexichron inspect` shows it.

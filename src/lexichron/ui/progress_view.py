@@ -204,7 +204,11 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         status = state
     parts = [status + (f" {where_txt}" if where_txt else "")]
     unit = unit_label(doc)
-    if total and by_size:
+    if doc.get("before_start") and state == "failed":
+        # refused before any work began (see cli._record_failure): the reason
+        # is the run's message, and a count of nothing would only distract
+        parts = ["failed before it started" + (f" ({where_txt})" if where_txt else "")]
+    elif total and by_size:
         parts.append(f"{done}/{total} {unit} ({100.0 * fraction:.0f}% by size)")
     elif total:
         parts.append(f"{done}/{total} {unit}" + (f" ({percent:.0f}%)" if percent is not None else ""))
