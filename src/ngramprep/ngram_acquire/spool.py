@@ -186,8 +186,11 @@ class SstChunkWriter(ChunkWriter):
         merge = getattr(rs, "merge_sst_files", None)
         if merge is not None and len(self.part_paths) > 1:
             merged = self.spool_dir / f"{self.file_tag}.sst.part"
+            # The operator is named, not left to the store's default: the
+            # parts hold packed24 operands, and a key met in several parts
+            # must be summed the way the database will sum it.
             self.entries_total = int(merge([str(p) for p in self.part_paths], str(merged),
-                                           compression=self.compression))
+                                           compression=self.compression, merge_operator="packed24"))
             for part in self.part_paths:
                 try:
                     os.remove(part)

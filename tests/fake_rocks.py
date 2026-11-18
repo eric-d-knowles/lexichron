@@ -199,7 +199,7 @@ class SstFileWriter:
         return os.path.getsize(self.path) if self.path else 0
 
 
-def merge_sst_files(parts, out, *, compression="zstd", compression_level=3, merge_operator="packed24"):
+def merge_sst_files(parts, out, *, merge_operator, compression="zstd", compression_level=3):
     """rocks-shim 0.9: merge sorted parts into one file, summing keys shared
     by parts with the packed24 operator. Parts are left in place."""
     import pickle
