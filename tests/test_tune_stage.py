@@ -173,11 +173,13 @@ def test_cells_are_scored_as_their_models_finish_and_resume_keeps_scores(rocks, 
                      window=[2], min_count=[2], epochs=[1], seeds=2, name="t2", mode="restart", workers=1,
                      probes_per_decile=3, similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
                      train_fn=watching_train)
-    # the first cell's row was written before the second cell's models were trained, within the year;
-    # the 1990-1991 pairs were written before 1991's second cell trained
-    first_of_second_cell_1990 = next(s for s in seen if s[1].startswith("vs16") and "y1990" in s[0])
+    # the costlier cell (16 dimensions) trains first in each year. Its row was written before the
+    # other cell's models were trained, within the year; the 1990-1991 pairs were written before
+    # 1991's second cell trained
+    assert [s[1][:4] for s in seen if "y1990" in s[0]][0] == "vs16"
+    first_of_second_cell_1990 = next(s for s in seen if s[1].startswith("vs8") and "y1990" in s[0])
     assert first_of_second_cell_1990[2] == 1 and first_of_second_cell_1990[4] == 1     # summary follows at once
-    first_of_second_cell_1991 = next(s for s in seen if s[1].startswith("vs16") and "y1991" in s[0])
+    first_of_second_cell_1991 = next(s for s in seen if s[1].startswith("vs8") and "y1991" in s[0])
     assert first_of_second_cell_1991[2] == 3 and first_of_second_cell_1991[3] == 1
     assert len((out / "pairs.tsv").read_text().splitlines()) == 3                 # header + adjacent x 2 cells
     # resume: scores are read back, not recomputed (the file is untouched); the summary is rebuilt
@@ -574,3 +576,30 @@ def test_a_search_from_before_the_score_files_is_imported(rocks, tmp_path):
     assert trained == [] and len(list((out / "scores").glob("*.json"))) == 2 and len(list((out / "pairs").glob("*.json"))) == 1
     after = read_search(str(out))
     assert len(after["results"]) == 2 and after["best_cell"] == before["best_cell"]
+
+
+def test_within_a_year_the_costliest_cells_are_queued_first():
+    """A fixed number of models train at a time. In the grid's own order the
+    dearest cells started last and the end of each year was a few long
+    models on a fraction of the node; costliest first lets the short ones
+    fill the slots as they free up. A cell's models stay together (it is
+    scored when its last one lands) and the set of models is unchanged."""
+    from lexichron.training.grid import Cell
+    cells = [Cell(vs, 5, 5, ep, "skip-gram", "none") for ep in (10, 30) for vs in (100, 200, 300)]
+    tasks = tune.plan_models(cells, [1990, 1991], seeds=2, split_half=True)
+    assert [t.year for t in tasks] == [1990] * 24 + [1991] * 24                 # years stay in order
+    for year in (1990, 1991):
+        of_year = [t for t in tasks if t.year == year]
+        order = [(t.cell.vector_size, t.cell.epochs) for t in of_year[::4]]
+        # 300 x 10 and 100 x 30 cost the same: the grid lists the first earlier, and it stays ahead
+        assert order == [(300, 30), (200, 30), (300, 10), (100, 30), (200, 10), (100, 10)]
+        for i in range(0, 24, 4):                                               # four models of one cell, together
+            assert len({t.cell.stem for t in of_year[i:i + 4]}) == 1
+            assert [t.kind for t in of_year[i:i + 4]] == ["s0", "s1", "ha", "hb"]
+        assert sorted(t.stem for t in of_year) == sorted(
+            f"y{year}_{c.stem}_{k}" for c in cells for k in ("s0", "s1", "ha", "hb"))
+    # CBOW's cost does not grow with the window; equal costs keep the grid's order
+    sg, cbow = Cell(100, 5, 5, 10, "skip-gram", "none"), Cell(100, 5, 5, 10, "cbow", "none")
+    assert tune.relative_cost(cbow) == tune.relative_cost(sg) / 5
+    same = [Cell(100, 5, mc, 10, "skip-gram", "none") for mc in (1, 5, 10)]
+    assert [t.cell.min_count for t in tune.plan_models(same, [1990], 1, False)] == [1, 5, 10]

@@ -497,10 +497,31 @@ def _stem(cell: Cell, year: int, kind: str) -> str:
     return f"y{year}_{cell.stem}_{kind}"
 
 
+def relative_cost(cell: Cell) -> float:
+    """Roughly how long a cell's models take to train next to the grid's
+    others: passes over the corpus x vector size x (for skip-gram) the
+    window. Only the order it gives is used, so it need not be right in
+    absolute terms."""
+    return float(cell.epochs) * cell.vector_size * (cell.window if cell.sg else 1)
+
+
 def plan_models(cells: Sequence[Cell], years: Sequence[int], seeds: int, split_half: bool) -> List[ModelTask]:
+    """The models to train, in year order, and within a year the costliest
+    cells first.
+
+    A fixed number of models train at a time, each with the same threads.
+    In the grid's own order a search's cheap cells started first and its
+    dearest last, and the end of every year was a few long models on a
+    fraction of the node: a search over 100 to 300 dimensions and 10 to 30
+    epochs used under half its CPU time. Starting the long cells first
+    lets the short ones fill the slots as they free up. A cell's models
+    stay together, so a cell is still scored as soon as its last model
+    lands. Which models are trained and what they are does not change,
+    only when each starts."""
+    by_cost = sorted(cells, key=lambda c: -relative_cost(c))           # stable: ties keep the grid's order
     tasks = []
     for year in years:
-        for cell in cells:
+        for cell in by_cost:
             for s in range(seeds):
                 tasks.append(ModelTask(cell, year, f"s{s}"))
             if split_half:
