@@ -293,7 +293,7 @@ HELP: Dict[str, str] = {
     "train.corpus_writers": "Processes writing corpus resamples ahead of training (each streams the pivoted database).",
     "train.temp_dir": "Where the corpus resamples are written. Blank: inside the ensemble directory. A job's node-local $TMPDIR is faster: write it as $TMPDIR (expanded in the job).",
     # measure
-    "measure.ensemble": "The trained ensemble to measure: its name under <corpus>/models/ (From ensemble lists them), or a directory.",
+    "measure.ensemble": "The trained ensemble to measure, from those under <corpus>/models/ (newest first). A directory elsewhere can be named in the settings file; the list then shows it as written.",
     "measure.name": "Name of this measure; its files go to <ensemble>/measures/<name>/. One name holds one specification: another axis or word list is another name.",
     "measure.kind": "projection: each word's cosine with the axis from the negative pole's centroid to the positive pole's, both built inside the model. similarity: cosine with the centroid of the target words. frequency: the word's share of the model's tokens.",
     "measure.words": "The words to measure, comma-separated; each gets a series. A group written surgeon|physician|doctor is one series, the mean of its members inside each model. Words a year's models lack are reported with how many replicates had them.",
@@ -368,6 +368,8 @@ def _kind_for(annotation: Any, default: Any, name: str, stage: str = "") -> str:
         return "multigrams"
     if name == "always_include":
         return "keeplist"
+    if name == "ensemble" and stage == "measure":
+        return "ensemble"                                  # a list of the corpus's ensembles
     if name.endswith("_dataset"):
         return "path"
     if name == "vocabulary":

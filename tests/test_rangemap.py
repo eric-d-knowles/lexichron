@@ -1,5 +1,6 @@
 """The range-map engine: partition -> map in workers -> single merging writer,
 with per-unit markers that make resume exact."""
+import json
 import struct
 
 import pytest
@@ -415,3 +416,39 @@ def test_a_mapper_that_loses_counts_breaks_the_balance(rocks, tmp_path):
     balance = _check_balance(v["ledger"])
     assert balance["status"] == "mismatch"
     assert balance["difference"] == {"match_total": -500 * 2, "volume_total": -500 * 2}    # the (2000, 2, 2) of every 'word'
+
+
+def test_a_resume_with_different_inputs_is_refused(rocks, tmp_path):
+    """A resume processes only the units not yet done. Given other inputs (a
+    rebuilt vocabulary), it would finish the destination with units made two
+    ways, and every count check would pass. The inputs are recorded when a
+    destination is started and compared on a resume."""
+    from ngramprep.rangemap.engine import INPUTS_KEY, InputsChanged
+    src, dst = tmp_path / "src.db", tmp_path / "dst.db"
+    _make_source(str(src))
+
+    def cfg(inputs, mode="resume"):
+        return RangeMapConfig(src_db=src, dst_db=dst, mapper=LowerMapper(), num_units=8, workers=2,
+                              smart_partitioning=False, spool_dir=tmp_path, mode=mode, inputs=inputs)
+
+    run_rangemap(cfg({"vocabulary": "aaa", "top_n": None}))
+    assert json.loads(fake_rocks._REGISTRY[str(dst)].get(INPUTS_KEY)) == {"top_n": None, "vocabulary": "aaa"}
+    out = fake_rocks.dump(dst)
+    run_rangemap(cfg({"top_n": None, "vocabulary": "aaa"}))           # the same inputs, in any order: fine
+    with pytest.raises(InputsChanged, match=r"vocabulary: was 'aaa', now 'bbb'.*mode restart"):
+        run_rangemap(cfg({"vocabulary": "bbb", "top_n": None}))
+    assert fake_rocks.dump(dst) == out                                 # refused before touching anything
+    # a restart rebuilds it and records the new inputs
+    run_rangemap(cfg({"vocabulary": "bbb", "top_n": None}, mode="restart"))
+    assert json.loads(fake_rocks._REGISTRY[str(dst)].get(INPUTS_KEY))["vocabulary"] == "bbb"
+    # a destination from before inputs were recorded is resumed, with a note, and recorded from then on
+    db = fake_rocks._REGISTRY[str(dst)]
+    del db.data[INPUTS_KEY]
+    said = []
+    run_rangemap(RangeMapConfig(src_db=src, dst_db=dst, mapper=LowerMapper(), num_units=8, workers=2,
+                                smart_partitioning=False, spool_dir=tmp_path, inputs={"vocabulary": "ccc"},
+                                log=said.append))
+    assert any("before its inputs were recorded" in line for line in said)
+    assert json.loads(db.get(INPUTS_KEY)) == {"vocabulary": "ccc"}
+    # no inputs given: nothing recorded or checked (callers other than the filter)
+    run_rangemap(cfg(None))

@@ -69,6 +69,44 @@ class FilterError(RuntimeError):
     not a finished database, or the counts do not add up."""
 
 
+def _file_digest(path) -> Optional[str]:
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _run_inputs(filter_config, vocab, lemmas, pivot: bool) -> dict:
+    """What decides a filter run's output, for the range-map engine to record
+    in the destination and compare on a resume: the vocabulary by its
+    content (a rebuilt vocabulary at the same path is a different input),
+    how many of its words are used, how lemmas are made, the keep lists and
+    the rules. Not the workers or other settings that change only how the
+    work is done."""
+    def words(xs):
+        return sorted(x.decode("utf-8") if isinstance(x, (bytes, bytearray)) else str(x) for x in (xs or ()))
+    fc = filter_config
+    return {
+        "vocabulary": _file_digest(vocab) if vocab else None,
+        "vocabulary_top_n": getattr(fc, "whitelist_top_n", None),
+        "vocabulary_min_count": getattr(fc, "whitelist_min_count", None) if vocab else None,
+        "lemmas": lemmas,
+        "always_include": words(fc.always_include),
+        "always_include_case": words(fc.always_include_case),
+        "lemma_exempt": words(getattr(fc, "lemma_exempt", None)),
+        "stopwords": words(fc.stop_set) if fc.filter_stops else None,
+        "rules": {"lowercase": fc.lowercase, "alpha_only": fc.alpha_only, "ascii_alpha_only": fc.ascii_alpha_only,
+                  "filter_short": fc.filter_short, "min_len": fc.min_len,
+                  "min_context_tokens": fc.min_context_tokens, "bin_size": fc.bin_size},
+        "pivot": bool(pivot),
+    }
+
+
 def _require_compacted_source(src_db, read_profile: str) -> None:
     """Refuse a source database that was never compacted.
 
@@ -271,6 +309,7 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
     # was the first to go this way; the unigram run follows for the marker.)
     cfg = RangeMapConfig(
         src_db=Path(pc.src_db), dst_db=Path(pc.dst_db),
+        inputs=_run_inputs(filter_config, vocab, lemmas, pivot),
         mapper=PivotFilterMapper(filter_config) if pivot else FilterMapper(filter_config),
         output="sst",
         num_units=num_units, workers=pc.num_workers, mode=mode,

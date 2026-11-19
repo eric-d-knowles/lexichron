@@ -58,7 +58,8 @@ def _is_db(p: Path) -> bool:
 def corpus_info(root: str | Path, release: str, language: str, ngram_size: int) -> CorpusInfo:
     """What the directory of one corpus holds (it need not exist yet)."""
     from ngramprep.ngram_acquire.db.build_path import build_db_path
-    root = Path(root).expanduser()
+    from ngramprep.utilities.paths import expand_path
+    root = Path(expand_path(root))
     n = int(ngram_size)
     db = Path(build_db_path(str(root), n, str(release), str(language)))
     d = db.parent
@@ -76,8 +77,13 @@ def corpus_info(root: str | Path, release: str, language: str, ngram_size: int) 
 def scan_corpora(root: str | Path) -> List[CorpusInfo]:
     """The corpora under ``root``: every ``<release>/<language>/<N>gram_files``
     directory that holds a database, a settings file, or anything else
-    lexichron writes. Sorted by language, release, size."""
-    root = Path(root).expanduser()
+    lexichron writes. Sorted by language, release, size. A directory that
+    names an environment variable which is not set holds none."""
+    from ngramprep.utilities.paths import UnsetVariable, expand_path
+    try:
+        root = Path(expand_path(root))
+    except UnsetVariable:
+        return []
     out: List[CorpusInfo] = []
     if not root.is_dir():
         return out

@@ -11,7 +11,7 @@ Example::
       release: "20200217"
       language: eng-us
       ngram_size: 1
-      db_path_stub: /scratch/me/NLP_corpora/Google_Books/
+      db_path_stub: /scratch/$USER/NLP_corpora/Google_Books/   # $VARS and ~ are expanded
 
     acquire:
       ngram_type: tagged
@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Mapping
 
 import yaml
 
-__all__ = ["ConfigError", "load_project", "apply_overrides", "build_call"]
+__all__ = ["ConfigError", "load_project", "apply_overrides", "build_call", "expand_directory"]
 
 
 class ConfigError(ValueError):
@@ -135,6 +135,23 @@ CORPUS_KEY_MAP = {
 }
 
 
+# Corpus keys that are directories: environment variables and ~ in them are
+# expanded where the stage runs, so one settings file can serve everyone on
+# a cluster (db_path_stub: /scratch/$USER/NLP_corpora/Google_Books). The file
+# keeps them as written.
+_DIRECTORY_KEYS = ("db_path_stub", "archive_path_stub")
+
+
+def expand_directory(value: Any, where: str = "a directory") -> str:
+    """``value`` with environment variables and ``~`` expanded; a variable
+    that is not set is a ConfigError, naming the setting."""
+    from ngramprep.utilities.paths import UnsetVariable, expand_path
+    try:
+        return expand_path(value)
+    except UnsetVariable as exc:
+        raise ConfigError(f"{where}: {exc}") from None
+
+
 def _coerce(name: str, value: Any, annotation: Any) -> Any:
     """Convert YAML-native values to what the API expects (lists to tuples or
     sets where the annotation asks for them)."""
@@ -170,6 +187,8 @@ def build_call(
                 f"(expected one of {', '.join(CORPUS_KEY_MAP)})"
             )
         api_name = CORPUS_KEY_MAP[key]
+        if key in _DIRECTORY_KEYS and value is not None:
+            value = expand_directory(value, f"corpus.{key}")
         if api_name in params:
             kwargs[api_name] = _coerce(api_name, value, params[api_name].annotation)
 

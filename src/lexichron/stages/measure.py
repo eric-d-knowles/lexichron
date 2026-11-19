@@ -218,6 +218,10 @@ def measure_series(
                 continue
             progress.file_started(f"y{year}")
             progress.file_active(f"y{year}")
+            # Written now, not left to the throttle: the previous year's
+            # file_done wrote a moment ago, so the throttle would skip this
+            # write and the record on disk would never show a year in progress.
+            progress._write(force=True)
             record, cube_words, cube = _measure_year(models, year, spec, corpora, seeds, n_threads)
             record["spec_digest"] = digest
             np.savez_compressed(year_values_file(out, year).with_suffix(".part.npz"), values=cube.astype(np.float32),

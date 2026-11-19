@@ -679,3 +679,16 @@ def test_the_bar_is_not_full_while_a_later_step_is_still_running():
     # a run with no declared steps, counted by files
     doc, now = _doc()
     assert bar_state(doc, summarize(doc, now)) == (14, 4)
+
+
+def test_a_measure_run_says_which_year_it_is_measuring_and_how_many_are_left():
+    """Measure takes one year at a time and writes its record at once, so the
+    queue tiles other stages show (waiting, done but unwritten, writing)
+    could only say 0. It shows the year in progress and the years left."""
+    from lexichron.ui.progress_view import meters
+    doc, now = _doc(stage="measure", unit_label="years", files_total=52, files_done=20, current=["y1988"],
+                    phases={"queued": 0, "parsing": 1, "parsed": 0, "ingesting": 0})
+    groups = dict(meters(doc, summarize(doc, now)))
+    assert groups["In flight"] == [("Measuring", "1988", "year"), ("Years left", "32 of 52", "this run")]
+    doc["current"] = []
+    assert dict(meters(doc, summarize(doc, now)))["In flight"][0] == ("Measuring", "none", "year")

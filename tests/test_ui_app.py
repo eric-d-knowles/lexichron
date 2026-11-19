@@ -1237,11 +1237,20 @@ def test_measure_stage_form_and_inspect_pane(tmp_path):
             assert app.query_one("#f-measure-words", Input).value == "doctor, nurse"
             assert "projection of 2 words" in str(app.query_one("#measure-summary", Static).content)
             assert "on ensemble 'e1'" in str(app.query_one("#measure-summary", Static).content)
-            # From ensemble fills the field
-            app.query_one("#f-measure-ensemble", Input).value = ""
-            app._measure_ensemble_use_pressed()
+            # the Ensemble setting is itself the list of this corpus's ensembles: choosing is setting
+            ens = app.query_one("#f-measure-ensemble", Select)
+            assert ens.value == "e1" and ("e1", "e1") in [(str(p), v) for p, v in ens._options if v is not Select.NULL]
+            assert not app.query("#measure-ensemble-pick")                 # no second control for it
+            # a saved value that is not among them is kept, marked, and saved back unchanged
+            app._set_field_widget("measure", next(f for f in app.stage_sections["measure"].fields
+                                                  if f.name == "ensemble"), "/elsewhere/ens9")
             await pilot.pause()
-            assert app.query_one("#f-measure-ensemble", Input).value == "e1"
+            assert ens.value == "/elsewhere/ens9"
+            assert any("not found in this corpus" in str(p) for p, _ in ens._options)
+            assert app._collect()["measure"]["ensemble"] == "/elsewhere/ens9"
+            ens.value = "e1"
+            await pilot.pause()
+            assert app._collect()["measure"]["ensemble"] == "e1"
             # the Inspect pane shows the measure named in the settings
             sel = app.query_one("#measure-name", Select)
             assert str(sel.value).endswith("measures/gender")
@@ -1426,3 +1435,30 @@ def test_meter_tiles_show_data_with_brackets_as_text():
     assert text.plain == "Files [eng]\n3/10  [2011] nuclear [/"
     assert [str(span.style) for span in text.spans] == ["dim", "bold", "dim"]
     assert Meters._text("Kept", "5", "").plain == "Kept\n5"
+
+
+def test_a_corpus_directory_written_with_a_variable_is_used_expanded_and_saved_as_written(tmp_path, monkeypatch):
+    """One settings file for everyone on a cluster: /scratch/$USER/... is
+    where each person's own corpus is found, and saving keeps $USER instead
+    of writing back the person's own directory."""
+    monkeypatch.setenv("CORPUS_ROOT", str(tmp_path / "corpora"))
+
+    async def scenario():
+        app = LexichronApp(None)
+        async with app.run_test(size=(140, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            app.query_one("#f-corpus-db_path_stub").value = "$CORPUS_ROOT"
+            app.query_one("#f-corpus-language").value = "eng"
+            app.query_one("#f-corpus-ngram_size").value = "1"
+            await pilot.pause()
+            assert app.project_path == tmp_path / "corpora" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml"
+            assert "$CORPUS_ROOT" not in str(app.query_one("#dest").content)
+            app.action_save()
+            await pilot.pause()
+        _assert_clean(app)
+        saved = (tmp_path / "corpora" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml").read_text()
+        assert "db_path_stub: $CORPUS_ROOT" in saved
+
+    asyncio.run(scenario())

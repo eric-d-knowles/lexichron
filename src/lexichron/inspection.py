@@ -284,6 +284,17 @@ def _text_or_hex(b: bytes) -> str:
     return b.decode("utf-8") if _is_text(b) else "0x" + b.hex()
 
 
+def _vocabulary_line(line: str) -> str:
+    """A vocabulary line for display: the token, then its count with
+    thousands separators. The file separates them with a tab, which a table
+    cell measures as one character and draws as up to eight: the cell was
+    sized for the short form and the count was cut off after a digit or two."""
+    parts = line.rstrip("\n").split("\t")
+    if len(parts) >= 2 and parts[1].strip().isdigit():
+        return f"{parts[0]}  {int(parts[1]):,}" + ("  " + "  ".join(parts[2:]) if len(parts) > 2 else "")
+    return "  ".join(parts)
+
+
 def _text_rows(p: Path, mode: str, key: str, n: int) -> List[Row]:
     """A vocabulary file: rank and token. ``key`` finds a token (then the
     ones after it in rank order), ``prefix`` the tokens starting with it."""
@@ -300,7 +311,7 @@ def _text_rows(p: Path, mode: str, key: str, n: int) -> List[Row]:
                     continue
             if mode == "prefix" and not token.startswith(key):
                 continue
-            out.append((f"{rank:,}", line.rstrip("\n")))
+            out.append((f"{rank:,}", _vocabulary_line(line)))
             if len(out) >= n:
                 break
     return out

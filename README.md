@@ -624,6 +624,13 @@ files, which is given back under pressure. A run that is interrupted resumes
 from the units it had finished (`mode: resume`); `mode: restart` starts over,
 after deleting the destination database, and both the UI and the command
 line ask before it does (see [Command line](#command-line)).
+A resume finishes only the units not yet done, so it must be given what the
+run that started the destination was given: the destination records the
+vocabulary (by its content, not its path), how lemmas are made, the keep
+lists and the rules, and a resume with any of them changed is refused with
+the difference named. A rebuilt vocabulary therefore needs `mode: restart`;
+resuming would have finished the database with units filtered two ways, and
+every count check would have passed.
 
 The source must be a finished database: one whose acquisition stopped before
 compacting (a file failed, the job ran out of time) is refused, with a
@@ -852,7 +859,11 @@ For the full set of options, see the docstrings in `lexichron.stages.filter`,
 ## Output files
 
 The n-gram stages lay their outputs out under the `db_path_stub` you give
-them:
+them. It may name environment variables and start with `~`
+(`/scratch/$USER/NLP_corpora/Google_Books`): they are expanded where the
+stage runs, the settings file keeps them as written, and one file then
+serves everyone on a cluster. A variable that is not set is an error, not a
+directory named `$USER`.
 
 ```
 {db_path_stub}/{release}/{language}/{N}gram_files/
@@ -1069,7 +1080,8 @@ that scalar inside every model of every year for every word, and writes each
 word's series as the ensemble mean per year with its standard error and the
 two parts of its variance. The settings file's `measure:` section names the
 ensemble, the measure and its words; the Measure stage's form in the UI is
-the same, with *From ensemble* listing the corpus's ensembles.
+the same, its *Ensemble* setting a list of the corpus's ensembles, newest
+first.
 
 - **What can be measured.** Three kinds, all computed inside one model:
   `projection`, each word's cosine with the axis from the *negative* pole

@@ -59,7 +59,7 @@ class Static(MarkupStatic):
 from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
 from lexichron.cli import STAGES, _format_call, _resolve
-from lexichron.config import ConfigError, build_call, load_project
+from lexichron.config import ConfigError, build_call, expand_directory, load_project
 from lexichron.corpora import CorpusInfo, corpus_info, scan_corpora, stage_prerequisites
 from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, MEASURE_LEGEND, MEASURE_VIEWS, PARAM_KEYS,
                                   SEARCH_COLUMNS, STABILITY_NOTE,
@@ -925,7 +925,6 @@ class LexichronApp(App):
     #measure-legend { margin: 1 0 0 0; }
     #measure-legend Static { height: auto; padding: 0 1; color: $text-muted; }
     #measure-summary { height: auto; padding: 0 1; color: $text-muted; }
-    #measure-ensemble-use { margin: 0 0 0 2; }
     #inspect-summary, #inspect-note { height: auto; padding: 0 1; color: $text-muted; }
     #inspect-provenance { height: auto; padding: 0 1; }
     #inspect-detail { height: auto; max-height: 12; padding: 0 1; overflow-y: auto; }
@@ -1028,7 +1027,10 @@ class LexichronApp(App):
         n = corpus.get("ngram_size") or stage.get("ngram_size")
         if not (stub and release and lang and n):
             return None
-        root = Path(str(stub)).expanduser().resolve()
+        try:
+            root = Path(expand_directory(stub, "corpus directory")).resolve()   # $USER, ~: as the job will see it
+        except ConfigError:
+            return None
         return Path(build_db_path(str(root), int(n), str(release), str(lang))).parent
 
     def _require_project_path(self) -> Path:
@@ -1087,11 +1089,6 @@ class LexichronApp(App):
                                     yield Button("Use its suggested cell", id="tuned-cell", compact=True)
                                 yield Static("", id="train-summary")
                             if name == "measure":
-                                with Horizontal(classes="row"):
-                                    yield Label("From ensemble")
-                                    yield Select([], allow_blank=True, id="measure-ensemble-pick", compact=True,
-                                                 prompt="(ensembles of this corpus)")
-                                    yield Button("Use this ensemble", id="measure-ensemble-use", compact=True)
                                 yield Static("", id="measure-summary")
                     with Collapsible(title="Advanced", collapsed=True, id="advanced"):
                         for f in self.corpus_section.fields:
@@ -1262,6 +1259,10 @@ class LexichronApp(App):
                 if val is not Select.NULL and val not in f.choices:
                     opts.append((val, val))
                 w = Select(opts, value=val, allow_blank=True, id=wid, compact=True)
+            elif f.kind == "ensemble":
+                opts, val = self._ensemble_options(current)
+                w = Select(opts, value=val, allow_blank=True, id=wid, compact=True,
+                           prompt="(ensembles of this corpus)")
             elif f.kind == "multigrams":
                 exact = (self.config.get(section) or {}).get("combined_multigrams_case")
                 w = MultigramField(list(current) if isinstance(current, (list, tuple, set)) else [],
@@ -1507,28 +1508,38 @@ class LexichronApp(App):
             parts.append("no words yet")
         widget.update("; ".join(parts))
 
-    def _refresh_measure_ensembles(self) -> None:
-        """The ensembles a measure can run on."""
-        corpus_dir = self._corpus_dir(self.config)
-        found = ensembles(str(corpus_dir) if corpus_dir else None)
-        sel = self.query_one("#measure-ensemble-pick", Select)
-        current = sel.value if sel.value is not Select.NULL else None
-        sel.set_options(found)
-        wanted = (self.config.get("measure") or {}).get("ensemble")
-        choice = next((path for name, path in found if name == wanted), None) or \
-            (current if any(path == current for _, path in found) else None) or (found[0][1] if found else None)
-        if choice is not None:
-            sel.value = choice
+    def _ensemble_options(self, saved: Any) -> Tuple[List[Tuple[str, str]], Any]:
+        """The Ensemble list: this corpus's ensembles, newest first, by name.
+        The saved value is kept even when it is not among them (a directory
+        elsewhere, or an ensemble not trained yet), shown as written and
+        marked, so opening and saving a settings file never changes it."""
+        try:
+            corpus_dir = self._corpus_dir(self.config)
+        except Exception:                       # pragma: no cover - during compose
+            corpus_dir = None
+        names = [name for name, _ in ensembles(str(corpus_dir) if corpus_dir else None)]
+        opts = [(name, name) for name in names]
+        val = str(saved).strip() if saved not in (None, "") else None
+        if val is not None and val not in names:
+            opts.append((f"{val} (not found in this corpus)", val))
+        return opts, (val if val is not None else Select.NULL)
 
-    @on(Button.Pressed, "#measure-ensemble-use")
-    def _measure_ensemble_use_pressed(self) -> None:
-        """Put the chosen ensemble's name into the form's Ensemble field."""
-        sel = self.query_one("#measure-ensemble-pick", Select)
-        if sel.value is Select.NULL:
-            self.notify("No ensemble to measure: run the train stage first", severity="warning")
+    def _refresh_measure_ensembles(self) -> None:
+        """Bring the Ensemble list up to date with what is on disk, keeping
+        the chosen value."""
+        try:
+            w = self.query_one("#f-measure-ensemble", Select)
+        except Exception:
             return
-        self.query_one("#f-measure-ensemble", Input).value = Path(str(sel.value)).name
-        self._refresh_preview()
+        current = w.value if w.value is not Select.NULL else (self.config.get("measure") or {}).get("ensemble")
+        opts, val = self._ensemble_options(current)
+        was = self._populating
+        self._populating = True
+        try:
+            w.set_options(opts)
+            w.value = val
+        finally:
+            self._populating = was
 
     def _refresh_grid_summary(self, kwargs: Dict[str, Any]) -> None:
         """Under the tune form: what the grid amounts to, and whether the
@@ -1832,8 +1843,12 @@ class LexichronApp(App):
         finally:
             self._selecting = False
         self._listed_dir = current
-        if root_text and Path(root_text).expanduser().is_dir():
-            remember_root(Path(root_text).expanduser())
+        try:
+            root_dir = Path(expand_directory(root_text)) if root_text else None
+        except ConfigError:
+            root_dir = None
+        if root_dir is not None and root_dir.is_dir():
+            remember_root(root_dir)
 
     def _refresh_corpus_state(self) -> None:
         """The line under the bar, the corpus line on the form, and which
@@ -1955,6 +1970,10 @@ class LexichronApp(App):
             opts = [(c, c) for c in f.choices]
             if val is not Select.NULL and val not in f.choices:
                 opts.append((val, val))
+            w.set_options(opts)
+            w.value = val
+        elif f.kind == "ensemble":
+            opts, val = self._ensemble_options(value)
             w.set_options(opts)
             w.value = val
         elif f.kind == "range":

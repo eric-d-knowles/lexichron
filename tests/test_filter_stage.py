@@ -293,3 +293,30 @@ def test_words_kept_by_request_are_in_the_vocabulary_whatever_their_rank(rocks, 
     assert [r[0] for r in run(output_whitelist_top_n=3)] == ["the", "cat", "woman", "run"]
     assert [r[0] for r in run(output_whitelist_top_n=10)] == ["the", "cat", "woman", "run"]
     assert [r[0] for r in run()] == ["the", "cat", "woman", "run"]
+
+
+def test_a_filter_resume_after_the_vocabulary_changed_is_refused(rocks, tmp_path):
+    """A resume finishes only the units not yet done. With a rebuilt
+    vocabulary those units would keep different words from the ones already
+    in the destination; the run must be restarted instead."""
+    from ngramprep.rangemap.engine import InputsChanged
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    _raw_unigrams(str(paths["src_db"]))
+    vocab = tmp_path / "vocab.txt"
+
+    def run(mode):
+        vocab_cfg = FilterConfig(stop_set={"the"}, lemma_gen=FakeLemmatizer(), min_len=3, min_context_tokens=1,
+                                 whitelist_path=str(vocab))
+        return build_processed_db(filter_config=vocab_cfg, pipeline_config=PipelineConfig(
+            ngram_size=1, repo_release_id="20200217", repo_corpus_id="eng", db_path_stub=str(stub), num_workers=2,
+            num_initial_work_units=4, use_smart_partitioning=False, mode=mode, output_whitelist_path=None),
+            spool_dir=str(tmp_path))
+
+    vocab.write_text("cat\t23\nwoman\t3\n")
+    run("restart")
+    run("resume")                                     # unchanged: a resume is fine
+    vocab.write_text("cat\t23\nwoman\t3\nhairdresser\t2\n")
+    with pytest.raises(InputsChanged, match="vocabulary.*mode restart"):
+        run("resume")
+    run("restart")                                    # and a restart takes the new one

@@ -491,7 +491,18 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
     # Shown for the whole of a running run, count zero included, so the group
     # does not come and go between work units (the UI rebuilds its tiles
     # when the set of groups changes).
-    if phases and (current or info.get("state") == "running"):
+    if stage == "measure" and info.get("state") == "running":
+        # One year at a time, its record written as soon as it is measured:
+        # there is never a year waiting, measured but unwritten, or being
+        # written, so those tiles could only ever say 0. Say which year it is
+        # and how many remain.
+        total = int(info.get("total") or 0)
+        left = max(total - int(info.get("done") or 0) - int(info.get("failed") or 0), 0)
+        groups.append(("In flight", [
+            ("Measuring", ", ".join(c.lstrip("y") for c in current) if current else "none", "year"),
+            ("Years left", f"{left:,}" + (f" of {total:,}" if total else ""), "this run"),
+        ]))
+    elif phases and (current or info.get("state") == "running"):
         if stage == "filter":
             phases = dict(phases, handover=int(phases.get("parsed", 0)) + int(phases.get("ingesting", 0)))
             labels = (("queued", "Waiting for a worker"), ("parsing", "Scanning"),
@@ -502,8 +513,6 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         elif stage == "train":
             labels = (("queued", "Waiting"), ("parsing", "Training"),
                       ("parsed", "Trained, year not yet complete"), ("ingesting", "Writing the year's record"))
-        elif stage == "measure":
-            labels = (("queued", "Waiting"), ("parsing", "Measuring"), ("parsed", "Measured"), ("ingesting", "Writing"))
         else:
             # A finished file is adopted by the database in one short step,
             # so "parsed" and "being ingested" are a single wait. It should

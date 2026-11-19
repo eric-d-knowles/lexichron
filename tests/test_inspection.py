@@ -95,6 +95,19 @@ def test_vocabulary_file_by_rank_token_and_prefix(tmp_path):
     assert inspection.rows(str(wl), "key", "apricot", 10)[1] == [("4", "apricot"), ("5", "zebra")]
 
 
+def test_a_vocabulary_line_is_shown_without_its_tab(tmp_path):
+    """whitelist.txt is token<TAB>count. A tab in a table cell is measured
+    as one character and drawn as several, so the count was cut off
+    (hairdresser 609257 showed as hairdresser 6)."""
+    wl = tmp_path / "whitelist.txt"
+    wl.write_text("he\t3707225297\nnotched\t621671\nhairdresser\t609257\n")
+    kind, rows = inspection.rows(str(wl), "head", n=5)
+    assert rows == [("1", "he  3,707,225,297"), ("2", "notched  621,671"), ("3", "hairdresser  609,257")]
+    assert all("\t" not in value for _, value in rows)
+    assert inspection.rows(str(wl), "key", "hairdresser", 5)[1] == [("3", "hairdresser  609,257")]
+    assert inspection.rows(str(wl), "prefix", "no", 5)[1] == [("2", "notched  621,671")]
+
+
 def test_missing_and_unopenable_paths_are_reported(rocks, tmp_path):
     assert inspection.describe(str(tmp_path / "nope.db"))["kind"] == "missing"
     (tmp_path / "notadb").mkdir()

@@ -11,7 +11,7 @@ import time
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ngramprep.common_db.api import open_db
 from ngramprep.ngram_acquire.batch_writer import ChunkIngestor
@@ -44,6 +44,45 @@ class RangeMapError(RuntimeError):
     """Some units failed; the destination holds the completed ones."""
 
 
+class InputsChanged(RangeMapError):
+    """A resume was asked to finish a destination started with other inputs."""
+
+
+# What the run that started a destination was given (a JSON object), so a
+# resume can refuse to finish it with different inputs.
+INPUTS_KEY = b"__rangemap__/inputs"
+
+
+def _check_inputs(dst, inputs: Optional[Dict[str, Any]], started: bool, log) -> None:
+    """Compare ``inputs`` with what the destination was started with, and
+    record them. A resume finishes a destination by processing only the
+    units not yet done: with different inputs (a rebuilt vocabulary, say)
+    those units would be made differently from the ones already in it, and
+    the result would be a mixture that every count check passes. Refused.
+    A destination from before inputs were recorded cannot be checked; that
+    is said, and the inputs are recorded from now on."""
+    if inputs is None:
+        return
+    current = json.loads(json.dumps(inputs, sort_keys=True, default=str))
+    raw = dst.get(INPUTS_KEY)
+    if raw is not None and started:
+        before = json.loads(raw.decode("utf-8"))
+        changed = sorted(k for k in set(before) | set(current) if before.get(k) != current.get(k))
+        if changed:
+            raise InputsChanged(
+                "the destination was started with different inputs ("
+                + "; ".join(f"{k}: was {before.get(k)!r}, now {current.get(k)!r}" for k in changed)
+                + "). Resuming would finish it with units made two ways. Run again with mode restart "
+                  "to rebuild it from the start.")
+        return
+    if raw is None and started:
+        log("The destination was started before its inputs were recorded, so a resume cannot check that they "
+            "are unchanged; recording them now")
+        logger.warning("Resuming a destination whose inputs were not recorded: not checked that they are unchanged")
+    with dst.write_batch(disable_wal=False, sync=True) as wb:
+        wb.put(INPUTS_KEY, json.dumps(current, sort_keys=True).encode("utf-8"))
+
+
 @dataclass
 class RangeMapConfig:
     src_db: Path
@@ -65,6 +104,9 @@ class RangeMapConfig:
     sst_compression: str = "zstd"
     progress: Optional[ProgressReporter] = None
     log: Callable[[str], None] = print
+    # What determines the output (a JSON object): recorded in the destination
+    # and compared on a resume (see _check_inputs). None: not checked.
+    inputs: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -119,6 +161,7 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
         with open_db(cfg.dst_db, mode="rw", profile=cfg.write_profile, create_if_missing=True) as dst:
             # ---- partition: reuse the destination's own, else plan and store it
             units = load_partition(dst)
+            _check_inputs(dst, cfg.inputs, started=units is not None, log=log)
             if units is None:
                 with progress.long_phase("partitioning"):
                     units = plan_units(Path(cfg.src_db), cfg.num_units, smart=cfg.smart_partitioning,
@@ -231,7 +274,7 @@ def run_rangemap(cfg: RangeMapConfig) -> RangeMapResult:
             if not failed:
                 # bookkeeping keys: one marker per unit plus the stored partition
                 progress.set_database(dst, compacted=bool(cfg.compact_after),
-                                      bookkeeping=len(units) + 1)
+                                      bookkeeping=len(units) + 1 + (1 if cfg.inputs is not None else 0))   # markers, partition, inputs
     finally:
         spool_ctx.cleanup()
 

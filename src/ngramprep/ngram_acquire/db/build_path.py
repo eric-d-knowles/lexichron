@@ -33,9 +33,14 @@ def build_db_path(
 
         >>> build_db_path("/data/ngrams", 2, "20200217", "eng-us")
         '/data/ngrams/20200217/eng-us/2gram_files/2grams.db'
+
+    ``db_path_stub`` may contain environment variables and a leading ``~``;
+    a variable that is not set raises ``ValueError``.
     """
-    # Normalize stub to ensure no trailing slash issues
-    stub = Path(db_path_stub)
+    # Environment variables and ~ are expanded (a settings file may say
+    # /scratch/$USER/...); trailing slashes are normalized by Path
+    from ngramprep.utilities.paths import expand_path
+    stub = Path(expand_path(db_path_stub))
 
     # Build hierarchical path
     db_path = stub / repo_release_id / repo_corpus_id / f"{ngram_size}gram_files" / f"{ngram_size}grams.db"
