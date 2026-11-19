@@ -4,8 +4,8 @@ authors:
   - family-names: "Knowles"
     given-names: "Eric D."
 title: "lexichron: Scalable tools for temporal linguistic analysis"
-version: 0.13.12
-date-released: 2026-11-18
+version: 0.13.13
+date-released: 2026-11-19
 url: "https://github.com/eric-d-knowles/lexichron"
 repository-code: "https://github.com/eric-d-knowles/lexichron"
 license: MIT
