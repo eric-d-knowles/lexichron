@@ -236,7 +236,9 @@ HELP: Dict[str, str] = {
                        "Edit opens a window with a row per token. A token is matched by its spelling in the data, "
                        "whatever its capitalization unless the row says Match case (AI keeps AI and not ai). "
                        "Kept tokens are still lowercased and lemmatized like the rest, so list every spelling you "
-                       "want (woman does not keep women). Tokens the acquire run combined are kept automatically."),
+                       "want (woman does not keep women). Tokens the acquire run combined are kept automatically. "
+                       "In a unigram run these words also go into the vocabulary whatever their frequency, "
+                       "after the top N, so listing a word there keeps it in the longer n-grams too."),
     "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams, off for longer n-grams.",
     "output_vocabulary_top_n": "How many of the most frequent tokens the vocabulary keeps.",
     "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",

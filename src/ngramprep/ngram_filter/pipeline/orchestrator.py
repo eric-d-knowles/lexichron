@@ -322,16 +322,30 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
         wl = Path(pc.output_whitelist_path)
         print(format_banner("Output whitelist"))
         print("  Path: " + truncate_path_to_fit(wl, "  Path: "))
+        # The words the user asked to keep are in the vocabulary whatever
+        # their rank: a later filter against it then keeps them without being
+        # told again, and the file lists every word that corpus can hold.
+        from ..filters.processor_factory import kept_forms
+        keep = kept_forms(filter_config)
         with progress.long_phase("whitelist"):
             write_whitelist(db_or_path=pc.dst_db, dest=wl, top=pc.output_whitelist_top_n,
                             decode=True, sep="\t", spell_check=pc.output_whitelist_spell_check,
                             spell_check_language=pc.output_whitelist_spell_check_language,
                             year_range=pc.output_whitelist_year_range,
-                            bin_size=filter_config.bin_size)
+                            bin_size=filter_config.bin_size, keep=keep)
         try:
             with open(wl, "r", encoding="utf-8") as fh:
-                n = sum(1 for _ in fh)
-            print(f"  {n:,} tokens")
+                words = [line.split("\t", 1)[0] for line in fh]
+            n = len(words)
+            top = pc.output_whitelist_top_n
+            added = words[top:] if top and n > top else []
+            if added:
+                shown = ", ".join(added[:20]) + (f" and {len(added) - 20} more" if len(added) > 20 else "")
+                print(f"  {n:,} tokens: the {top:,} most frequent and {len(added)} kept by request below them ({shown})")
+                logger.info("Vocabulary: %d tokens, the %d most frequent and %d kept by request (always_include) "
+                            "that rank below them: %s", n, top, len(added), shown)
+            else:
+                print(f"  {n:,} tokens")
         except OSError:
             pass
 

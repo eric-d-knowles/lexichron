@@ -91,3 +91,29 @@ def build_processor(cfg: FilterConfig) -> ProcessorProtocol:
     _processor.stats = stats
     _processor.stats_dict = lambda: dict(zip(STAT_NAMES, stats))
     return _processor
+
+
+def kept_forms(cfg: FilterConfig) -> set:
+    """The tokens the always-keep spellings become in a filtered unigram
+    database, as bytes: each spelling run through the same processor the
+    workers use, under every tag a token can carry (a lemma can depend on
+    the tag) and in the capitalizations the case-folded list matches. This
+    is what a vocabulary must hold for the words the user asked to keep to
+    survive a later filter against it: ``hairdressers`` on the list gives
+    ``hairdresser``."""
+    folded = [str(w.decode("utf-8") if isinstance(w, (bytes, bytearray)) else w) for w in (cfg.always_include or ())]
+    exact = [str(w.decode("utf-8") if isinstance(w, (bytes, bytearray)) else w) for w in (cfg.always_include_case or ())]
+    if not folded and not exact:
+        return set()
+    from ngramprep.ngram_acquire.utils.filters import DEFAULT_TAGS
+    spellings = set(exact)
+    for w in folded:
+        spellings |= {w, w.lower(), w.upper(), w.capitalize()}
+    processor = build_processor(cfg)
+    forms = set()
+    for spelling in sorted(spellings):
+        for suffix in [""] + [f"_{tag}" for tag in DEFAULT_TAGS]:
+            out = processor((spelling + suffix).encode("utf-8"))
+            if out and b" " not in out and bytes(out) != b"<UNK>":
+                forms.add(bytes(out))
+    return forms

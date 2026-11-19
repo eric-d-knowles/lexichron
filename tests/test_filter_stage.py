@@ -260,3 +260,36 @@ def test_counts_lost_inside_the_filter_fail_the_run(rocks, tmp_path, monkeypatch
     out = capsys.readouterr().out
     assert "KEPT AND DROPPED DO NOT ADD UP TO WHAT WAS READ" in out and "(difference -5; volume counts -1)" in out
     assert "Counts verified" in out and not paths["whitelist"].exists()
+
+
+def test_words_kept_by_request_are_in_the_vocabulary_whatever_their_rank(rocks, tmp_path, capsys):
+    """always_include spares a word the discard rules, but the vocabulary was
+    cut to its top N by frequency alone: a rare word passed the unigram
+    rules, missed the cut, and was then dropped from every longer n-gram
+    filtered against that vocabulary. The kept words now follow the top N."""
+    from ngramprep.ngram_filter.filters.processor_factory import kept_forms
+    stub = tmp_path / "corpora"
+    paths = derive_paths(str(stub), 1, "20200217", "eng")
+    _raw_unigrams(str(paths["src_db"]))
+    cfg = FilterConfig(stop_set={"the"}, lemma_gen=FakeLemmatizer(), min_len=3, min_context_tokens=1,
+                       always_include={"women", "running", "the", "absent"})
+    # what the spellings become: lemmatized like any token, and the stopword is kept
+    assert kept_forms(cfg) == {b"woman", b"run", b"the", b"absent"}
+    assert kept_forms(FilterConfig(lemma_gen=FakeLemmatizer())) == set()
+
+    def run(**kw):
+        build_processed_db(filter_config=cfg, pipeline_config=PipelineConfig(
+            ngram_size=1, repo_release_id="20200217", repo_corpus_id="eng", db_path_stub=str(stub), num_workers=2,
+            num_initial_work_units=4, use_smart_partitioning=False, mode="restart", output_whitelist_path="default",
+            **kw), spool_dir=str(tmp_path))
+        return [line.split("\t") for line in paths["whitelist"].read_text().splitlines()]
+
+    # the two most frequent are 'the' (kept from the stopword rule, 100) and 'cat' (23); 'woman' (3) and
+    # 'run' (2) rank below the cut and follow it, most frequent first; 'absent' never occurs and is left out
+    rows = run(output_whitelist_top_n=2)
+    assert rows == [["the", "100"], ["cat", "23"], ["woman", "3"], ["run", "2"]]
+    assert "the 2 most frequent and 2 kept by request below them (woman, run)" in capsys.readouterr().out
+    # a cut that already includes them adds nothing, and no cut means every word
+    assert [r[0] for r in run(output_whitelist_top_n=3)] == ["the", "cat", "woman", "run"]
+    assert [r[0] for r in run(output_whitelist_top_n=10)] == ["the", "cat", "woman", "run"]
+    assert [r[0] for r in run()] == ["the", "cat", "woman", "run"]

@@ -328,11 +328,19 @@ def write_whitelist_streaming(
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
         bin_size: int = 1,
+        keep=None,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc) using streaming.
     Each line: <token><sep><total_matches>
     Memory usage: O(1) for unlimited output, O(K) for top-K
+
+    ``keep`` (tokens as the database holds them, bytes) are written whether
+    or not they rank in the top ``top``: those that do not follow the top
+    tokens, most frequent first, so the file stays in descending order and
+    is ``top`` lines plus the kept ones. They are words the user asked to
+    keep, so the spelling and year-range filters are not applied to them. A
+    kept token the database does not hold is left out.
 
     Args:
         db_or_path: Database or path to database
@@ -369,6 +377,17 @@ def write_whitelist_streaming(
                 bin_size=bin_size
             )
 
+        if keep and top is not None:
+            items = list(items)
+            have = {t if isinstance(t, bytes) else t.encode("utf-8") for t, _ in items}
+            extra = []
+            with _db_from(db_or_path) as db:
+                for kb in sorted({bytes(k) for k in keep} - have):
+                    value = db.get(kb)
+                    if value:
+                        extra.append((_maybe_decode(kb, decode), _total_matches(value)))
+            items += sorted(extra, key=lambda item: -item[1])
+
         for token, total in items:
             if isinstance(token, bytes):
                 token_str = token.decode("utf-8", "backslashreplace")
@@ -391,12 +410,15 @@ def write_whitelist(
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
         bin_size: int = 1,
+        keep=None,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc).
     Each line: <token><sep><total_matches>
 
     This is the main API - uses streaming implementation for better performance.
+    ``keep``: tokens written even when they rank below ``top`` (see
+    :func:`write_whitelist_streaming`).
 
     Args:
         db_or_path: Database or path to database
@@ -412,7 +434,7 @@ def write_whitelist(
     return write_whitelist_streaming(
         db_or_path, dest, top=top, decode=decode, sep=sep,
         spell_check=spell_check, spell_check_language=spell_check_language,
-        year_range=year_range, bin_size=bin_size
+        year_range=year_range, bin_size=bin_size, keep=keep
     )
 
 

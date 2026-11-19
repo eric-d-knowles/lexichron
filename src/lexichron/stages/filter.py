@@ -147,6 +147,10 @@ def filter_ngrams(
             (combined_multigrams) are added automatically from the raw
             database's provenance record, and those are not lemmatized
             either: they stay as the acquire run's entries made them
+            A unigram run also writes these words to the vocabulary
+            whatever their frequency, after the output_vocabulary_top_n
+            most frequent, so listing a word there is enough: the longer
+            n-grams filtered against that vocabulary keep it too
         always_include_case: Spellings kept only when their capitalization
             matches exactly (AI keeps AI and not ai)
         output_vocabulary: Write a vocabulary file from the result

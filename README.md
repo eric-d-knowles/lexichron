@@ -556,7 +556,13 @@ matched against the token as it appears in the data, case-folded unless it is
 on the case list, so `he` keeps *He* and *HE*, and `AI` on the case list keeps
 *AI* but not *ai*. A kept token is then lowercased and lemmatized like any
 other; it only skips the rules that would drop it, so list every spelling you
-want kept (`woman` does not keep *women*). Tokens the acquire run built from
+want kept (`woman` does not keep *women*). A unigram run also writes the kept
+words to the vocabulary whatever their frequency: they follow the
+`output_vocabulary_top_n` most frequent, so the file is that many lines plus
+the kept words that rank below them (the run says which). Listing a word in
+the unigram filter is therefore enough to keep it in the longer n-grams,
+which are filtered against that vocabulary; without this a rare word passed
+the unigram rules, missed the cut, and vanished from the corpus. Tokens the acquire run built from
 word sequences (`combined_multigrams`, say `A.I.` and `working-class`) are kept
 without being listed, read from the raw database's provenance record; the UI
 shows them beside the list. Those tokens are not lemmatized either: each was
