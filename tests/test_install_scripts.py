@@ -84,6 +84,11 @@ def env(tmp_path):
     # on the PATH ahead of the fake one. The launchers unset it for the image
     # themselves; the tests must not inherit it either.
     e.pop("BASH_ENV", None); e.pop("ENV", None)
+    # Nor this machine's module system: the launchers load a runtime's module
+    # when it is not on the PATH, and a cluster's real one would answer.
+    for k in [k for k in e if k.startswith("BASH_FUNC_module") or k.startswith("BASH_FUNC_ml")]:
+        e.pop(k)
+    e.pop("MODULESHOME", None)
     (tmp_path / "scratch").mkdir()
     return {"home": home, "env": e, "log": log, "tmp": tmp_path, "ui_copy": ui_copy, "base_path": base_path}
 
@@ -189,6 +194,37 @@ def test_install_sh_works_with_singularity_instead_of_apptainer(env):
     # and neither at all is a clear message, not a stack of errors
     bare = dict(e, PATH=env["base_path"])
     r = subprocess.run([str(bin_dir / "lexichron"), "--help"], env=bare, capture_output=True, text=True)
+    assert r.returncode == 127 and "neither 'apptainer' nor 'singularity'" in r.stderr
+
+
+def test_the_commands_load_the_runtime_as_a_module_when_it_is_not_on_the_path(env):
+    """A cluster that provides Singularity only as a module: in a fresh login
+    nothing is on the PATH. The installer and the batch scripts load the
+    module themselves; the commands must too, or every new shell needs a
+    module load before lexichron-ui."""
+    e = dict(env["env"], PATH=f"{env['tmp'] / 'singularity-only'}:{env['base_path']}")
+    assert subprocess.run(["bash", str(INSTALL_SH)], env=e, capture_output=True, text=True).returncode == 0
+    launcher = env["home"] / ".local" / "bin" / "lexichron"
+    # a module system whose 'module load singularity' puts the fake runtime on the PATH
+    home = env["tmp"] / "modules"
+    (home / "init").mkdir(parents=True)
+    (home / "init" / "bash").write_text(
+        'module() { if [ "$1" = load ] && [ "$2" = singularity ]; then '
+        f'export PATH="{env["tmp"] / "singularity-only"}:$PATH"; return 0; fi; return 1; }}\n')
+    bare = dict(e, PATH=env["base_path"], MODULESHOME=str(home))        # the runtime is not on the PATH
+    assert shutil.which("singularity", path=bare["PATH"]) is None
+    env["log"].write_text("")
+    r = subprocess.run([str(launcher), "--help"], env=bare, capture_output=True, text=True)
+    assert r.returncode == 0 and "exec: lexichron --help" in r.stdout, r.stderr
+    # a module function the login shell exported is used as it is, without the init file
+    exported = dict(e, PATH=env["base_path"])
+    exported["BASH_FUNC_module%%"] = ('() { if [ "$1" = load ] && [ "$2" = singularity ]; then '
+                                      f'export PATH="{env["tmp"] / "singularity-only"}:$PATH"; return 0; fi; return 1; }}')
+    r = subprocess.run([str(launcher), "--help"], env=exported, capture_output=True, text=True)
+    assert r.returncode == 0 and "exec: lexichron --help" in r.stdout, r.stderr
+    # a module system that has neither runtime: the clear message, as before
+    (home / "init" / "bash").write_text("module() { return 1; }\n")
+    r = subprocess.run([str(launcher), "--help"], env=bare, capture_output=True, text=True)
     assert r.returncode == 127 and "neither 'apptainer' nor 'singularity'" in r.stderr
 
 

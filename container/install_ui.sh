@@ -90,7 +90,23 @@ if ! command -v "\$runtime" >/dev/null 2>&1; then
   done
 fi
 if ! command -v "\$runtime" >/dev/null 2>&1; then
-  echo "lexichron: neither 'apptainer' nor 'singularity' found; try: module load apptainer (or singularity)" >&2
+  # Not on the PATH: a cluster that provides it as a module. Load it, as the
+  # installer and the batch scripts do, so a fresh login needs no module load
+  # first. The module command is a shell function; a script has it only when
+  # the login shell exported it, so its init file is read when it did not.
+  set +u
+  if ! command -v module >/dev/null 2>&1 && [ -r "\${MODULESHOME:-/nonexistent}/init/bash" ]; then
+    . "\$MODULESHOME/init/bash" >/dev/null 2>&1
+  fi
+  if command -v module >/dev/null 2>&1; then
+    for m in apptainer singularity; do
+      if module load "\$m" >/dev/null 2>&1 && command -v "\$m" >/dev/null 2>&1; then runtime="\$m"; break; fi
+    done
+  fi
+  set -u
+fi
+if ! command -v "\$runtime" >/dev/null 2>&1; then
+  echo "lexichron: neither 'apptainer' nor 'singularity' is on the PATH or loadable as a module; load your cluster's module for it, then run this again" >&2
   exit 127
 fi
 if [ ! -f "\$img" ]; then
