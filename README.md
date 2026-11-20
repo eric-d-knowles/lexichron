@@ -152,6 +152,17 @@ Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
 install a specific version: `LEXICHRON_VERSION=0.13.13 bash install.sh`.
 
+The image is one file of about 4 GB. On a slow or unreliable connection the
+container runtime's download can be cut off partway (`FATAL: ... stream
+error ... PROTOCOL_ERROR`), and it starts from nothing each time. The
+installer then fetches the same file with curl, which resumes where a broken
+connection left off and checks the result against the registry's SHA-256.
+If the installer itself is interrupted, run it again: it continues the
+partial download. `LEXICHRON_FETCH=curl` uses curl from the start, and
+`LEXICHRON_SIF=/path/to/lexichron-X.Y.Z.sif` installs from an image file
+copied from another machine, for a cluster that cannot reach the registry.
+Run the installer on a compute node if the login nodes' network is slow.
+
 That is all that is needed to download and process corpora. Steps 2 and 3
 below are for people who want to work with lexichron from their own notebooks
 and scripts.
