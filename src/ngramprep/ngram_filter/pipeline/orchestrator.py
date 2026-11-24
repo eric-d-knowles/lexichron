@@ -249,7 +249,7 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
     pivot = pc.output == "pivoted"
     if pivot and pc.output_whitelist_path:
         raise ValueError("a vocabulary (output whitelist) is built from a processed database, not a pivoted one")
-    print(format_banner("N-gram filtering" + (" and pivoting" if pivot else "")))
+    print(format_banner("Filtering" + (" and pivoting" if pivot else "")))
     print(f"Source:       {pc.src_db}")
     print(f"Destination:  {pc.dst_db}" + ("  (keyed year-first)" if pivot else ""))
     print(f"Mode:         {pc.mode}")

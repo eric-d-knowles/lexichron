@@ -205,8 +205,8 @@ def describe_verification(v: Dict[str, Any]) -> List[str]:
             lines.append(f"  {found['malformed']:,} values are not whole (year, frequency, documents) triplets")
     if ledger.get("problem_lines"):
         n = int(ledger["problem_lines"])
-        lines.append(f"{n:,} line{'' if n == 1 else 's'} had content that could not be read; the counts of the "
-                     f"n-grams on them are incomplete (the workers' log entries show the lines).")
+        lines.append(f"{n:,} line{'' if n == 1 else 's'} had content that could not be read; the counts of "
+                     f"what they held are incomplete (the workers' log entries show the lines).")
     if ledger.get("reordered"):
         n = int(ledger["reordered"])
         lines.append(f"{n:,} value{'' if n == 1 else 's'} arrived with years out of order and "

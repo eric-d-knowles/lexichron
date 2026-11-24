@@ -192,3 +192,88 @@ def test_davies_form_fields_have_labels_and_help():
     assert by["source_dir"].title == "Corpus files" and by["source_dir"].kind == "path" and by["source_dir"].required
     assert by["max_unit_tokens"].advanced and all(f.help for f in sec.fields)
     assert {f.name: f.title for f in corpus.fields}["unit"] == "Records"
+
+
+def test_filter_s_blank_fields_say_what_they_default_to_for_the_corpus(tmp_path):
+    """Write vocabulary, Pivot by year and Min real tokens default by what
+    the records are. For a Davies corpus's tokens the vocabulary is written
+    (as for 1-grams) and nothing is pivoted; for its sentences, and for
+    5-grams, the other way round. The stage decides; the form shows it."""
+    root = tmp_path / "corpora"
+    for unit in ("token", "sentence"):
+        _db(root / "coha" / f"{unit}_files" / f"{unit}s.db")
+    _db(root / "20200217" / "eng" / "1gram_files" / "1grams.db")
+    _db(root / "20200217" / "eng" / "5gram_files" / "5grams.db")
+    seen = {}
+
+    async def scenario():
+        app = LexichronApp(None, "filter")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await _settle(app, pilot)
+            assert app.query_one("#f-filter-output_vocabulary", Select).prompt == "(default)"   # no corpus yet
+            app.query_one("#corpus-root", Input).value = str(root)
+            await pilot.pause()
+            sel = app.query_one("#corpus-select", Select)
+            for label, where in (("tokens", root / "coha" / "token_files"),
+                                 ("sentences", root / "coha" / "sentence_files"),
+                                 ("1-grams", root / "20200217" / "eng" / "1gram_files"),
+                                 ("5-grams", root / "20200217" / "eng" / "5gram_files")):
+                sel.value = str(where)
+                await _settle(app, pilot)
+                app._show_stage("filter")
+                await pilot.pause()
+                app._refresh_preview()
+                await pilot.pause()
+                seen[label] = (app.query_one("#f-filter-output_vocabulary", Select).prompt,
+                               app.query_one("#f-filter-pivot", Select).prompt,
+                               app.query_one("#f-filter-min_context_tokens", Input).placeholder)
+                assert app.query_one("#f-filter-output_vocabulary", Select).value is Select.NULL   # still blank
+        _clean(app)
+
+    asyncio.run(scenario())
+    single = ("(default: yes)", "(default: no)", "(default: 1)")
+    text = ("(default: no)", "(default: yes)", "(default: 2)")
+    assert seen == {"tokens": single, "sentences": text, "1-grams": single, "5-grams": text}
+    # and that is what the stage does with a blank
+    from lexichron.safeguards import overwrite_target
+    kw = {"source": "davies", "repo_corpus_id": "coha", "db_path_stub": str(root), "mode": "restart", "unit": "tokens"}
+    assert overwrite_target("filter", kw).name == "tokens_processed.db"
+
+
+def test_what_a_run_writes_appears_in_inspect_and_opens_the_next_stage(tmp_path):
+    """The corpus is open while Filter runs. When the vocabulary is written
+    it joins Inspect's list, the choice made there is kept, and the state
+    line follows, without the corpus being chosen again."""
+    root = tmp_path / "corpora"
+    tokens = root / "coha" / "token_files"
+    _db(tokens / "tokens.db")
+
+    async def scenario():
+        app = LexichronApp(None)
+        async with app.run_test(size=(160, 50)) as pilot:
+            await _settle(app, pilot)
+            app.query_one("#corpus-root", Input).value = str(root)
+            await pilot.pause()
+            app.query_one("#corpus-select", Select).value = str(tokens)
+            await _settle(app, pilot)
+            listed = app.query_one("#inspect-db", Select)
+            assert [label for label, _ in listed._options if label] == ["tokens.db"]
+            listed.value = str(tokens / "tokens.db")
+            await pilot.pause()
+            assert "no vocabulary yet" in str(app.query_one("#corpus-state", Static).content)
+            # the filter run finishes
+            _db(tokens / "tokens_processed.db")
+            (tokens / "tokens_processed.db" / "whitelist.txt").write_text("word\t1\n")
+            app._apply_status(app._collect_status())          # what the 5-second refresh does
+            await pilot.pause()
+            assert [label for label, _ in listed._options if label] == [
+                "tokens.db", "tokens_processed.db", "tokens_processed.db/whitelist.txt"]
+            assert listed.value == str(tokens / "tokens.db")                        # the choice is kept
+            assert "the vocabulary is built" in str(app.query_one("#corpus-state", Static).content)
+            # nothing changed: the list is left alone
+            before = app._inspect_listed
+            app._apply_status(app._collect_status())
+            assert app._inspect_listed is before
+        _clean(app)
+
+    asyncio.run(scenario())

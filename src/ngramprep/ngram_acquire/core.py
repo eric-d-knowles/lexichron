@@ -203,7 +203,10 @@ def download_and_ingest_to_rocksdb(
     progress = ProgressReporter(progress_path, stage="acquire",
                                 db_path=db_path, log_path=log_file,
                                 inputs={"source": f"Google Books {repo_release_id} {repo_corpus_id} {ngram_size}-grams"
-                                                  f" ({ngram_type})"})
+                                                  f" ({ngram_type})"},
+                                # the one reader that downloads what it reads
+                                terms={"reading": "downloading & parsing",
+                                       "reading_now": "downloading and parsing the files"})
     # What the run goes through, and what it will check, for whoever reads
     # the progress document: "step 2 of 3", and what a problem will lead to.
     progress.set_plan(["ingesting", "compacting"] + (["verifying"] if verify_counts else [])
@@ -348,7 +351,7 @@ def run_acquisition(
         # is to fetch, since files differ enormously in what they hold.
         progress.set_sizes(sizes or {}, [PurePosixPath(u).name for u in file_urls_to_use])
         to_fetch = progress.doc.get("bytes_total")
-        logger.info("Files: %d to fetch%s, %d already in the database, %d workers",
+        logger.info("Files: %d to read%s, %d already in the database, %d workers",
                     len(file_urls_to_use), f" ({to_fetch / 1e9:,.1f} GB compressed)" if to_fetch else "",
                     files_to_skip, workers)
 
@@ -385,7 +388,7 @@ def run_acquisition(
             # check). Compacting again would rewrite the whole database to
             # produce the same records.
             logger.info("Compaction skipped: this run added no file and the database is already compacted "
-                        "(all of its SST files are in one sorted level, so no n-gram is held twice)")
+                        "(all of its SST files are in one sorted level, so no record is held twice)")
             print("\nCompaction skipped: nothing was added and the database is already compacted.")
         elif not failure:
             with progress.long_phase("compacting"):
@@ -413,7 +416,7 @@ def run_acquisition(
         for msg in failure:
             logger.error("Failed file: %s", msg)
         logger.error("Stopping without compacting or verifying: %d files failed. The database holds the other "
-                     "files, each marked; a re-run fetches only the missing ones", len(failure))
+                     "files, each marked; a re-run reads only the missing ones", len(failure))
         progress.finish("failed", f"{len(failure)} file(s) failed")
         raise AcquisitionError(
             f"{len(failure)} of {len(success) + len(failure)} files failed "
@@ -426,7 +429,7 @@ def run_acquisition(
         logger.error("Stopping: every file is in, but the compaction failed; a re-run compacts")
         raise AcquisitionError(
             f"Every file was acquired, but the compaction failed ({compaction_error}). The database is "
-            f"complete but not compacted: counts of n-grams that arrived from more than one file are not "
+            f"complete but not compacted: counts of records that arrived from more than one file are not "
             f"summed yet. Re-run with overwrite_db=False to compact it."
         )
 
@@ -478,7 +481,7 @@ def run_acquisition(
                      "and allow_unparsed_lines is off. The database is otherwise complete and compacted",
                      f"{unreadable:,}")
         raise AcquisitionError(
-            f"{unreadable:,} lines had counts that could not be read in full, so their n-grams are "
+            f"{unreadable:,} lines could not be read in full, so what they held is "
             f"undercounted (the log shows the lines). The database is otherwise complete and compacted. "
             f"Re-run with allow_unparsed_lines=True to accept it as it is."
         )
@@ -542,7 +545,7 @@ def _perform_compaction(db, db_path: str) -> Optional[str]:
     from ngramprep.utilities.display import format_bytes, format_banner
 
     logger.info("Compacting: folding the per-file SST files into one sorted database and summing the "
-                "counts of n-grams that arrived from more than one file")
+                "counts of records that arrived from more than one file")
     print()
     print(format_banner("Post-Ingestion Compaction"))
 

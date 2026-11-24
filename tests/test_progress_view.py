@@ -101,7 +101,7 @@ def test_state_label_and_current_text():
     doc["ingesting"] = "5-00000-of-11145.gz"
     # a finished file is adopted by the database in one short step: one wait, not two
     assert summarize(doc, now)["current_text"] == (
-        "80 files in flight: 40 waiting for a worker · 36 downloading & parsing · "
+        "80 files in flight: 40 waiting for a worker · 36 reading · "
         "4 waiting for the database  (5-00000-of-11145.gz)")
     doc["current"] = []
     assert summarize(doc, now)["current_text"] == ""
@@ -251,10 +251,10 @@ def test_meters_keep_the_three_record_counts_apart():
            "corpus": {"files": 40, "entries": 2000, "bytes": 20 << 30, "lines": 5000, "unsized": 0}}
     groups = dict(meters(acq, summarize(acq, now=now, job_gone=False)))
     session = {label: value for label, value, _ in groups["Records \u2013 this session"]}
-    assert session == {"N-grams scanned": "1,234", "Kept": "500", "Parsed": "5.0 GB"}
+    assert session == {"Records read": "1,234", "Kept": "500", "Parsed": "5.0 GB"}
     # the database is cumulative over acquisition jobs, so it sits with the corpus totals; no file count there
     corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
-    assert corpus == {"N-grams scanned": "5,000", "Kept": "2,000", "Parsed": "20.0 GB", "In database": "\u2014"}
+    assert corpus == {"Records read": "5,000", "Kept": "2,000", "Parsed": "20.0 GB", "In database": "\u2014"}
     assert dict((l, n) for l, _v, n in groups["Records \u2013 entire corpus"])["Kept"] == "40.0%"
     assert "Checks" not in groups                       # a run from before the checks existed
     # a filter document written before the unit label was recorded still counts work units
@@ -293,7 +293,7 @@ def test_in_flight_meters_follow_the_stage():
                                                  ("Waiting for the database", "0", "")]
     doc.update(stage="acquire", unit_label="files", phases={"queued": 1, "parsing": 2, "parsed": 3, "ingesting": 1})
     assert dict(meters(doc, summarize(doc, now=now, job_gone=False)))["In flight: 3 files"] == [
-        ("Waiting for a worker", "1", ""), ("Downloading & parsing", "2", ""), ("Waiting for the database", "4", "")]
+        ("Waiting for a worker", "1", ""), ("Reading", "2", ""), ("Waiting for the database", "4", "")]
 
 
 def test_train_runs_read_as_ensembles_not_acquisitions():
@@ -361,14 +361,14 @@ def test_acquire_progress_is_weighed_by_size_and_time_left_covers_the_files_only
     assert info["by_size"] and abs(info["fraction"] - 0.6) < 1e-9 and info["percent"] == 30.0
     assert abs(info["eta_s"] - 400) < 1e-6                    # 400 bytes left at 600 bytes in 600 s
     assert info["step_text"] == "step 1 of 3" and info["then_text"] == "then compaction and the count check"
-    assert info["headline"].startswith("step 1 of 3: downloading and parsing the files on cs001 · 3/10 files (60% by size)")
+    assert info["headline"].startswith("step 1 of 3: reading the files on cs001 · 3/10 files (60% by size)")
     # what is read per second, files still in flight included; not what happens to be kept
-    assert info["scanning"] and info["rate_unit"] == "n-grams scanned/s" and info["rate"] == 3_600_000 / 600
+    assert info["scanning"] and info["rate_unit"] == "records read/s" and info["rate"] == 3_600_000 / 600
     tiles = {label: (value, note) for label, value, note in dict(meters(doc, info))["Progress"]}
     assert tiles["Files"] == ("3/10", "60% by size")
     assert tiles["Scan rate"][0] == "6.0k/s"
     assert tiles["Elapsed"][1] == "step 1 of 3"
-    assert tiles["Remaining"] == ("6m40s", "files only") and tiles["Scan rate"][1] == "n-grams"
+    assert tiles["Remaining"] == ("6m40s", "files only") and tiles["Scan rate"][1] == "records"
     # without sizes (an index page gives none) it falls back to counting files
     doc, now = _acq(bytes_total=None, in_flight={"lines": 0, "bytes": 0})
     info = summarize(doc, now)
@@ -420,13 +420,13 @@ def test_acquire_records_say_scanned_kept_and_files_with_nothing():
     doc, now = _acq()
     groups = dict(meters(doc, summarize(doc, now)))
     assert groups["Records \u2013 this session"] == [
-        ("N-grams scanned", "3,600,000", ""),
+        ("Records read", "3,600,000", ""),
         ("Kept", "90,000", "3.0%"),
         ("Nothing kept", "1", "files"),
         ("Parsed", "3.0 GB", "uncompressed")]
     corpus = {label: value for label, value, _ in groups["Records \u2013 entire corpus"]}
     # the corpus total includes the files in flight too: it never trails the session's
-    assert corpus == {"N-grams scanned": "3,600,000", "Kept": "90,000", "Nothing kept": "1",
+    assert corpus == {"Records read": "3,600,000", "Kept": "90,000", "Nothing kept": "1",
                       "Parsed": "3.0 GB", "In database": "\u2014"}
 
 
@@ -473,7 +473,7 @@ def test_acquire_warnings_say_what_a_problem_will_lead_to():
 
     doc["counters"]["problem_lines"] = doc["corpus"]["problem_lines"] = 3
     (w,) = summarize(doc, now)["warnings"]
-    assert w.startswith("3 lines had counts that could not be read in full")
+    assert w.startswith("3 lines could not be read in full, so what they held is undercounted")
     assert "will finish its work and then end with an error" in w and "allow_unparsed_lines accepts them" in w
     doc["checks"]["allow_unparsed_lines"] = True
     assert summarize(doc, now)["warnings"][0].endswith("Accepted: allow_unparsed_lines is on.")
@@ -692,3 +692,33 @@ def test_a_measure_run_says_which_year_it_is_measuring_and_how_many_are_left():
     assert groups["In flight"] == [("Measuring", "1988", "year"), ("Years left", "32 of 52", "this run")]
     doc["current"] = []
     assert dict(meters(doc, summarize(doc, now)))["In flight"][0] == ("Measuring", "none", "year")
+
+
+def test_a_run_s_own_words_for_what_it_reads_are_used_where_it_gives_them():
+    """The screens say "records" and "reading", true of any corpus. The
+    Google Books acquisition downloads its files and says so; a Davies
+    acquisition reads tokens, and its tagged files have rows."""
+    from lexichron.ui.progress_view import TERMS, meters, terms
+    doc, now = _acq()
+    assert terms(doc) == TERMS and "n-gram" not in " ".join(TERMS.values()).lower()
+
+    def screen(d):
+        info = summarize(d, now)
+        groups = dict(meters(d, info))
+        text = " ".join(str(x) for tiles in groups.values() for tile in tiles for x in tile)
+        return info, text + " " + " ".join(groups) + " " + info["headline"] + " " + " ".join(info.get("warnings") or [])
+
+    google = dict(doc, terms={"reading": "downloading & parsing", "reading_now": "downloading and parsing the files"})
+    info, text = screen(google)
+    assert "downloading and parsing the files" in info["headline"] and "Records read" in text
+    davies = dict(doc, terms={"scanned": "Tokens read", "rate": "tokens read/s", "rate_note": "tokens", "row": "row"},
+                  checks={"verify_counts": True, "allow_unparsed_lines": False})
+    davies["counters"] = dict(davies["counters"], problem_lines=2)
+    davies["corpus"] = dict(davies["corpus"], problem_lines=2)
+    info, text = screen(davies)
+    assert info["rate_unit"] == "tokens read/s" and "reading the files" in info["headline"]
+    assert "Tokens read" in text and "Unread rows" in text and "2 rows could not be read in full" in text
+    for words in (text, screen(doc)[1]):                # neither a Davies run nor a plain one mentions n-grams or downloads
+        assert "n-gram" not in words.lower() and "download" not in words.lower(), words
+    # a word the screens do not use is ignored, and an empty one does not blank a label
+    assert terms({"terms": {"colour": "red", "scanned": ""}}) == TERMS

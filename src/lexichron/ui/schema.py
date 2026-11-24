@@ -257,13 +257,13 @@ HELP: Dict[str, str] = {
     "alpha_only": "Replace tokens that are not purely alphabetic (numbers, punctuation) with <UNK>.",
     "ascii_only": "With 'Letters only', also reject letters outside A-Z. Default: on for English only.",
     "min_len": "Replace tokens shorter than this with <UNK>.",
-    "min_context_tokens": "Drop n-grams with fewer than this many non-<UNK> tokens. Blank: 1 for unigrams, 2 for longer n-grams.",
+    "min_context_tokens": "Drop n-grams with fewer than this many non-<UNK> tokens. Blank: 1 for unigrams and a Davies corpus's tokens, 2 for longer n-grams and sentences.",
     "bin_size": "Aggregate years into bins: 1 = annual, 5 = five-year bins.",
     "vocabulary": ("Vocabulary file (whitelist.txt): tokens not in it become <UNK> and the other filters are "
                    "skipped. Blank: none for unigrams; for longer n-grams, this corpus's own unigram vocabulary, "
                    "which the unigram filter writes."),
     "no_vocabulary": "Filter 2-5-grams with the rule filters alone, without a vocabulary. Rarely wanted: the result is far larger.",
-    "pivot": "Write the database keyed by year then n-gram (what training reads) instead of by n-gram (what the vocabulary is built from). Blank: off for unigrams, on for longer n-grams.",
+    "pivot": "Write the database keyed by year then n-gram (what training reads) instead of by n-gram (what the vocabulary is built from). Blank: off for unigrams and a Davies corpus's tokens, on for longer n-grams and sentences.",
     "vocabulary_top_n": "Use only the first N tokens of the vocabulary file.",
     "always_include": ("Tokens kept whatever the other rules say (the vocabulary, letters only, length, stopwords): "
                        "Edit opens a window with a row per token. A token is matched by its spelling in the data, "
@@ -272,7 +272,7 @@ HELP: Dict[str, str] = {
                        "want (woman does not keep women). Tokens the acquire run combined are kept automatically. "
                        "In a unigram run these words also go into the vocabulary whatever their frequency, "
                        "after the top N, so listing a word there keeps it in the longer n-grams too."),
-    "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams, off for longer n-grams.",
+    "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams and a Davies corpus's tokens, off for longer n-grams and sentences. The blank field shows which applies to this corpus.",
     "output_vocabulary_top_n": "How many of the most frequent tokens the vocabulary keeps.",
     "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
     "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",

@@ -1079,6 +1079,12 @@ class LexichronApp(App):
         corpus = (self.config if config is None else config).get("corpus") or {}
         return "davies" if str(corpus.get("source") or "").lower() == "davies" else "ngrams"
 
+    def _identity_hint(self) -> str:
+        """What is still needed before these settings name a corpus."""
+        if self._source() == "davies":
+            return "fill in the corpus directory and corpus"
+        return "fill in the corpus directory, corpus and n-gram size"
+
     def _form_of(self, stage: str, source: Optional[str] = None) -> str:
         """The form that holds ``stage``'s settings for this kind of corpus."""
         return DAVIES_ACQUIRE if stage == "acquire" and (source or self._source()) == "davies" else stage
@@ -1105,7 +1111,7 @@ class LexichronApp(App):
     def _require_project_path(self) -> Path:
         p = self.project_path
         if p is None:
-            raise ConfigError("fill in the corpus directory, corpus and n-gram size first")
+            raise ConfigError(f"{self._identity_hint()} first")
         return p
 
     # -- layout -----------------------------------------------------------------
@@ -1285,7 +1291,7 @@ class LexichronApp(App):
                     with Horizontal(classes="row"):
                         yield Label("Key")
                         yield Input("", id="inspect-key", compact=True,
-                                    placeholder="[2011] nuclear for a pivoted database; the n-gram otherwise")
+                                    placeholder="[2011] nuclear for a pivoted database; the record's text otherwise")
                         yield Label("Rows", classes="inline-label")
                         yield Input("20", id="inspect-rows", compact=True, type="integer")
                         yield Label("Keys", classes="inline-label")
@@ -1540,7 +1546,7 @@ class LexichronApp(App):
             self._refresh_corpus_state()
         dest = self.project_path
         self.query_one("#dest", Static).update(
-            f"Settings file: {dest if dest else '(fill in the corpus directory, corpus and n-gram size)'}"
+            f"Settings file: {dest if dest else '(' + self._identity_hint() + ')'}"
             + ("  (reopened from last time)" if self.reopened else ""))
         self._refresh_command_line(dest)
         try:
@@ -1561,6 +1567,34 @@ class LexichronApp(App):
             self._refresh_measure_summary(kwargs)
         if self.stage == "filter":
             self._refresh_handed_tokens(kwargs)
+            self._refresh_filter_defaults()
+
+    def _refresh_filter_defaults(self) -> None:
+        """Say what a blank means for the corpus at hand. Three of Filter's
+        settings default by what the records are: single tokens (1-grams, a
+        Davies corpus's tokens) are filtered into a vocabulary and not
+        pivoted; text (longer n-grams, sentences) the other way round. The
+        blank fields show which, instead of a bare "(default)"."""
+        corpus = self.config.get("corpus") or {}
+        if self._source() == "davies":
+            tokens: Optional[bool] = str(corpus.get("unit") or "sentences") == "tokens"
+        else:
+            try:
+                tokens = int(corpus["ngram_size"]) == 1
+            except (KeyError, TypeError, ValueError):
+                tokens = None                               # no corpus chosen yet
+        for name, on_for_tokens in (("output_vocabulary", True), ("pivot", False)):
+            try:
+                w = self.query_one(f"#f-filter-{name}", Select)
+            except Exception:
+                continue
+            w.prompt = "(default)" if tokens is None else \
+                f"(default: {'yes' if tokens == on_for_tokens else 'no'})"
+        try:
+            self.query_one("#f-filter-min_context_tokens", Input).placeholder = \
+                "(number, optional)" if tokens is None else f"(default: {1 if tokens else 2})"
+        except Exception:
+            pass
 
     def _refresh_handed_tokens(self, kwargs: Dict[str, Any]) -> None:
         """Tell the Always keep field which tokens the acquire run combined,
@@ -2504,8 +2538,14 @@ class LexichronApp(App):
         selected = self.selected_run if self.selected_run in dirs else (dirs[0] if dirs else None)
         sel_doc = next((doc for d, doc in docs if d == selected), None)
         log_lines = tail_lines(sel_doc.get("log_path"), 15) if sel_doc else []
+        # what the corpus directory holds now, for the Inspect tab's list: runs add to it
+        corpus_dir = self._corpus_dir(self.config)
+        try:
+            found = candidates(str(corpus_dir) if corpus_dir else None)
+        except OSError:
+            found = None
         return {"jobs": jobs, "jobs_error": jobs_error, "docs": docs, "selected": selected,
-                "log_lines": log_lines}
+                "log_lines": log_lines, "inspect": (corpus_dir, found)}
 
     def _apply_status(self, snap: Dict[str, Any]) -> None:
         if "error" in snap:
@@ -2515,6 +2555,11 @@ class LexichronApp(App):
                 pass
             return
         self._status = snap
+        corpus_dir, found = snap.get("inspect") or (None, None)
+        if found is not None and corpus_dir == self._corpus_dir(self.config):
+            self._set_inspect_candidates(corpus_dir, found)
+            if self._bar_ready:
+                self._refresh_corpus_state()             # and the stage buttons: a finished run opens the next stage
         self._follow_running_ensemble(snap["docs"])
         self._follow_running_measure(snap["docs"])
         table = self.query_one("#jobs", DataTable)
@@ -2631,7 +2676,7 @@ class LexichronApp(App):
         log = self.query_one("#run-log", RichLog)
         if not self.selected_run:
             if self.project_path is None:
-                title.update("Fill in the corpus directory, corpus and n-gram size on the Settings tab; "
+                title.update(self._identity_hint().capitalize() + " on the Settings tab; "
                              "that corpus's runs will appear here.")
             else:
                 title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")
@@ -2672,10 +2717,23 @@ class LexichronApp(App):
         Database selector; the path field accepts anything else."""
         corpus_dir = self._corpus_dir(self.config)
         if corpus_dir == self._inspect_dir:
+            return                       # what the directory holds is kept up by the periodic refresh
+        self._set_inspect_candidates(corpus_dir, candidates(str(corpus_dir) if corpus_dir else None))
+
+    def _set_inspect_candidates(self, corpus_dir: Optional[Path], found: List[Tuple[str, str]]) -> None:
+        """Show ``found`` in the Database selector, keeping the choice if it
+        is still there. The list was built once per corpus, so a database or
+        a vocabulary that a run wrote afterwards (the usual case: Filter
+        finishes while the corpus is open) never appeared in it; it is now
+        rebuilt whenever what the directory holds changes."""
+        if corpus_dir == self._inspect_dir and found == getattr(self, "_inspect_listed", None):
             return
-        self._inspect_dir = corpus_dir
+        self._inspect_dir, self._inspect_listed = corpus_dir, list(found)
         sel = self.query_one("#inspect-db", Select)
-        sel.set_options(candidates(str(corpus_dir) if corpus_dir else None))
+        chosen = sel.value
+        sel.set_options(found)
+        if chosen is not Select.NULL and any(path == chosen for _, path in found):
+            sel.value = chosen
 
     # -- Inspect tab, tune stage: a search's scores --------------------------
     def _refresh_searches(self) -> None:

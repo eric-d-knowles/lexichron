@@ -72,7 +72,8 @@ class ProgressReporter:
                  log_path: Optional[str | os.PathLike] = None,
                  spool_dir: Optional[str | os.PathLike] = None,
                  unit_label: str = "files",
-                 inputs: Optional[Dict[str, Any]] = None) -> None:
+                 inputs: Optional[Dict[str, Any]] = None,
+                 terms: Optional[Dict[str, str]] = None) -> None:
         self.path = Path(path) if path else None
         self.min_interval_s = min_interval_s
         self._write_failed = False
@@ -97,6 +98,9 @@ class ProgressReporter:
             "ingesting": None,
             "corpus": {"files": 0, "entries": 0, "bytes": 0, "unsized": 0},
             "unit_label": unit_label,          # what files_total/files_done count
+            # This run's words for what it reads, for the progress display, which
+            # otherwise says "records" and "reading" (lexichron.ui.progress_view.TERMS).
+            "terms": dict(terms or {}),
             "counters": {},                    # stage-specific running totals
             "database": {},                    # after compaction: records, bytes (exact once compacted)
             "inputs": {k: (str(v) if v is not None else None) for k, v in (inputs or {}).items()},

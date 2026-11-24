@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-__all__ = ["summarize", "meters", "fmt_duration", "fmt_bytes", "fmt_count", "tail_lines"]
+__all__ = ["summarize", "meters", "fmt_duration", "fmt_bytes", "fmt_count", "tail_lines", "terms", "TERMS"]
 
 
 def _parse(ts: Optional[str]) -> Optional[datetime]:
@@ -66,7 +66,26 @@ LONG_PHASES = {
 
 # The steps of a run that declares them (acquire: see ProgressReporter.set_plan):
 # what each is called while it runs, and when it is still to come.
-STEP_NOW = {"ingesting": "downloading and parsing the files", **LONG_PHASES}
+STEP_NOW = {"ingesting": "reading the files", **LONG_PHASES}
+
+# What a run calls the things it reads. The screens say "records" and
+# "reading", which is true of any corpus; a run whose reader can say more
+# puts its own words in the progress document's "terms" (the Google Books
+# acquisition downloads its files; a Davies acquisition reads tokens and its
+# tagged files have rows), and they are used where given.
+TERMS = {
+    "reading": "reading",                        # what a worker is doing with a file
+    "reading_now": "reading the files",          # the step, in the run's headline
+    "scanned": "Records read",                   # the tile counting what has been read
+    "rate": "records read/s",                    # the throughput's unit
+    "rate_note": "records",                      # under the Scan rate tile
+    "row": "line",                               # one unit of input that can fail to be read
+}
+
+
+def terms(doc: Dict[str, Any]) -> Dict[str, str]:
+    """The run's words for what it reads: ``TERMS``, with the run's own."""
+    return {**TERMS, **{k: str(v) for k, v in (doc.get("terms") or {}).items() if k in TERMS and v}}
 STEP_NOW_FILTER = {**STEP_NOW, "ingesting": "scanning and filtering the work units"}
 STEP_LATER = {"compacting": "compaction", "verifying": "the count check", "archiving": "archiving",
               "whitelist": "the vocabulary"}
@@ -140,7 +159,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
     if scanning:
         scanned = int(counters.get("scanned" if stage_name == "filter" else "lines", 0)) + int(in_flight.get("lines", 0))
         rate = (scanned / work_elapsed) if work_elapsed and work_elapsed > 0 else 0.0
-        rate_unit = "records scanned/s" if stage_name == "filter" else "n-grams scanned/s"
+        rate_unit = "records scanned/s" if stage_name == "filter" else terms(doc)["rate"]
     else:
         rate = (entries / elapsed) if elapsed and elapsed > 0 else 0.0
         rate_unit = "entries/s"
@@ -199,7 +218,8 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         status = (f"{step_text}: " if step_text else "") + f"{LONG_PHASES[phase]} ({for_how_long} so far)"
         eta = None
     elif state == "running" and step_text:
-        status = f"{step_text}: {(STEP_NOW_FILTER if stage_name == 'filter' else STEP_NOW).get(phase, phase)}"
+        now_text = STEP_NOW_FILTER if stage_name == "filter" else {**STEP_NOW, "ingesting": terms(doc)["reading_now"]}
+        status = f"{step_text}: {now_text.get(phase, phase)}"
     else:
         status = state
     parts = [status + (f" {where_txt}" if where_txt else "")]
@@ -252,7 +272,7 @@ def summarize(doc: Dict[str, Any], now: Optional[datetime] = None, *,
         # The parent only adopts a finished file (one metadata operation), so
         # "parsed" and "being ingested" are one short wait: for the database.
         phases = dict(phases, handover=int(phases.get("parsed", 0)) + int(phases.get("ingesting", 0))) if phases else phases
-        phase_labels = (("queued", "waiting for a worker"), ("parsing", "downloading & parsing"),
+        phase_labels = (("queued", "waiting for a worker"), ("parsing", terms(doc)["reading"]),
                         ("handover", "waiting for the database"))
     if not current:
         current_text = ""
@@ -353,8 +373,10 @@ def warnings(doc: Dict[str, Any], *, state: Optional[str] = None, stopped: bool 
     unreadable = int(ledger.get("problem_lines", corpus.get("problem_lines", counters.get("problem_lines", 0))))
     if unreadable:
         accepted = bool((doc.get("checks") or {}).get("allow_unparsed_lines"))
-        text = (f"{unreadable:,} line{'s' if unreadable != 1 else ''} had counts that could not be read in full, "
-                f"so their n-grams are undercounted (the log shows the lines). ")
+        row = terms(doc)["row"]
+        text = (f"{unreadable:,} {row}{'s' if unreadable != 1 else ''} could not be read in full, "
+                f"so what {'they' if unreadable != 1 else 'it'} held is undercounted (the log shows "
+                f"{'them' if unreadable != 1 else 'it'}). ")
         if accepted:
             text += "Accepted: allow_unparsed_lines is on."
         elif running:
@@ -471,7 +493,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         (("Rate", f"{done / info['elapsed_s'] * 3600:.1f}/h" if info["elapsed_s"] else "—",
           "years" if stage == "measure" else "models")
          if stage in ("tune", "train", "measure") else
-         ("Scan rate", f"{fmt_count(info['rate'])}/s", "records" if stage == "filter" else "n-grams")
+         ("Scan rate", f"{fmt_count(info['rate'])}/s", "records" if stage == "filter" else terms(doc)["rate_note"])
          if info.get("scanning") else
          ("Rate", f"{fmt_count(info['rate'])}/s", "entries kept" if stage == "filter" else "entries")),
         ("Elapsed", fmt_duration(info["elapsed_s"]), info.get("step_text") or ""),
@@ -519,7 +541,8 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             # stay near zero: a number that grows means the parent has
             # fallen behind its workers.
             phases = dict(phases, handover=int(phases.get("parsed", 0)) + int(phases.get("ingesting", 0)))
-            labels = (("queued", "Waiting for a worker"), ("parsing", "Downloading & parsing"),
+            reading = terms(doc)["reading"]
+            labels = (("queued", "Waiting for a worker"), ("parsing", reading[:1].upper() + reading[1:]),
                       ("handover", "Waiting for the database"))
         tiles = [(label, f"{int(phases.get(key, 0)):,}", "") for key, label in labels]
         groups.append((f"In flight: {len(current):,} {unit}", tiles))
@@ -527,7 +550,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         groups.append(("Search", [
             ("Models trained", f"{int(counters.get('models', 0)):,}", "this run"),
             ("Training time", fmt_duration(float(counters.get("train_seconds", 0))), "summed over models"),
-            ("N-grams used", f"{int(counters.get('ngrams_used', 0)):,}", "after the <UNK> policy"),
+            ("Records used", f"{int(counters.get('ngrams_used', 0)):,}", "after the <UNK> policy"),
             ("Corpus lines", f"{int(counters.get('corpus_lines', 0)):,}", "weighted repeats"),
         ]))
     elif stage == "train":
@@ -556,8 +579,8 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
         tiles = [("Scanned", f"{scanned + flying:,}", ""),
                  ("Kept", f"{kept:,}", _pct(kept, scanned) if scanned else "")]
         if produced > kept:
-            # the pivot makes one record per n-gram and year from each kept n-gram
-            tiles.append(("Year records", f"{produced:,}", f"{produced / kept:.1f} per n-gram" if kept else ""))
+            # the pivot makes one record per source record and year from each one kept
+            tiles.append(("Year records", f"{produced:,}", f"{produced / kept:.1f} per record" if kept else ""))
         tiles += [("Inserted", f"{int(counters.get('inserted', 0)):,}", ""), db_tile()]
         groups.append(("Records", tiles))
         tokens = int(counters.get("tokens", 0))
@@ -572,7 +595,7 @@ def meters(doc: Dict[str, Any], info: Dict[str, Any]) -> List[Tuple[str, List[Tu
             tiles = [(label, f"{int(counters.get(key, 0)):,}", _pct(int(counters.get(key, 0)), tokens) + " of tokens")
                      for label, key in rules]
             dropped = int(counters.get("ngrams_dropped_context", 0))
-            tiles.append(("Too few real tokens", f"{dropped:,}", _pct(dropped, ngrams) + " of n-grams"))
+            tiles.append(("Too few real tokens", f"{dropped:,}", _pct(dropped, ngrams) + " of records"))
             groups.append(("Dropped by rule", tiles))
         groups += filter_checks(doc, info)
     else:
@@ -685,7 +708,7 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     flying = int(in_flight.get("lines", 0))
     kept = int(counters.get("inserted", doc.get("entries_written", 0)))
     session = [
-        ("N-grams scanned", f"{lines + flying:,}", ""),           # files in flight included
+        (terms(doc)["scanned"], f"{lines + flying:,}", ""),       # files in flight included
         ("Kept", f"{kept:,}", kept_note(kept, lines)),
     ]
     if "empty_files" in counters or doc.get("checks") is not None:
@@ -697,7 +720,7 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     if "lines" in corpus:
         # Earlier jobs' files plus everything this session has read, files
         # in flight included: the corpus total never trails the session's.
-        tiles.append(("N-grams scanned", f"{int(corpus.get('lines', 0)) + flying:,}", ""))
+        tiles.append((terms(doc)["scanned"], f"{int(corpus.get('lines', 0)) + flying:,}", ""))
     tiles.append(("Kept", f"{int(corpus.get('entries', 0)):,}",
                   kept_note(int(corpus.get("entries", 0)), int(corpus.get("lines", 0)))))
     if "empty_files" in corpus or doc.get("checks") is not None:
@@ -740,7 +763,7 @@ def acquire_groups(doc: Dict[str, Any], info: Dict[str, Any], db_tile) -> List[T
     tiles = [
         ("Counts", counts[0], counts[1]),
         ("Occurrences", f"{occurrences:,}", ""),          # the ledger's while files are read; the database's once checked
-        ("Unread lines", f"{unreadable:,}", "see log" if unreadable else ""),
+        (f"Unread {terms(doc)['row']}s", f"{unreadable:,}", "see log" if unreadable else ""),
         ("Reordered values", f"{reordered:,}", "corrected" if reordered else ""),
     ]
     unledgered = int(ledger.get("unledgered", corpus.get("unledgered", 0)))

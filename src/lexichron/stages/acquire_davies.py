@@ -118,7 +118,11 @@ def acquire_davies(
     what = f"{fmt.label} {unit}, {ngram_type} edition" + (f", genres {', '.join(genres)}" if genres else "")
     logger.info("Acquisition starting: %s from %s into %s", what, source_dir, db_path)
     progress = ProgressReporter(progress_path, stage="acquire", db_path=db_path, log_path=log_file,
-                                inputs={"source": f"{what} ({Path(source_dir) / EDITIONS[ngram_type]})"})
+                                inputs={"source": f"{what} ({Path(source_dir) / EDITIONS[ngram_type]})"},
+                                # a worker counts the tokens it reads, whichever the records are;
+                                # what can fail to be read is a row of the tagged edition
+                                terms={"scanned": "Tokens read", "rate": "tokens read/s", "rate_note": "tokens",
+                                       "row": "row"})
     progress.set_plan(["ingesting", "compacting"] + (["verifying"] if verify_counts else []))
     progress.set_checks(verify_counts=bool(verify_counts), allow_unparsed_lines=bool(allow_unparsed_lines))
 

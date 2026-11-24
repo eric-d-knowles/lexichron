@@ -163,7 +163,7 @@ def test_unreadable_lines_fail_the_run_unless_accepted(monkeypatch, tmp_path, st
     files = dict(FILES)
     files["2-00002-of-00003.gz"] = FILES["2-00002-of-00003.gz"] + ["d_NOUN w_VERB\t1990,5\t1991,2,2",
                                                                     "e_NOUN w_VERB\t1990,x,1"]
-    with pytest.raises(AcquisitionError, match="2 lines had counts that could not be read in full"):
+    with pytest.raises(AcquisitionError, match="2 lines could not be read in full, so what they held is"):
         acquire(monkeypatch, tmp_path, files=files)
     doc = acquire.progress
     # the work is done and the counts that were read are verified: only the lines are at issue

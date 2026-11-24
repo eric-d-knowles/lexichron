@@ -908,7 +908,11 @@ Tabs:
   be closed and reopened while a job runs.) Your queued and running Slurm
   jobs are listed underneath, with a *Cancel* button.
 
-  An acquisition's screen reads as follows.
+  An acquisition's screen reads as follows. The words are general ones,
+  "records" and "reading", except where a run says more about what it
+  reads: a Google Books acquisition downloads its files and says so; a
+  Davies acquisition counts *tokens read*, and what can fail to be read
+  there is a *row* of the tagged files.
   - *The headline and the bar* say which step the run is on (`step 1 of 3:
     downloading and parsing the files`, then compaction, the count check,
     and archiving if asked for) and how far it is **by size**: the listing
@@ -916,16 +920,16 @@ Tabs:
     magnitude in what they hold, so a count of files says little.
     *Remaining* is an estimate for the files only; the steps that follow
     are single long operations with no estimate.
-  - *Scan rate* is the raw n-grams read per second while files were being
-    read, files still in flight included (workers report every few
+  - *Scan rate* is the raw records (n-grams, one per line; a Davies
+    corpus's tokens) read per second while files were being read, files still in flight included (workers report every few
     seconds). It does not depend on how much of what is read is kept.
   - *In flight* shows files waiting for a worker, being downloaded and
     parsed, and waiting for the database. The last should stay near zero: a
     finished file is adopted in one short operation.
   - *Records* are given for this session and, since the database
-    accumulates over acquisition jobs, for the entire corpus: the n-grams
-    *scanned* (one per data line; the session's figure includes files
-    still being read), those *kept*, with their share of the n-grams in
+    accumulates over acquisition jobs, for the entire corpus: the *records
+    read* (n-grams, one per data line; the session's figure includes files
+    still being read), those *kept*, with their share of the records in
     finished files, and the files from which *nothing* was *kept*: read in
     full, with no line that passed the token-type filter. For tagged
     n-grams that is most files, and a small share kept is what a correct
