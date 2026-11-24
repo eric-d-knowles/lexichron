@@ -23,8 +23,14 @@ section for whatever you are touching before changing it.
   `provenance.py`, `inspection.py`.
 - `src/ngramprep/` — acquisition, filtering and pivoting of n-gram databases
   (RocksDB through `rocks-shim`), with Cython kernels.
-- `src/train/`, `src/analyze/` — the older notebook-era code; the stages above
-  supersede the training parts. Do not build new features on them.
+- `src/lexichron/davies/` — reading Davies corpora (COHA) for the acquire
+  stage: `formats.py` (file layout per corpus, CLAWS-to-coarse tag map),
+  `reader.py` (documents, and the units of text they are cut into),
+  `worker.py` (one archive -> one SST file). `stages/acquire_davies.py` is
+  the entry point; `cli.STAGES_BY_SOURCE` picks it for `corpus.source: davies`.
+- `src/train/`, `src/analyze/`, `src/daviesprep/` — the older notebook-era
+  code; the stages above supersede the training parts and, for COHA, the
+  Davies parts. Do not build new features on them.
 - `tests/` — pytest; `fake_rocks.py` stands in for RocksDB and `test_tune_stage.py`
   has a deterministic `fake_train` so stages run without gensim.
 - `container/`, `install.sh`, `.github/workflows/container.yml` — the image,
@@ -70,6 +76,27 @@ in the image; tests create their own.
 
 ## Design decisions that are settled
 
+- **A Davies corpus is a second reader in front of the same pipeline, not a
+  second pipeline.** `ngram_acquire.core.run_acquisition` is the part of
+  acquisition that does not care where files come from; the Davies worker
+  hands it the same SST-plus-marker units, so resume, compaction and the
+  count check are shared. A corpus is acquired twice, as Google's files come
+  twice: `corpus.unit: tokens` is the 1-grams' counterpart and gives the
+  vocabulary through the unigram filter unchanged; `corpus.unit: sentences`
+  is the 5-grams' counterpart. A record is a unit of text under its year in
+  the n-gram record shape, so filter, tune, train and measure only needed to
+  be told the layout (`corpora.corpus_layout(source=, unit=)`), which is the
+  one place a stage knows what kind of corpus it has; keep it that way.
+  `ngram_type` chooses the edition (tagged reads `wlp/` and writes
+  `word_TAG`, untagged reads `text/`). Units are cut by a rule on the words
+  alone so both editions are cut alike. Genres are fixed at acquire time:
+  the database has no place for them. Adding a corpus (COCA, Movies, NOW)
+  means a `CorpusFormat` and whatever its document and metadata layout needs
+  in the reader, not a new stage.
+- **The corpus identifier is `corpus.name`**, for every source (it was
+  `language`; old files and `--set corpus.language=` are migrated on load).
+  The UI's tables key a corpus field as `corpus.<key>` first because tune,
+  train and measure have their own `name`.
 - **Tuning vs training are separate stages.** `tune` runs a grid on a few
   sampled years (adjacent pairs spread over the study period) and scores
   stability (seed, split-half, adjacent-year) and quality (benchmarks,

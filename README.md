@@ -2,8 +2,8 @@
 
 Tools for studying semantic change over time with word embeddings trained on
 large historical corpora. lexichron covers the whole pipeline: acquiring
-Google Books Ngrams (1- to 5-grams) or Mark Davies' corpora (COHA, COCA and
-others), filtering and normalizing the text, storing it in a queryable RocksDB
+Google Books Ngrams (1- to 5-grams) or one of Mark Davies' corpora (COHA so
+far), filtering and normalizing the text, storing it in a queryable RocksDB
 database, training per-year `word2vec` models, aligning them, and analyzing how
 word meanings move.
 
@@ -21,6 +21,7 @@ smaller machines at the cost of speed.
   - [Container installation](#container-installation)
   - [Development installation (conda)](#development-installation-conda)
 - [Command line](#command-line)
+- [Davies corpora](#davies-corpora)
 - [Terminal user interface](#terminal-user-interface)
 - [Example notebooks](#example-notebooks)
 - [Output files](#output-files)
@@ -37,7 +38,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.13.14}
+  version = {0.14.0}
 }
 ```
 
@@ -47,7 +48,7 @@ Alternatively, you can click "Cite this repository" in the GitHub sidebar for ad
 
 ### Data Preparation
 
-- **Data acquisition:** Download n-gram datasets (1- through 5-grams) from the 2020 release of Google Books Ngrams, or read Davies corpora (which must be licensed and downloaded by the user), and ingest them into a RocksDB database.
+- **Data acquisition:** Download n-gram datasets (1- through 5-grams) from the 2020 release of Google Books Ngrams, or read a Davies corpus from the files you hold under licence (COHA so far; see [Davies corpora](#davies-corpora)), and ingest them into a RocksDB database.
 - **Language support:** N-gram pipelines support English, Chinese (simplified), French, German, Hebrew, Italian, Russian, and Spanish.
 - **Filtering:** Any combination of case normalization, stopword removal, short-word removal, non-alphabetic token removal, and lemmatization. Discarded tokens are replaced with `<UNK>`.
 - **Whitelists:** Write the top-N most frequent unigrams, optionally spell-checked, and use the list to filter longer n-grams. With case normalization, spell-checking also drops proper nouns ("Jackson", "Einstein"). A year range restricts the list to tokens present in every year of the range.
@@ -75,7 +76,8 @@ Alternatively, you can click "Cite this repository" in the GitHub sidebar for ad
 
 ## Workflow
 
-There are two parallel pipelines, one per data source:
+There is one pipeline with two sources of text. The stages after acquisition
+are the same for both.
 
 ### Google Ngrams Pipeline
 
@@ -83,10 +85,15 @@ There are two parallel pipelines, one per data source:
 2. **`ngram_filter`**: Apply linguistic transformations (case normalization, lemmatization, stopword removal, a vocabulary) to prepare data. Unigrams yield a vocabulary whitelist; 2-5-grams are written, in the same pass, in the year-first ("pivoted") layout that time-series analysis and model training read.
 3. **`tune`**: Hyperparameter search for the word2vec models: a grid of settings is trained on a few sampled years and scored for stability and quality (below).
 
-### Davies Corpora Pipeline
+### Davies Corpora
 
-1. **`davies_acquire`**: Ingest Davies corpus files (COHA, COCA, etc.) with genre and year information into RocksDB.
-2. **`davies_filter`**: Apply the same filtering and preprocessing transformations as `ngram_filter` for consistency.
+A Davies corpus (`corpus.source: davies`) goes through the same stages. Only
+acquisition differs: nothing is downloaded, and the corpus's own files are
+read where you keep them. The corpus is read twice, as Google's files come
+twice: its single *tokens*, which the filter turns into the vocabulary as it
+does with 1-grams, and its *sentences*, which are filtered against that
+vocabulary, pivoted by year and trained on as 5-grams are. See
+[Davies corpora](#davies-corpora).
 
 ### Analysis Tools
 
@@ -156,7 +163,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.13.14 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.14.0 bash install.sh`.
 
 The image is one file of about 4 GB. On a slow or unreliable connection the
 container runtime's download can be cut off partway (`FATAL: ... stream
@@ -179,7 +186,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.13.14.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.0.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -199,7 +206,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.13.14)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.14.0)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -298,7 +305,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.13.14.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.14.0.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -401,7 +408,10 @@ Pipeline stages can also be run from a settings file instead of a notebook.
 The file holds the settings a notebook's setup cells would hold, named exactly
 as in the stage's Python function; `examples/lexichron.yaml` is a commented
 template. One file describes one corpus: a shared `corpus` section (release,
-name, n-gram size, database directory) and a section per stage.
+name, n-gram size, database directory; for a Davies corpus see
+[Davies corpora](#davies-corpora)) and a section per stage. The corpus's
+identifier is `corpus.name` (`eng-us`); files that call it `language`, as it
+was before 0.14, load as before.
 
 ```bash
 lexichron acquire lexichron.yaml                       # download and ingest
@@ -693,6 +703,95 @@ their volume counts are added. A book that contains both *building* and
 *buildings* is counted for each, so a filtered record's volume count is an
 upper bound on the books it appears in. Occurrence counts are exact.
 
+## Davies corpora
+
+Mark Davies' corpora (english-corpora.org) are licensed, so lexichron never
+downloads them: you point it at the files you hold. COHA, the Corpus of
+Historical American English, is supported, in the layout of its 2015 files
+(twenty archives per edition, one per decade, 1810s to 2000s). The other
+corpora differ in how their files hold documents, years and genres and are
+not read yet.
+
+A Davies corpus is described by `source: davies` and a `name`. It has no
+release and no n-gram size; a settings file that gives them is refused.
+
+```yaml
+corpus:
+  source: davies
+  name: coha
+  unit: tokens                 # tokens first, then sentences (the default)
+  db_path_stub: /scratch/$USER/NLP_corpora/Davies
+
+acquire:
+  source_dir: /scratch/$USER/NLP_corpora/english-corpora/COHA   # holds wlp/ and text/; only read
+  ngram_type: tagged           # tagged reads wlp/, untagged reads text/
+  # genres: [fic, mag]         # default: all four (fic, mag, news, nf)
+```
+
+**Two databases, as with n-grams.** `unit: tokens` makes a database of the
+corpus's single tokens, the counterpart of Google's 1-grams: filtering it
+builds the vocabulary, with the same settings (top N, year range, spell
+check) as the unigram filter. `unit: sentences` makes a database of running
+text, which is filtered against that vocabulary, pivoted by year, and is
+what `tune` and `train` read. Each has its own directory and settings file:
+
+```
+{db_path_stub}/coha/
+    token_files/       tokens.db, tokens_processed.db (with whitelist.txt), lexichron.yaml
+    sentence_files/    sentences.db, sentences_pivoted.db, tuning/, models/, lexichron.yaml
+```
+
+The order is the n-gram order: acquire and filter the tokens, then acquire
+and filter the sentences, then tune, train and measure on the sentences. The
+sentences can also be filtered before the tokens are, with `no_vocabulary:
+true` (the rule filters alone) or a `vocabulary` file of your own.
+
+**What a record is.** A document is cut into units of text whose words
+really were next to each other: at sentence-final punctuation (`.`, `?`, `!`
+as tokens of their own), at paragraph and headline marks, and wherever the
+corpus removed words for copyright (COHA leaves ten `@` for every two
+hundred words). None of those tokens is kept. A unit is stored under its
+document's year with how often it occurred and in how many documents, the
+shape of an n-gram record, so every later stage treats it as a long n-gram.
+A stretch with no such break for `max_unit_tokens` (500) tokens is cut
+there; in COHA none is that long.
+
+**Tagged or untagged** (`ngram_type`), as for Google's files. `tagged` reads
+the word/lemma/part-of-speech edition (`wlp/`) and stores each token with a
+coarse tag, `building_NOUN`, mapped from the corpus's CLAWS7 tag (the first
+alternative of an ambiguous tag; proper nouns are `NOUN`, as in Google's
+files). The filter then makes lemmas by tag exactly as it does for tagged
+n-grams, which is what makes a COHA series comparable with a Google Books
+one. `untagged` reads the plain-text edition (`text/`) and stores bare
+words, which get the lookup lemma. The two editions hold the same text and
+are cut into the same units. Use the same `ngram_type` and `genres` for the
+tokens and the sentences; a vocabulary lemmatized the other way is refused
+at filter time, but nothing checks the genres.
+
+**Genres** are chosen when the corpus is acquired, not later: the database
+has no place for them. Another selection is another `db_path_stub`.
+
+**Time.** A document's own year is stored. One year of COHA is little text
+(a tuning search on 2004 and 2005 trained usable models, but two halves of a
+year's text agreed on almost none of a word's nearest neighbours), so set
+the filter's `bin_size` to 10 for decades unless you have a reason not to.
+
+**Checks.** Acquisition is the n-gram acquisition's own machinery: one
+sorted file per archive ingested with its marker, a mandatory compaction,
+and a count check of the finished database against what the archives
+contributed. A file that is not laid out as expected fails its archive by
+name; a row of the tagged edition that is not word, lemma, tag is counted
+and fails the run unless `allow_unparsed_lines` is set.
+
+On the 2015 files with 24 CPUs, each acquisition takes about 80 seconds
+(116,614 documents, 472.6 million tokens read; 2,629,014 distinct tokens and
+22,473,811 distinct units), filtering the tokens half a minute and filtering
+the sentences two minutes.
+
+The notebook-era `daviesprep` modules and the Davies notebooks below are the
+older route. They also read COCA and the Movies corpus, without the checks
+above; they are kept until those corpora are read the new way.
+
 ## Terminal user interface
 
 `lexichron-ui` is a terminal interface for people who would rather not edit
@@ -709,17 +808,23 @@ Above the tabs, two bars:
 
 - **Corpus** — the corpus everything below acts on. Type the directory that
   holds your corpora (the one `<release>/<name>/<N>gram_files` folders
-  live under) and pick one of those found; the line beneath says how far it
+  live under, or a Davies corpus's `coha/` folder) and pick one of those
+  found; a Davies corpus is listed twice, as its tokens and its sentences; the line beneath says how far it
   has got (acquired, filtered, how many searches and ensembles) and where its
   settings file is. Choosing a corpus opens that file, so the form always
   describes the corpus you are looking at. *New corpus* asks for the
-  directory, corpus and n-gram size of one that does not exist yet and
-  takes you to Acquire, the stage that creates it. The UI remembers the
+  kind of corpus, then the directory, corpus and n-gram size of one that
+  does not exist yet (for a Davies corpus: the corpus, and whether this is
+  its tokens or its sentences), and takes you to Acquire, the stage that
+  creates it. Acquire's form is the one for that kind of corpus. The UI remembers the
   directory and the last settings file between sessions.
 - **Stage** — *Acquire*, *Filter*, *Tune* and *Train* choose the stage that
   Settings, Run and Submit act on. A stage whose prerequisite is missing is
   greyed out, with the reason as its tooltip: Filter needs the database
-  Acquire makes, Tune and Train the pivoted database Filter makes.
+  Acquire makes, Tune and Train the pivoted database Filter makes. Filter is
+  offered without the vocabulary it would use by default (the 1-grams' for
+  2-5-grams, the tokens' for a Davies corpus's sentences); the line under
+  the corpus bar says when that vocabulary is missing.
 
 Tabs:
 
@@ -845,7 +950,7 @@ Tabs:
   own output instead: a search's scores, an ensemble's years and noise
   profile, or a measure's years × words (below).
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.13.14.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.14.0.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 
@@ -864,7 +969,7 @@ need into your project directory and edit the paths and settings at the top.
 | `ngram_change_analysis_workflow_eng.ipynb` | Track semantic change over time in the English models (similarity, relatedness, dimension projections) |
 | `ngram_change_analysis_workflow_rus.ipynb` | The same analyses for Russian |
 
-**Davies corpora** (COHA, COCA, Movies, …; the corpus files must be licensed and downloaded by you)
+**Davies corpora, the older route** (COHA, COCA, Movies; these use the notebook-era `daviesprep` modules, not the stages; for COHA see [Davies corpora](#davies-corpora))
 
 | Notebook | What it does |
 |---|---|
@@ -903,6 +1008,10 @@ directory named `$USER`.
     lexichron.yaml              the settings the UI saved
     .lexichron/runs/            progress records of every run
 ```
+
+A Davies corpus is laid out as `{db_path_stub}/{name}/token_files/` and
+`sentence_files/`, with `tokens*` and `sentences*` where an n-gram corpus
+has `{N}grams*` (see [Davies corpora](#davies-corpora)).
 
 Nothing temporary is left behind: workers spool their files under the
 job's scratch directory, and each is moved into the database (or deleted)

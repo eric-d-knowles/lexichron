@@ -1,0 +1,32 @@
+# lexichron settings for a Davies corpus (COHA): one file per database.
+#
+# A Davies corpus is read twice, as Google's files come twice:
+#   unit: tokens      its single tokens; filtering them builds the vocabulary  (do this first)
+#   unit: sentences   its running text; filtered against that vocabulary, then tuned and trained on
+# Keep one copy of this file in <db_path_stub>/coha/token_files/ and one in
+# <db_path_stub>/coha/sentence_files/, differing in `unit`. The UI's New corpus
+# dialog writes them for you.
+#
+#   lexichron acquire lexichron.yaml      lexichron filter lexichron.yaml
+#   lexichron tune lexichron.yaml         (sentences only; then train, measure)
+
+corpus:
+  source: davies
+  name: coha
+  unit: tokens                 # tokens | sentences
+  db_path_stub: /scratch/USERNAME/NLP_corpora/Davies
+
+acquire:
+  source_dir: /scratch/USERNAME/NLP_corpora/english-corpora/COHA   # the corpus as distributed: holds wlp/ and text/
+  ngram_type: tagged           # tagged reads wlp/ and keeps part-of-speech tags; untagged reads text/
+  # genres: [fic, mag, news, nf]   # default: all. Use the same for tokens and sentences
+  # workers: 20
+  # overwrite_db: false        # true = delete the raw database first; false resumes
+
+filter:
+  # The filter stage's settings are the n-gram filter's (see lexichron.yaml in this folder).
+  # For the tokens: the vocabulary.
+  output_vocabulary_top_n: 30000
+  # output_vocabulary_year_range: [1900, 2009]   # keep only tokens present in every year of the range
+  # For the sentences: decades are a sensible unit of time for COHA.
+  # bin_size: 10
