@@ -5,14 +5,14 @@ from typing import List, Optional, Tuple
 
 from lexichron.resources import available_cpus
 
-__all__ = ["filter_ngrams", "text_language_for", "combined_tokens_from_acquire"]
+__all__ = ["filter_ngrams", "text_language_for", "combined_tokens_from_acquire", "source_is_untagged"]
 
 # Languages in which a token's tag is used for its lemma (see
 # ngramprep.ngram_filter.lemmatizer.SpacyLemmatizer.TAG_LANGUAGES).
 TAG_LEMMA_LANGUAGES = ("en",)
 
 
-def _check_vocabulary_lemmas(vocabulary: str, by_tag: bool) -> None:
+def _check_vocabulary_lemmas(vocabulary: str, by_tag: bool, untagged_source: bool = False) -> None:
     """Refuse a vocabulary whose lemmas were made the other way.
 
     A vocabulary is a list of lemmas, and a token is kept only if its lemma
@@ -38,7 +38,10 @@ def _check_vocabulary_lemmas(vocabulary: str, by_tag: bool) -> None:
             f"The vocabulary {vocabulary} was built by lemmatizing {how[made_by_tag]}, and this run would "
             f"lemmatize {how[by_tag]}: tokens whose lemma differs between the two would not be found on it "
             f"and would be dropped. Run the unigram filter again so the vocabulary matches (it writes a new "
-            f"whitelist), or set lemmatize_by_tag: {str(made_by_tag).lower()} for this run.")
+            f"whitelist), or "
+            + ("use a vocabulary built from untagged unigrams: this run's source holds untagged n-grams, "
+               "which have no tags to lemmatize by." if untagged_source and made_by_tag else
+               f"set lemmatize_by_tag: {str(made_by_tag).lower()} for this run."))
 
 
 # Google Books corpus id -> spaCy language code (stopwords and lemmatizer).
@@ -119,7 +122,9 @@ def filter_ngrams(
             way as the n-grams filtered against it, so turning this on or
             off means running the unigram filter again first; the stage
             refuses a vocabulary made the other way. False = the lookup
-            alone, as before 0.12.
+            alone, as before 0.12. A database of untagged n-grams
+            (acquire's ngram_type: untagged) has no tags, so it gets the
+            lookup alone whatever this says, and is recorded that way.
         drop_stopwords: Replace stopwords of text_language with <UNK>
         alpha_only: Replace tokens that are not purely alphabetic with <UNK>
         ascii_only: With alpha_only, also reject letters outside A-Z. Default:
@@ -221,8 +226,15 @@ def filter_ngrams(
         vocabulary = str(unigram)
         print(f"Vocabulary:   {vocabulary} (this corpus's unigram vocabulary)")
     by_tag = bool(lemmatize and lemmatize_by_tag and lang in TAG_LEMMA_LANGUAGES)
+    paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
+    # A source of untagged n-grams has no tags to use: every token gets the
+    # lookup's lemma whatever the setting, and the run must say so, since a
+    # vocabulary is matched to the n-grams by how their lemmas were made.
+    untagged = by_tag and source_is_untagged(paths["src_db"])
+    if untagged:
+        by_tag = False
     if vocabulary and lemmatize:
-        _check_vocabulary_lemmas(vocabulary, by_tag)
+        _check_vocabulary_lemmas(vocabulary, by_tag, untagged_source=untagged)
 
     stop_set = None
     if drop_stopwords and vocabulary is None:
@@ -232,9 +244,9 @@ def filter_ngrams(
     if lemmatize:
         from ngramprep.ngram_filter.lemmatizer import CachedSpacyLemmatizer
         lemma_gen = CachedSpacyLemmatizer(language=lang, use_tags=by_tag)
-        print(f"Lemmas:       {'by part-of-speech tag where the tables vouch for it, else the lookup table' if by_tag else 'lookup table'}")
+        print(f"Lemmas:       {'by part-of-speech tag where the tables vouch for it, else the lookup table' if by_tag else 'lookup table'}"
+              + (" (the source holds untagged n-grams, so there are no tags to use)" if untagged else ""))
 
-    paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     keep = [str(t) for t in (always_include or []) if str(t).strip()]
     handed = [t for t in combined_tokens_from_acquire(paths["src_db"]) if t not in keep]
     if handed:
@@ -282,6 +294,18 @@ def verified_source_totals(src_db) -> Optional[dict]:
     if counts.get("status") != "verified" or counts.get("occurrences") is None or counts.get("volume_counts") is None:
         return None
     return {"match_total": int(counts["occurrences"]), "volume_total": int(counts["volume_counts"])}
+
+
+def source_is_untagged(src_db) -> bool:
+    """Whether the acquire run that made ``src_db`` kept untagged n-grams
+    only (its ``ngram_type``), from the database's provenance record. A
+    database with no record, or one made with ``tagged`` or ``all``, may
+    hold tags and is not called untagged."""
+    from lexichron.provenance import read_provenance
+    record = read_provenance(src_db) or {}
+    if record.get("stage") not in (None, "acquire"):
+        return False
+    return (record.get("settings") or {}).get("ngram_type") == "untagged"
 
 
 def combined_tokens_from_acquire(src_db) -> List[str]:

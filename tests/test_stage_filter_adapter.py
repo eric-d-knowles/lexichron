@@ -226,6 +226,57 @@ def test_a_run_records_how_it_made_its_lemmas(rocks, tmp_path, monkeypatch):
     assert made == [("en", True), ("en", False), ("de", False)]      # tags are used in English only
 
 
+def test_untagged_ngrams_are_recorded_as_lookup_lemmas(rocks, tmp_path, monkeypatch):
+    """Untagged n-grams have no tags to lemmatize by: whatever lemmatize_by_tag
+    says, every token gets the lookup's lemma. The run says so, so that a
+    vocabulary built from tagged unigrams is refused for untagged n-grams
+    (and the reverse) instead of losing the tokens whose lemma differs."""
+    import json, struct
+    import ngramprep.ngram_filter.stopwords as sw
+    import ngramprep.ngram_filter.lemmatizer as lm
+    from ngramprep.ngram_filter.pipeline.orchestrator import LEMMAS_BY_TAG, LEMMAS_LOOKUP
+    made = []
+
+    class Lemmatizer(FakeLemmatizer):
+        def __init__(self, language=None, use_tags=True, **kw):
+            self._use_tags = use_tags; made.append(use_tags)
+
+    monkeypatch.setattr(sw, "load_stopwords", lambda lang: ({"the", "of"}, lang))
+    monkeypatch.setattr(lm, "CachedSpacyLemmatizer", Lemmatizer)
+
+    def source(stub, n, ngram_type, key):
+        paths = derive_paths(str(stub), n, "20200217", "eng")
+        db = fake_rocks.open(str(paths["src_db"]), mode="rw", create_if_missing=True)
+        with db.write_batch() as wb:
+            wb.put(key, struct.pack("<3Q", 1990, 3, 1))
+        db.close()
+        record = {"format": 1, "stage": "acquire", "settings": {"ngram_type": ngram_type}}
+        (paths["src_db"] / "lexichron.json").write_text(json.dumps(record))
+        return paths
+
+    for ngram_type, expected in (("untagged", LEMMAS_LOOKUP), ("tagged", LEMMAS_BY_TAG), ("all", LEMMAS_BY_TAG)):
+        stub = tmp_path / ngram_type
+        paths = source(stub, 1, ngram_type, b"cats")
+        assert stage.source_is_untagged(paths["src_db"]) is (ngram_type == "untagged")
+        progress = stub / "p.json"
+        stage.filter_ngrams(1, "20200217", "eng", str(stub), workers=2, mode="restart", spool_dir=str(tmp_path),
+                            progress_path=str(progress), output_vocabulary=False)
+        assert json.loads(progress.read_text())["inputs"]["lemmas"] == expected, ngram_type
+    assert made == [False, True, True]
+    assert stage.source_is_untagged(tmp_path / "nowhere") is False          # no record: nothing is assumed
+
+    # untagged 2-grams against a vocabulary made from tagged unigrams: refused, and the remedy is not the setting
+    stub = tmp_path / "mixed"
+    uni = derive_paths(str(stub), 1, "20200217", "eng")
+    uni["dst_db"].mkdir(parents=True)
+    uni["whitelist"].write_text("cat\t100\n")
+    (uni["dst_db"] / "lexichron.json").write_text(json.dumps(
+        {"format": 1, "stage": "filter", "settings": {}, "inputs": {"lemmas": LEMMAS_BY_TAG}}))
+    source(stub, 2, "untagged", b"cats sat")
+    with pytest.raises(ValueError, match="built by lemmatizing with part-of-speech tags.*untagged unigrams"):
+        stage.filter_ngrams(2, "20200217", "eng", str(stub), workers=2, spool_dir=str(tmp_path))
+
+
 def test_source_totals_come_from_a_verified_acquisition(tmp_path):
     """The filter checks that it read the whole source against the total the
     acquisition verified; a source without that record offers nothing to check against."""

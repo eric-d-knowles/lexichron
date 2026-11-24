@@ -219,7 +219,7 @@ HELP: Dict[str, str] = {
                          "noun stays 'building' while the verb becomes 'build'; leaves the noun is 'leaf'. Only where "
                          "spaCy's tables vouch for the result; otherwise the lookup table decides, as with this off. "
                          "The unigram vocabulary must be built the same way, so run the unigram filter again after "
-                         "changing this."),
+                         "changing this. Untagged n-grams have no tags: they get the lookup table whatever this says."),
     "drop_stopwords": "Replace stopwords with <UNK>.",
     "alpha_only": "Replace tokens that are not purely alphabetic (numbers, punctuation) with <UNK>.",
     "ascii_only": "With 'Letters only', also reject letters outside A-Z. Default: on for English only.",

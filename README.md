@@ -101,7 +101,11 @@ There are two parallel pipelines, one per data source:
 - HPC cluster or workstation with multiple CPU cores (30+ cores recommended)
 - RAM: acquisition needs roughly 3 GB plus a few hundred MB per worker
   (parsed data is streamed through on-disk chunks); filtering and training
-  benefit from more, and 80+ GB is comfortable for 5-gram work
+  benefit from more, and 80+ GB is comfortable for 5-gram work. Allow about
+  1 GB per worker for a full 5-gram acquisition: one with 64 workers was
+  killed at its 42 GB estimate as the count check began, for a reason not
+  yet established (the check and the compaction need little memory by
+  themselves; the log's memory lines are there to explain the next one)
 - Fast local storage (NVMe SSD recommended), including a few GB of node-local
   temp space (`$TMPDIR`) for the acquisition spool
 - Several TB of disk space for processing and storing very large corpora
@@ -120,8 +124,8 @@ There are two ways to install lexichron:
 ### Container installation
 
 One command installs lexichron on a cluster that has Apptainer or
-Singularity (most do; if neither is on your PATH, `module load apptainer`
-or `module load singularity` first):
+Singularity (most do; the installer finds whichever there is, loading its
+module if it is not on your PATH):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eric-d-knowles/lexichron/main/install.sh | bash
@@ -136,10 +140,12 @@ they say `apptainer` — the rest of each command is the same — or put
 The batch scripts the UI's Submit tab writes need no such care: a script
 runs the image with the runtime that started the UI, or, failing that,
 whichever of the two the job's node has or can `module load`.
-The `lexichron` and `lexichron-ui` commands the installer writes, and the
-kernel launchers below, find whichever of the two is available by
-themselves, as long as it is on your PATH (load its module in the shell or
-job that starts Jupyter).
+The `lexichron` and `lexichron-ui` commands the installer writes do the
+same: they use whichever of the two is on your PATH, and load its module
+when neither is, so a fresh login needs no `module load` first. (A cluster
+whose module has another name is the exception: load it yourself.) The
+kernel launchers below find whichever is on your PATH; load its module in
+the shell or job that starts Jupyter.
 
 This pulls the current release image into `$SCRATCH/lexichron/` (or
 `~/.lexichron/`) and installs two commands in `~/.local/bin`:
@@ -610,6 +616,9 @@ filtered against it, or every such token would miss it; each run records how
 it made its lemmas, and the stage refuses a vocabulary made the other way, so
 after changing the setting (or on a corpus filtered before 0.12) run the
 unigram filter again first. `lemmatize_by_tag: false` is the lookup alone.
+Untagged n-grams (`acquire.ngram_type: untagged`) have no tags to use, so
+they get the lookup alone whatever the setting, and the run is recorded that
+way: a vocabulary built from tagged unigrams is refused for them.
 
 The stage is built like the acquire stage, with a database where that has
 downloads. The work is split into key ranges (*work units*) balanced by data
@@ -999,9 +1008,16 @@ settings before any final model is trained.
   model whose corpus is ready, and corpora are written one year ahead, so
   a year's last models and the next year's first ones train side by side
   (a year's corpus and non-seed-0 models are deleted when its last model
-  lands). When fewer models remain than there are slots, each gets the
-  spare CPUs (`workers_per_model` is a minimum): a search down to its
-  last four models trains them with 16 threads each on 64 CPUs. The image rebuilds gensim's `corpus_file` reader free
+  lands). Within a year the costliest cells are queued first (by epochs ×
+  vector size, × the window for skip-gram), so the short ones fill the
+  slots as the long ones free them; a cell's models stay together and it
+  is scored when its last one lands. A model's threads are fixed when it
+  starts: one that starts when fewer models remain than there are slots
+  gets the spare CPUs (`workers_per_model` is a minimum). The long models
+  start first, with `workers_per_model` threads, so a task runs about as
+  long as its costliest model takes and uses fewer cores toward the end: a
+  search over 100 to 300 dimensions and 10 to 30 epochs used 55 to 62% of
+  its CPU time. The image rebuilds gensim's `corpus_file` reader free
   of the GIL (`scripts/patch_gensim.py`): the stock build re-takes the GIL
   once per line, which on five-token n-gram lines caps a model at three or
   four cores however many threads it has.
