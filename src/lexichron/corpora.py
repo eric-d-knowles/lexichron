@@ -108,9 +108,16 @@ class CorpusInfo:
     pivoted: bool                   # <N>grams_pivoted.db exists: filtered and pivoted
     searches: int                   # tuning/<name> directories
     ensembles: int                  # models/<name> directories with a train.json
+    source: str = "ngrams"          # the kind of corpus: ngrams (Google Books) or davies
+    unit: str = "sentences"         # a Davies corpus's tokens or its sentences
+    vocabulary: bool = True         # the vocabulary its filter uses by default exists (a Davies corpus's sentences)
 
     @property
     def label(self) -> str:
+        if self.source == "davies":
+            from lexichron.davies.formats import FORMATS
+            fmt = FORMATS.get(self.name)
+            return f"{fmt.label if fmt else self.name} · Davies · {self.unit}"
         return f"{self.name} · {self.release} · {self.ngram_size}-grams"
 
     @property
@@ -119,7 +126,13 @@ class CorpusInfo:
         if not self.database and not self.pivoted:
             return "new: nothing acquired yet"
         parts = ["acquired" if self.database else "no database"]
-        parts.append("filtered" if self.pivoted else "not filtered")
+        if self.source == "davies" and self.unit == "tokens":
+            parts.append("filtered: the vocabulary is built" if self.pivoted else "not filtered: no vocabulary yet")
+        elif self.source == "davies" and not self.pivoted and not self.vocabulary:
+            parts.append("not filtered (no token vocabulary yet: filter the tokens first, or filter these "
+                         "with No vocabulary)")
+        else:
+            parts.append("filtered" if self.pivoted else "not filtered")
         if self.searches:
             parts.append(f"{self.searches} search{'es' if self.searches != 1 else ''}")
         if self.ensembles:
@@ -131,10 +144,27 @@ def _is_db(p: Path) -> bool:
     return p.is_dir() and (p / "CURRENT").exists()
 
 
-def corpus_info(root: str | Path, release: str, name: str, ngram_size: int) -> CorpusInfo:
-    """What the directory of one corpus holds (it need not exist yet)."""
+def corpus_info(root: str | Path, release: Optional[str], name: str, ngram_size: Optional[int],
+                source: str = "ngrams", unit: str = "sentences") -> CorpusInfo:
+    """What the directory of one corpus holds (it need not exist yet). A
+    Davies corpus has no release or n-gram size (None), and is its tokens
+    or its sentences."""
     from ngramprep.utilities.paths import expand_path
     root = Path(expand_path(root))
+    if source == "davies":
+        layout = corpus_layout(root, None, None, name, source=source, unit=unit)
+        d = layout.dir
+        settings = d / SETTINGS_FILENAME
+        tokens = unit == "tokens"
+        searches = sum(1 for s in layout.tuning.iterdir() if s.is_dir()) if layout.tuning.is_dir() else 0
+        ensembles = sum(1 for s in layout.models.iterdir() if s.is_dir() and (s / "train.json").is_file()) \
+            if layout.models.is_dir() else 0
+        return CorpusInfo(root=root, release="", name=str(name).lower(), ngram_size=0, dir=d,
+                          settings=settings if settings.is_file() else None, database=_is_db(layout.raw_db),
+                          # the tokens are filtered into a vocabulary, the sentences into the pivoted database
+                          pivoted=_is_db(layout.processed_db if tokens else layout.training_db),
+                          searches=searches, ensembles=ensembles, source="davies", unit=unit,
+                          vocabulary=tokens or layout.shared_vocabulary.is_file())
     n = int(ngram_size)
     layout = corpus_layout(root, n, release, name)
     db, d = layout.raw_db, layout.dir
@@ -181,7 +211,18 @@ def scan_corpora(root: str | Path) -> List[CorpusInfo]:
                 info = corpus_info(root, rel.name, lang.name, n)
                 if info.settings or info.database or info.pivoted or info.searches or info.ensembles:
                     out.append(info)
-    out.sort(key=lambda i: (i.name, i.release, i.ngram_size))
+    # Davies corpora: <name>/token_files and <name>/sentence_files, for the names that are known
+    from lexichron.davies.formats import FORMATS
+    for name in FORMATS:
+        for unit in UNITS:
+            try:
+                info = corpus_info(root, None, name, None, source="davies", unit=unit)
+            except (OSError, ValueError):
+                continue
+            if info.dir.is_dir() and (info.settings or info.database or info.pivoted or info.searches
+                                      or info.ensembles):
+                out.append(info)
+    out.sort(key=lambda i: (i.source, i.name, i.release, i.ngram_size, i.unit != "tokens"))
     return out
 
 
@@ -190,6 +231,21 @@ def stage_prerequisites(info: Optional[CorpusInfo]) -> Dict[str, Optional[str]]:
     Acquire creates the corpus, so it always can."""
     if info is None:
         return {"acquire": None, "filter": None, "tune": None, "train": None, "measure": None}
+    if info.source == "davies":
+        out = {"acquire": None}
+        if info.unit == "tokens":
+            out["filter"] = None if info.database else "needs the database tokens.db: run Acquire first"
+            models = "models are trained on the corpus's sentences: choose its sentences in the corpus bar"
+            out.update(tune=models, train=models, measure=models)
+            return out
+        # As with n-grams, only the raw database is required here. Filtering against a
+        # vocabulary needs one (the stage says so, and how to get it); with No vocabulary
+        # set, or a vocabulary file of the user's own, the sentences can be filtered at once.
+        out["filter"] = None if info.database else "needs the database sentences.db: run Acquire first"
+        pivot = None if info.pivoted else "needs the pivoted database sentences_pivoted.db: run Filter first"
+        out.update(tune=pivot, train=pivot)
+        out["measure"] = None if info.ensembles else "needs a model ensemble under models/: run Train first"
+        return out
     out: Dict[str, Optional[str]] = {"acquire": None}
     out["filter"] = None if info.database else f"needs the database {info.ngram_size}grams.db: run Acquire first"
     pivot = None if info.pivoted else f"needs the pivoted database {info.ngram_size}grams_pivoted.db: run Filter first"

@@ -324,6 +324,13 @@ def test_a_davies_corpus_goes_through_the_n_gram_filter(coha, tmp_path, monkeypa
     # sentences before tokens: there is no vocabulary yet, and the message says what to do
     with pytest.raises(FileNotFoundError, match="Filter this corpus's tokens first"):
         filter_ngrams(None, None, "coha", str(stub), source="davies", workers=2, spool_dir=str(tmp_path))
+    # ... or the sentences are filtered with the rules alone: stopwords, short words and punctuation
+    # become <UNK>, nothing is checked against a vocabulary, and lemmas are made as for the tokens
+    out = filter_ngrams(None, None, "coha", str(stub), source="davies", no_vocabulary=True, workers=2,
+                        mode="restart", spool_dir=str(tmp_path), verify_counts=False)
+    rules_only = sorted(decode_year_ngram_key(k)[1].decode() for k in fake_rocks.dump(out))
+    assert "<UNK> building stand" in rules_only and "leaf fall <UNK> slowly" in rules_only
+    assert "<UNK> <UNK> build <UNK> better <UNK>" in rules_only
     filter_ngrams(None, None, "coha", str(stub), source="davies", unit="tokens", workers=2, mode="restart",
                   spool_dir=str(tmp_path), verify_counts=False)
     words = corpus_layout(stub, None, None, "coha", source="davies", unit="tokens")

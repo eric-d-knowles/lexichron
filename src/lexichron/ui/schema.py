@@ -26,11 +26,10 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write
           "train_fn",                                            # tune, train: a test hook
           "array_task", "array_count",                           # set by the batch script (Submit: Jobs)
           "spool_format",                                        # acquire: "chunk" is the reference path, for tests
-          "compact_after_ingest",                                # acquire and filter always compact; the key still loads
-          "source", "unit"}                                      # the kind of corpus: set in the settings file, not yet in the form
+          "compact_after_ingest"}                                # acquire and filter always compact; the key still loads
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
-ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",
+ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed", "max_unit_tokens",
             "verify_counts", "allow_unparsed_lines",
             # filter
             "text_language",
@@ -51,7 +50,12 @@ CHOICES: Dict[str, List[str]] = {
     "ngram_size": ["1", "2", "3", "4", "5"],
     "ngram_type": ["tagged", "untagged", "all"],
     "open_type": ["write:packed24", "write", "read:packed24", "read"],
-    "corpus.name": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"],
+    "corpus.name": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa",
+                    "coha"],
+    # the kind of corpus, and for a Davies corpus which of its two databases
+    "source": ["ngrams", "davies"],
+    "unit": ["sentences", "tokens"],
+    "acquire_davies.ngram_type": ["tagged", "untagged"],
     "mode": ["resume", "restart"],
     "text_language": ["en", "fr", "de", "it", "es", "ru", "he", "zh"],
     "unk_mode": ["strip", "reject", "retain"],
@@ -75,7 +79,13 @@ ORDER = ["release", "corpus.name", "ngram_size", "db_path_stub",
          "min_context_tokens", "bin_size", "vocabulary", "no_vocabulary", "always_include",
          "pivot", "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
          "workers"]
+# Google Books corpora and Davies corpora, for the New corpus dialog
+NGRAM_CORPORA = ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"]
+DAVIES_CORPORA = ["coha"]
+
 ORDER_BY_STAGE = {
+    "acquire_davies": ["source", "corpus.name", "unit", "db_path_stub",
+                       "source_dir", "ngram_type", "genres", "file_range", "overwrite_db", "workers"],
     "tune": ["release", "corpus.name", "ngram_size", "db_path_stub",
              "years", "sample_years", "year_pairs", "vector_size", "window", "min_count", "epochs", "approach",
              "weight_by", "seeds", "split_half", "unk_mode", "name", "mode", "workers", "workers_per_model"],
@@ -94,6 +104,12 @@ ORDER_BY_STAGE = {
 LABELS: Dict[str, str] = {
     "release": "Release",
     "corpus.name": "Corpus",
+    "source": "Kind of corpus",
+    "unit": "Records",
+    "source_dir": "Corpus files",
+    "genres": "Genres",
+    "max_unit_tokens": "Longest unit",
+    "acquire_davies.ngram_type": "Edition",
     "db_path_stub": "Corpus directory",
     "archive_path_stub": "Archive directory",
     "ngram_size": "N-gram size",
@@ -176,6 +192,22 @@ LABELS: Dict[str, str] = {
 # User-facing help, where the docstring is too terse or too technical.
 HELP: Dict[str, str] = {
     "release": "Google Books n-gram release. Only the February 2020 release is supported.",
+    "source": "ngrams: Google Books n-grams, downloaded. davies: one of Mark Davies' corpora (COHA), read from the "
+              "files you hold under licence.",
+    "unit": ("A Davies corpus is read twice. tokens: its single tokens, the counterpart of Google's 1-grams; "
+             "filtering them builds the vocabulary. sentences: its running text, filtered against that vocabulary "
+             "and trained on. Do the tokens first."),
+    "source_dir": ("The corpus's own directory as distributed: the one that holds its wlp/ and text/ folders "
+                   "(for COHA, the folder with text_1810s_*.zip under text/). It is only read."),
+    "genres": ("Keep only documents of these genres (COHA: fic, mag, news, nf). Empty = all. The choice is fixed "
+               "in the database, so use the same for the tokens and the sentences."),
+    "max_unit_tokens": ("Text is cut into units at sentence ends, paragraph marks and the corpus's copyright "
+                        "gaps. A stretch with none of these for this many tokens is cut here."),
+    "acquire_davies.ngram_type": ("tagged reads the word/lemma/part-of-speech edition (wlp/) and keeps each token's "
+                                  "tag, which the filter uses for lemmas; untagged reads the plain text edition "
+                                  "(text/). Use the same for the tokens and the sentences."),
+    "acquire_davies.file_range": "First and last of the edition's archives, in name order, to read a part. Blank = all.",
+    "acquire_davies.overwrite_db": "Delete this corpus's raw database first. Off = resume: archives already in it are skipped.",
     "corpus.name": "Which Google Books corpus (eng = all English, eng-us, eng-gb, eng-fiction, ...).",
     "db_path_stub": ("Where Google Books corpora are kept, e.g. /scratch/<you>/NLP_corpora/Google_Books. "
                      "Each corpus goes in <dir>/<release>/<language>/<n>gram_files/, with its database, "
@@ -422,8 +454,11 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
         # name, a search's name): its choices, label, help and place are looked up
         # as corpus.<key> first.
         ckey = f"corpus.{key}" if pname in api_to_corpus else key
-        kind = "choice" if ckey in CHOICES else _kind_for(ann, default, key, stage)
-        choices = CHOICES.get(ckey) or CHOICES.get(key)
+        skey = f"{stage}.{key}"
+        kind = _kind_for(ann, default, key, stage)
+        if kind != "grid" and (ckey in CHOICES or skey in CHOICES):
+            kind = "choice"                 # tune's grid axes stay rows of toggles, though train lists their values
+        choices = CHOICES.get(skey) or CHOICES.get(ckey) or CHOICES.get(key)
         if kind == "grid":
             from lexichron.training.grid import AXIS_BY_NAME
             axis = AXIS_BY_NAME[key]

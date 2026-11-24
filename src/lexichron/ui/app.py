@@ -58,7 +58,7 @@ class Static(MarkupStatic):
 
 from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
-from lexichron.cli import STAGES, _format_call, _resolve
+from lexichron.cli import STAGES, _format_call, _resolve, stage_entry
 from lexichron.config import ConfigError, build_call, expand_directory, load_project
 from lexichron.corpora import CorpusInfo, corpus_info, corpus_layout, scan_corpora, stage_prerequisites
 from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, MEASURE_LEGEND, MEASURE_VIEWS, PARAM_KEYS,
@@ -74,7 +74,8 @@ from lexichron.resources import MemoryEstimate, memory_estimate
 from lexichron.safeguards import OverwriteRisk, overwrite_risk, overwrite_target
 from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import bar_state, fmt_count, fmt_duration, meters, notice_text, summarize, tail_lines
-from lexichron.ui.schema import CHOICES, Field, SLURM_FIELDS, Section, stage_sections
+from lexichron.ui.schema import (CHOICES, DAVIES_CORPORA, Field, NGRAM_CORPORA, SLURM_FIELDS, Section,
+                                 stage_sections)
 from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, read_user_defaults,
                                       resolve as resolve_slurm, seed_user_defaults, stage_override,
                                       state_dir as _state_dir, write_user_defaults)
@@ -438,25 +439,61 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("New corpus", id="new-title")
-            yield Static("Acquire creates it: the Google Books n-gram files for this corpus and size are "
-                         "downloaded into <corpus directory>/<release>/<corpus>/<N>gram_files, and the other "
-                         "stages open up as it is built.", id="new-note")
+            yield Static("", id="new-note")
+            with Horizontal(classes="row"):
+                yield Label("Kind of corpus")
+                yield Select([("Google Books n-grams (downloaded)", "ngrams"),
+                              ("Davies corpus (your licensed files)", "davies")], value="ngrams", allow_blank=False,
+                             id="new-source", compact=True)
             with Horizontal(classes="row"):
                 yield Label("Corpus directory")
                 yield Input(value=self.root, id="new-root", compact=True, placeholder="/scratch/<you>/NLP_corpora/Google_Books")
-            with Horizontal(classes="row"):
+            with Horizontal(classes="row", id="new-row-release"):
                 yield Label("Release")
                 yield Static(CHOICES["release"][0], id="new-release")
             with Horizontal(classes="row"):
                 yield Label("Corpus")
-                yield Select([(c, c) for c in CHOICES["corpus.name"]], allow_blank=True, id="new-name", compact=True)
-            with Horizontal(classes="row"):
+                yield Select([(c, c) for c in NGRAM_CORPORA], allow_blank=True, id="new-name", compact=True)
+            with Horizontal(classes="row", id="new-row-size"):
                 yield Label("N-gram size")
                 yield Select([(c, c) for c in CHOICES["ngram_size"]], allow_blank=True, id="new-size", compact=True)
+            with Horizontal(classes="row", id="new-row-unit"):
+                yield Label("Records")
+                yield Select([("tokens (first: they give the vocabulary)", "tokens"),
+                              ("sentences (what the models are trained on)", "sentences")], value="tokens",
+                             allow_blank=False, id="new-unit", compact=True)
             yield Static("", id="new-error")
             with Horizontal(id="new-buttons"):
                 yield Button("Cancel", id="new-cancel")
                 yield Button("Create", id="new-create", variant="primary")
+
+    NOTES = {
+        "ngrams": ("Acquire creates it: the Google Books n-gram files for this corpus and size are "
+                   "downloaded into <corpus directory>/<release>/<corpus>/<N>gram_files, and the other "
+                   "stages open up as it is built."),
+        "davies": ("Acquire creates it from the corpus's own files, which you hold under licence (Acquire asks "
+                   "where they are). A Davies corpus is read twice, into <corpus directory>/<corpus>/: its "
+                   "tokens, which Filter turns into the vocabulary, and then its sentences, which are filtered "
+                   "against that vocabulary and trained on."),
+    }
+
+    def on_mount(self) -> None:
+        self._show_source("ngrams")
+
+    @on(Select.Changed, "#new-source")
+    def _source_changed(self, event: Select.Changed) -> None:
+        self._show_source(str(event.value))
+
+    def _show_source(self, source: str) -> None:
+        davies = source == "davies"
+        self.query_one("#new-note", Static).update(self.NOTES["davies" if davies else "ngrams"])
+        self.query_one("#new-row-release").display = not davies
+        self.query_one("#new-row-size").display = not davies
+        self.query_one("#new-row-unit").display = davies
+        names = self.query_one("#new-name", Select)
+        names.set_options([(c, c) for c in (DAVIES_CORPORA if davies else NGRAM_CORPORA)])
+        if davies and len(DAVIES_CORPORA) == 1:
+            names.value = DAVIES_CORPORA[0]
 
     @on(Button.Pressed, "#new-cancel")
     def action_cancel(self) -> None:
@@ -467,6 +504,13 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
         root = self.query_one("#new-root", Input).value.strip()
         lang = self.query_one("#new-name", Select).value
         size = self.query_one("#new-size", Select).value
+        if str(self.query_one("#new-source", Select).value) == "davies":
+            if not root or lang is Select.NULL:
+                self.query_one("#new-error", Static).update("Fill in the corpus directory and the corpus.")
+                return
+            self.dismiss({"source": "davies", "db_path_stub": root, "name": str(lang),
+                          "unit": str(self.query_one("#new-unit", Select).value)})
+            return
         if not root or lang is Select.NULL or size is Select.NULL:
             self.query_one("#new-error", Static).update("Fill in the corpus directory, corpus and n-gram size.")
             return
@@ -475,6 +519,14 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
 
 
 MULTIGRAM_WORDS = 5          # fields per sequence: the longest n-gram Google publishes
+
+# The Acquire form for a Davies corpus (see LexichronApp.__init__).
+DAVIES_ACQUIRE = "acquire_davies"
+
+
+def _yaml_section(form: str) -> str:
+    """The settings file's section a form holds."""
+    return "acquire" if form == DAVIES_ACQUIRE else form
 
 
 def multigram_rows(entries: List[Any]) -> List[Tuple[List[str], str]]:
@@ -961,7 +1013,12 @@ class LexichronApp(App):
                 self.reopened = True
         # Every stage's form is built up front; the stage selector shows one.
         self.stage = stage
+        # A form is named for its stage, except Acquire, which has one per kind
+        # of corpus (where the text comes from differs): "acquire" for Google
+        # Books and "acquire_davies"; both hold the settings file's `acquire`
+        # section, and the one for the corpus at hand is shown and saved.
         self.stage_funcs = {name: _resolve(dotted) for name, (dotted, _) in STAGES.items()}
+        self.stage_funcs[DAVIES_ACQUIRE] = _resolve(stage_entry("acquire", "davies"))
         self.stage_sections: Dict[str, Section] = {}
         corpus = Section("corpus")
         seen = set()
@@ -1015,7 +1072,16 @@ class LexichronApp(App):
 
     @property
     def func(self):
-        return self.stage_funcs[self.stage]
+        return self.stage_funcs[self._form_of(self.stage)]
+
+    def _source(self, config: Optional[Dict[str, Any]] = None) -> str:
+        """The kind of corpus the settings describe: ngrams or davies."""
+        corpus = (self.config if config is None else config).get("corpus") or {}
+        return "davies" if str(corpus.get("source") or "").lower() == "davies" else "ngrams"
+
+    def _form_of(self, stage: str, source: Optional[str] = None) -> str:
+        """The form that holds ``stage``'s settings for this kind of corpus."""
+        return DAVIES_ACQUIRE if stage == "acquire" and (source or self._source()) == "davies" else stage
 
     def _corpus_dir(self, config: Dict[str, Any]) -> Optional[Path]:
         """The directory of the database these settings describe, or None
@@ -1024,11 +1090,15 @@ class LexichronApp(App):
         stage = config.get(self.stage) or {}
         stub, release, lang = corpus.get("db_path_stub"), corpus.get("release"), corpus.get("name")
         n = corpus.get("ngram_size") or stage.get("ngram_size")
-        if not (stub and release and lang and n):
+        davies = self._source(config) == "davies"
+        if not (stub and lang) or (not davies and not (release and n)):
             return None
         try:
             root = Path(expand_directory(stub, "corpus directory")).resolve()   # $USER, ~: as the job will see it
-        except ConfigError:
+            if davies:
+                return corpus_layout(root, None, None, str(lang), source="davies",
+                                     unit=str(corpus.get("unit") or "sentences")).dir
+        except (ConfigError, ValueError):
             return None
         return corpus_layout(root, int(n), str(release), str(lang)).dir
 
@@ -1074,7 +1144,7 @@ class LexichronApp(App):
                                 yield from self._field_widgets("corpus", f)
                     for name, sec in self.stage_sections.items():
                         with Vertical(id=f"stage-{name}", classes="stage-box"):
-                            yield Static(name.capitalize(), classes="section")
+                            yield Static(_yaml_section(name).capitalize(), classes="section")
                             for f in sec.fields:
                                 if not f.advanced:
                                     yield from self._field_widgets(name, f)
@@ -1232,7 +1302,7 @@ class LexichronApp(App):
 
     def _field_widgets(self, section: str, f: Field):
         wid = f"f-{section}-{f.name}"
-        current = (self.config.get(section) or {}).get(f.name, f.default)
+        current = (self.config.get(_yaml_section(section)) or {}).get(f.name, f.default)
         label = f.title + (" *" if f.required else "")
         # the row and its help line carry ids so a field can be shown or hidden by stage
         with Horizontal(classes="row", id=f"row-{section}-{f.name}"):
@@ -1263,11 +1333,11 @@ class LexichronApp(App):
                 w = Select(opts, value=val, allow_blank=True, id=wid, compact=True,
                            prompt="(ensembles of this corpus)")
             elif f.kind == "multigrams":
-                exact = (self.config.get(section) or {}).get("combined_multigrams_case")
+                exact = (self.config.get(_yaml_section(section)) or {}).get("combined_multigrams_case")
                 w = MultigramField(list(current) if isinstance(current, (list, tuple, set)) else [],
                                    list(exact) if isinstance(exact, (list, tuple, set)) else [], id=wid)
             elif f.kind == "keeplist":
-                exact = (self.config.get(section) or {}).get("always_include_case")
+                exact = (self.config.get(_yaml_section(section)) or {}).get("always_include_case")
                 w = KeepListField(list(current) if isinstance(current, (list, tuple, set)) else [],
                                   list(exact) if isinstance(exact, (list, tuple, set)) else [], id=wid)
             elif f.kind == "range":
@@ -1301,12 +1371,13 @@ class LexichronApp(App):
         if getattr(self, "_submit_ready", False) and stage != self.stage:
             self._stash_slurm()
         self.stage = stage
+        form = self._form_of(stage)
         for name in self.stage_sections:
-            self.query_one(f"#stage-{name}").display = name == stage
-            self.query_one(f"#adv-{name}").display = name == stage
+            self.query_one(f"#stage-{name}").display = name == form
+            self.query_one(f"#adv-{name}").display = name == form
         for name in STAGES:
             self.query_one(f"#stage-btn-{name}", Button).variant = "primary" if name == stage else "default"
-        self.query_one("#stage-desc", Static).update(STAGES[stage][1])
+        self.query_one("#stage-desc", Static).update(self._stage_description(stage))
         # Jobs (a job array) only means something for the stages that split their years
         for wid in ("#row-slurm-jobs", "#help-slurm-jobs"):
             self.query_one(wid).display = stage in ARRAY_STAGES
@@ -1324,6 +1395,12 @@ class LexichronApp(App):
         if stage == "measure":
             self._refresh_measures()
             self._refresh_measure_ensembles()
+
+    def _stage_description(self, stage: str) -> str:
+        if stage == "acquire" and self._source() == "davies":
+            return ("Read a Davies corpus's own files, which you hold under licence, into a database: its tokens "
+                    "(for the vocabulary) or its sentences (for the models)")
+        return STAGES[stage][1]
 
     @on(Button.Pressed, ".stage-button")
     def _stage_button_pressed(self, event: Button.Pressed) -> None:
@@ -1409,6 +1486,9 @@ class LexichronApp(App):
                 if layered:
                     cfg["slurm"] = layered
                 continue
+            if sec.name in ("acquire", DAVIES_ACQUIRE) and \
+                    sec.name != self._form_of("acquire", self._source(cfg)):
+                continue                                       # the Acquire form of the other kind of corpus
             for f in sec.fields:
                 w = self.query_one(f"#f-{sec.name}-{f.name}")
                 if f.kind in ("keeplist", "multigrams"):       # one widget, two settings
@@ -1431,8 +1511,17 @@ class LexichronApp(App):
                 if v is None or (f.kind == "bool" and v == f.default) or v == f.default and not f.required:
                     continue
                 vals[f.name] = v
+            if sec.name == "corpus":
+                # A Davies corpus is named and is its tokens or its sentences; it has no
+                # release or n-gram size (the form's fields for those are fixed or left
+                # over from another corpus). An n-gram corpus has no unit.
+                if str(vals.get("source") or "").lower() == "davies":
+                    for key in ("release", "ngram_size", "archive_path_stub"):
+                        vals.pop(key, None)
+                else:
+                    vals.pop("unit", None)
             if vals:
-                cfg[sec.name] = vals
+                cfg[_yaml_section(sec.name)] = vals
         return cfg
 
     def _refresh_preview(self) -> None:
@@ -1479,8 +1568,12 @@ class LexichronApp(App):
         what Filter keeps without being told."""
         try:
             from lexichron.stages.filter import combined_tokens_from_acquire
-            raw = corpus_layout(kwargs["db_path_stub"], int(kwargs["ngram_size"]),
-                                kwargs["repo_release_id"], kwargs["repo_corpus_id"]).raw_db
+            if kwargs.get("source") == "davies":
+                raw = corpus_layout(kwargs["db_path_stub"], None, None, kwargs["repo_corpus_id"], source="davies",
+                                    unit=str(kwargs.get("unit") or "sentences")).raw_db
+            else:
+                raw = corpus_layout(kwargs["db_path_stub"], int(kwargs["ngram_size"]),
+                                    kwargs["repo_release_id"], kwargs["repo_corpus_id"]).raw_db
             handed = combined_tokens_from_acquire(raw)
         except (KeyError, TypeError, ValueError):
             handed = []
@@ -1815,9 +1908,14 @@ class LexichronApp(App):
     def _current_info(self) -> Optional[CorpusInfo]:
         c = self.config.get("corpus") or {}
         n = c.get("ngram_size") or (self.config.get(self.stage) or {}).get("ngram_size")
-        if not (c.get("db_path_stub") and c.get("release") and c.get("name") and n):
-            return None
         try:
+            if self._source() == "davies":
+                if not (c.get("db_path_stub") and c.get("name")):
+                    return None
+                return corpus_info(str(c["db_path_stub"]), None, str(c["name"]), None, source="davies",
+                                   unit=str(c.get("unit") or "sentences"))
+            if not (c.get("db_path_stub") and c.get("release") and c.get("name") and n):
+                return None
             return corpus_info(str(c["db_path_stub"]), str(c["release"]), str(c["name"]), int(n))
         except (OSError, ValueError):
             return None
@@ -1830,9 +1928,11 @@ class LexichronApp(App):
         options = [(i.label, str(i.dir)) for i in infos]
         current = self._corpus_dir(self.config)
         if current and str(current) not in self._corpus_infos:
+            info = self._current_info()
             c = self.config.get("corpus") or {}
             n = c.get("ngram_size") or (self.config.get(self.stage) or {}).get("ngram_size")
-            options.insert(0, (f"{c.get('name')} · {c.get('release')} · {n}-grams", str(current)))
+            options.insert(0, (info.label if info else f"{c.get('name')} · {c.get('release')} · {n}-grams",
+                               str(current)))
         sel = self.query_one("#corpus-select", Select)
         self._selecting = True
         try:
@@ -1891,7 +1991,8 @@ class LexichronApp(App):
         self.push_screen(NewCorpus(root), lambda d: self._start_new_corpus(d) if d else None)
 
     def _start_new_corpus(self, ident: Dict[str, Any]) -> None:
-        info = corpus_info(ident["db_path_stub"], ident["release"], ident["name"], ident["ngram_size"])
+        info = corpus_info(ident["db_path_stub"], ident.get("release"), ident["name"], ident.get("ngram_size"),
+                           source=ident.get("source", "ngrams"), unit=ident.get("unit", "sentences"))
         root_input = self.query_one("#corpus-root", Input)
         if root_input.value.strip() != ident["db_path_stub"]:
             root_input.value = ident["db_path_stub"]
@@ -1915,8 +2016,13 @@ class LexichronApp(App):
             self._known_settings.add(self.explicit_project)
             remember_settings_path(info.settings)
         else:
-            cfg = {"corpus": {"db_path_stub": str(info.root), "release": info.release,
-                              "name": info.name, "ngram_size": info.ngram_size}}
+            if info.source == "davies":
+                cfg = {"corpus": {"source": "davies", "name": info.name, "db_path_stub": str(info.root)}}
+                if info.unit != "sentences":
+                    cfg["corpus"]["unit"] = info.unit
+            else:
+                cfg = {"corpus": {"db_path_stub": str(info.root), "release": info.release,
+                                  "name": info.name, "ngram_size": info.ngram_size}}
             self.explicit_project = None
         self.reopened = False
         self.config = cfg
@@ -1938,7 +2044,10 @@ class LexichronApp(App):
             for sec in self.sections:
                 if sec.name == "slurm":
                     continue
-                vals = cfg.get(sec.name) or {}
+                vals = cfg.get(_yaml_section(sec.name)) or {}
+                if sec.name in ("acquire", DAVIES_ACQUIRE) and \
+                        sec.name != self._form_of("acquire", self._source(cfg)):
+                    vals = {}                                  # the other kind's form: back to its defaults
                 for f in sec.fields:
                     if f.kind == "keeplist":                   # two settings, one widget
                         self._set_field_widget(sec.name, f, (vals.get("always_include"), vals.get("always_include_case")))

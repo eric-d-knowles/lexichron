@@ -132,7 +132,8 @@ def memory_estimate(stage: str, kwargs: Dict[str, Any], slurm: Dict[str, Any]) -
         # stage's own default is to pivot everything longer than a unigram.
         pivot = kwargs.get("pivot")
         if pivot is None:
-            pivot = _int(kwargs.get("ngram_size"), 5) > 1
+            pivot = kwargs.get("unit", "sentences") != "tokens" if kwargs.get("source") == "davies" \
+                else _int(kwargs.get("ngram_size"), 5) > 1
         per = FILTER_PER_WORKER_PIVOT if pivot else FILTER_PER_WORKER
         need = FILTER_BASE + per * workers
         fit_workers = max(1, ((have or 0) - FILTER_BASE) // per) if have else 0

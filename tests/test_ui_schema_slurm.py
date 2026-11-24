@@ -199,3 +199,17 @@ def test_a_job_array_is_refused_without_a_name_for_the_search_or_ensemble(tmp_pa
         assert "--array" not in write_sbatch(bare, stage, dict(slurm, jobs=1)).read_text()
     named = tmp_path / "named.yaml"; named.write_text("corpus: {}\ntrain:\n  name: ens1\n")
     assert "--array=0-3" in write_sbatch(named, "train", slurm).read_text()
+
+
+def test_tune_grid_axes_stay_toggle_rows_though_train_lists_their_values():
+    """approach and weight_by have a list of values for train's single
+    choice; in tune every axis is a row of toggles, those two included."""
+    from lexichron.stages.train import train_models
+    from lexichron.stages.tune import tune_models
+    from lexichron.ui.schema import GRID_AXES, stage_sections
+    _, tune = stage_sections(tune_models, "tune")
+    kinds = {f.name: f.kind for f in tune.fields}
+    assert all(kinds[a] == "grid" for a in GRID_AXES), kinds
+    _, train = stage_sections(train_models, "train")
+    kinds = {f.name: f.kind for f in train.fields}
+    assert kinds["approach"] == "choice" and kinds["weight_by"] == "choice"
