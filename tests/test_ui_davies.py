@@ -277,3 +277,36 @@ def test_what_a_run_writes_appears_in_inspect_and_opens_the_next_stage(tmp_path)
         _clean(app)
 
     asyncio.run(scenario())
+
+
+def test_a_half_filled_range_is_named_with_its_stage(tmp_path):
+    """Every range on every stage's form is read when settings are saved or
+    submitted. One with only one end filled is refused, and the message
+    names it and its stage (it said "file range" whichever it was)."""
+    from lexichron.config import ConfigError
+    from lexichron.ui.app import _range_from_widgets
+    assert _range_from_widgets(" ", "") is None and _range_from_widgets("1968", "2019") == [1968, 2019]
+    with pytest.raises(ConfigError, match="^File range: fill in both"):
+        _range_from_widgets("3", "")
+    root = tmp_path / "corpora"
+    _db(root / "coha" / "token_files" / "tokens.db")
+
+    async def scenario():
+        app = LexichronApp(None, "filter")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await _settle(app, pilot)
+            app.query_one("#corpus-root", Input).value = str(root)
+            await pilot.pause()
+            app.query_one("#corpus-select", Select).value = str(root / "coha" / "token_files")
+            await _settle(app, pilot)
+            app.query_one("#f-filter-output_vocabulary_year_range", Input).value = "1968"
+            await pilot.pause()
+            with pytest.raises(ConfigError, match="^Filter, Vocabulary years: fill in both"):
+                app._collect()
+            assert "Filter, Vocabulary years" in str(app.query_one("#status", Static).content)
+            app.query_one("#f-filter-output_vocabulary_year_range-end", Input).value = "2009"
+            await pilot.pause()
+            assert app._collect()["filter"]["output_vocabulary_year_range"] == [1968, 2009]
+        _clean(app)
+
+    asyncio.run(scenario())

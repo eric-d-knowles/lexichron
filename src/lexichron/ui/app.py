@@ -166,16 +166,19 @@ def _from_widget(field: Field, raw: Any) -> Any:
     return str(raw).strip()
 
 
-def _range_from_widgets(first: str, last: str) -> Optional[List[int]]:
-    """Two text boxes -> ``[first, last]`` or None when both are blank."""
+def _range_from_widgets(first: str, last: str, what: str = "File range") -> Optional[List[int]]:
+    """Two text boxes -> ``[first, last]`` or None when both are blank.
+    ``what`` names the setting in a message: every range on every stage's
+    form is read when settings are saved or submitted, so a message has to
+    say which one (it used to say "file range" whichever it was)."""
     first, last = first.strip(), last.strip()
     if not first and not last:
         return None
     if not first or not last:
-        raise ConfigError("file range: fill in both the first and the last file, or neither")
+        raise ConfigError(f"{what}: fill in both the first and the last, or neither")
     lo, hi = int(first), int(last)
     if lo < 0 or hi < lo:
-        raise ConfigError("file range: first must be >= 0 and not after last")
+        raise ConfigError(f"{what}: the first must be 0 or more and not after the last")
     return [lo, hi]
 
 
@@ -1507,7 +1510,8 @@ class LexichronApp(App):
                     continue
                 try:
                     if f.kind == "range":
-                        v = _range_from_widgets(w.value, self.query_one(f"#f-{sec.name}-{f.name}-end").value)
+                        v = _range_from_widgets(w.value, self.query_one(f"#f-{sec.name}-{f.name}-end").value,
+                                                f"{_yaml_section(sec.name).capitalize()}, {f.title}")
                     else:
                         v = _from_widget(f, w.value)
                 except ConfigError:

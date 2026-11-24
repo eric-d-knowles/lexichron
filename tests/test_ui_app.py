@@ -96,7 +96,7 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
             # a half-filled range is reported in plain words, no call shown
             app.query_one("#f-acquire-file_range").value = "0"
             await pilot.pause()
-            assert "first and the last file" in str(app.query_one("#status").content)
+            assert "Acquire, File range: fill in both the first and the last" in str(app.query_one("#status").content)
             app.query_one("#f-acquire-file_range-end").value = "0"
             await pilot.pause()
             assert "file_range=(0, 0)" in str(app.query_one("#call").content)
