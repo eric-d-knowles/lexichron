@@ -110,7 +110,8 @@ class CorpusInfo:
     ensembles: int                  # models/<name> directories with a train.json
     source: str = "ngrams"          # the kind of corpus: ngrams (Google Books) or davies
     unit: str = "sentences"         # a Davies corpus's tokens or its sentences
-    vocabulary: bool = True         # the vocabulary its filter uses by default exists (a Davies corpus's sentences)
+    vocabulary: bool = True         # the vocabulary its filter uses by default exists (2-5-grams: the
+                                    # unigrams'; a Davies corpus's sentences: its tokens'); True where none is needed
 
     @property
     def label(self) -> str:
@@ -128,9 +129,13 @@ class CorpusInfo:
         parts = ["acquired" if self.database else "no database"]
         if self.source == "davies" and self.unit == "tokens":
             parts.append("filtered: the vocabulary is built" if self.pivoted else "not filtered: no vocabulary yet")
-        elif self.source == "davies" and not self.pivoted and not self.vocabulary:
-            parts.append("not filtered (no token vocabulary yet: filter the tokens first, or filter these "
-                         "with No vocabulary)")
+        elif not self.pivoted and not self.vocabulary:
+            # Filter is offered all the same: the stage refuses to filter against a
+            # vocabulary that is not there, and this says beforehand what it will ask for.
+            first = "the tokens" if self.source == "davies" else "this corpus's 1-grams"
+            kind = "token" if self.source == "davies" else "unigram"
+            parts.append(f"not filtered (no {kind} vocabulary yet: filter {first} first, or filter these "
+                         f"with No vocabulary)")
         else:
             parts.append("filtered" if self.pivoted else "not filtered")
         if self.searches:
@@ -176,7 +181,8 @@ def corpus_info(root: str | Path, release: Optional[str], name: str, ngram_size:
     return CorpusInfo(root=root, release=str(release), name=str(name), ngram_size=n, dir=d,
                       settings=settings if settings.is_file() else None,
                       database=_is_db(db), pivoted=_is_db(layout.training_db),
-                      searches=searches, ensembles=ensembles)
+                      searches=searches, ensembles=ensembles,
+                      vocabulary=n == 1 or layout.shared_vocabulary.is_file())
 
 
 def scan_corpora(root: str | Path) -> List[CorpusInfo]:

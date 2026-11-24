@@ -79,3 +79,36 @@ def test_corpus_layout_is_where_every_stage_looks(tmp_path, monkeypatch):
     # the stub may name an environment variable, expanded where the stage runs
     monkeypatch.setenv("LEXI_ROOT", str(tmp_path))
     assert corpus_layout("$LEXI_ROOT", 5, "20200217", "eng-us").dir == d
+
+
+def test_the_state_says_when_the_vocabulary_a_filter_run_would_use_is_missing(tmp_path):
+    """2-5-grams are filtered against the unigrams' vocabulary, and a Davies
+    corpus's sentences against its tokens'. Filter is offered without it
+    (the rules alone can do the work), and the state line says beforehand
+    what the stage would otherwise ask for."""
+    from lexichron.corpora import corpus_info, corpus_layout, stage_prerequisites
+
+    def db(path):
+        path.mkdir(parents=True, exist_ok=True); (path / "CURRENT").write_text("x")
+
+    five = corpus_layout(tmp_path, 5, "20200217", "eng")
+    db(five.raw_db)
+    info = corpus_info(tmp_path, "20200217", "eng", 5)
+    assert not info.vocabulary and stage_prerequisites(info)["filter"] is None
+    assert info.state == ("acquired · not filtered (no unigram vocabulary yet: filter this corpus's 1-grams "
+                          "first, or filter these with No vocabulary)")
+    five.shared_vocabulary.parent.mkdir(parents=True)
+    five.shared_vocabulary.write_text("word\t1\n")
+    assert corpus_info(tmp_path, "20200217", "eng", 5).state == "acquired · not filtered"
+    # unigrams need no vocabulary, and a filtered corpus has nothing to be told
+    one = corpus_layout(tmp_path, 1, "20200217", "ger")
+    db(one.raw_db)
+    assert corpus_info(tmp_path, "20200217", "ger", 1).state == "acquired · not filtered"
+    two = corpus_layout(tmp_path, 2, "20200217", "ger")
+    db(two.raw_db); db(two.training_db)
+    assert corpus_info(tmp_path, "20200217", "ger", 2).state == "acquired · filtered"
+    # a Davies corpus's sentences, likewise
+    text = corpus_layout(tmp_path, None, None, "coha", source="davies")
+    db(text.raw_db)
+    assert "no token vocabulary yet: filter the tokens first" in \
+        corpus_info(tmp_path, None, "coha", None, source="davies").state
