@@ -26,7 +26,8 @@ HIDDEN = {"progress_path", "write_batch_size", "open_type",   # open_type: write
           "train_fn",                                            # tune, train: a test hook
           "array_task", "array_count",                           # set by the batch script (Submit: Jobs)
           "spool_format",                                        # acquire: "chunk" is the reference path, for tests
-          "compact_after_ingest"}                                # acquire and filter always compact; the key still loads
+          "compact_after_ingest",                                # acquire and filter always compact; the key still loads
+          "source", "unit"}                                      # the kind of corpus: set in the settings file, not yet in the form
 
 # Settings most users never touch; shown under a collapsed "Advanced" heading.
 ADVANCED = {"archive_path_stub", "spool_dir", "chunk_entries", "random_seed",

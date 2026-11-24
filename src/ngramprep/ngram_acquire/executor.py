@@ -38,6 +38,8 @@ def process_files(
         write_batch_size: Optional[int] = None,  # accepted for compatibility; chunk_entries governs
         progress: Optional[ProgressReporter] = None,
         spool_format: str = "sst",
+        worker_fn: Optional[Callable] = None,
+        worker_kwargs: Optional[dict] = None,
 ) -> Tuple[List[str], List[str], int, int, int]:
     """
     Process files concurrently and ingest results into RocksDB.
@@ -65,6 +67,14 @@ def process_files(
         write_batch_size: Ignored (kept so older callers do not break)
         progress: Optional reporter updated as files start, finish or fail
         spool_format: How workers hand shards over, ``"sst"`` or ``"chunk"``
+        worker_fn: What a worker does with one file, in place of the Google
+            Books n-gram worker: called as ``worker_fn(path_or_url, number,
+            log_file_path, spool_dir=, chunk_entries=, spool_format=,
+            files_total=, **worker_kwargs)`` and returning the same tuple as
+            :func:`~ngramprep.ngram_acquire.worker.process_and_ingest_file`.
+            Everything after the worker (ingest with the marker, the ledger)
+            is the same for every reader.
+        worker_kwargs: Extra keyword arguments for ``worker_fn``
 
     Returns:
         Tuple of (success_msgs, failure_msgs, total_entries_written,
@@ -131,19 +141,27 @@ def process_files(
                         idx += 1
                         if progress:
                             progress.file_started(PurePosixPath(url).name)
-                        fut = executor.submit(
-                            process_and_ingest_file,
-                            url,
-                            idx,
-                            filter_pred,
-                            log_file_path,
-                            combined_multigrams=combined_multigrams,
-                            combined_multigrams_case=combined_multigrams_case,
-                            spool_dir=spool_path,
-                            chunk_entries=chunk_entries,
-                            spool_format=spool_format,
-                            files_total=total,
-                        )
+                        if worker_fn is not None:
+                            fut = executor.submit(
+                                worker_fn, url, idx, log_file_path,
+                                spool_dir=spool_path, chunk_entries=chunk_entries,
+                                spool_format=spool_format, files_total=total,
+                                **(worker_kwargs or {}),
+                            )
+                        else:
+                            fut = executor.submit(
+                                process_and_ingest_file,
+                                url,
+                                idx,
+                                filter_pred,
+                                log_file_path,
+                                combined_multigrams=combined_multigrams,
+                                combined_multigrams_case=combined_multigrams_case,
+                                spool_dir=spool_path,
+                                chunk_entries=chunk_entries,
+                                spool_format=spool_format,
+                                files_total=total,
+                            )
                         futures[fut] = (url, idx)
 
                 submit_next(max_in_flight)

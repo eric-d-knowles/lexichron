@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict
 
 from lexichron import __version__
-from lexichron.config import ConfigError, apply_overrides, build_call, load_project
+from lexichron.config import ConfigError, apply_overrides, build_call, corpus_source, load_project
 
 __all__ = ["main"]
 
@@ -50,6 +50,32 @@ STAGES: Dict[str, tuple[str, str]] = {
         "(a projection onto your axis, a similarity, a frequency)",
     ),
 }
+
+
+# Stages whose entry point depends on the kind of corpus (corpus.source).
+# Only acquire differs: where the text comes from.
+STAGES_BY_SOURCE: Dict[str, Dict[str, tuple[str, str]]] = {
+    "ngrams": STAGES,
+    "davies": {
+        "acquire": (
+            "lexichron.stages.acquire_davies:acquire_davies",
+            "Read a Davies corpus's own files (COHA) into a raw database of text units by year",
+        ),
+        # the same functions as for n-grams: they are told the kind of corpus
+        "filter": STAGES["filter"],
+        "tune": STAGES["tune"],
+        "train": STAGES["train"],
+        "measure": STAGES["measure"],
+    },
+}
+
+
+def stage_entry(stage: str, source: str = "ngrams") -> str:
+    """The entry point of ``stage`` for a corpus of kind ``source``."""
+    try:
+        return STAGES_BY_SOURCE[source][stage][0]
+    except KeyError:
+        raise ConfigError(f"the {stage} stage does not handle corpus.source: {source} yet") from None
 
 
 def _resolve(dotted: str) -> Callable[..., Any]:
@@ -126,11 +152,9 @@ def _record_failure(progress_path, stage: str, exc: BaseException) -> None:
 
 
 def _run_stage(stage: str, args: argparse.Namespace) -> int:
-    dotted, _ = STAGES[stage]
-    func = _resolve(dotted)
-
     config = load_project(args.project)
     apply_overrides(config, args.set or [])
+    func = _resolve(stage_entry(stage, corpus_source(config)))
     kwargs = build_call(func, config, stage)
 
     if args.dry_run:

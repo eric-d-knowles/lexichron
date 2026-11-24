@@ -45,7 +45,7 @@ from lexichron.training.scores import (PAIRS_FILE, RESULTS_FILE, SUMMARY_FILE, S
                                        read_tsv_rows, write_json)
 from lexichron.training.trainer import TrainFn, Vectors, load_vectors, save_vectors, train_model
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from lexichron.corpora import corpus_layout
+from lexichron.corpora import training_layout
 
 __all__ = ["tune_models", "sample_years", "plan_models", "summarize_results"]
 
@@ -85,6 +85,8 @@ def tune_models(
     array_count: Optional[int] = None,
     progress_path: Optional[str] = None,
     train_fn: Optional[TrainFn] = None,
+    source: str = "ngrams",
+    unit: str = "sentences",
 ) -> str:
     """
     Train a grid of word2vec models on sampled years and score them.
@@ -145,8 +147,12 @@ def tune_models(
             $SLURM_ARRAY_TASK_ID; blank outside an array
         array_count: How many tasks the job array has
         progress_path: Progress document for the UI
+        source: The kind of corpus: ``ngrams`` (Google Books) or ``davies``.
+            A Davies corpus has no ngram_size or repo_release_id (pass None).
+        unit: For a Davies corpus, ``sentences``: models are trained on its
+            running text (its tokens exist to give the vocabulary).
     """
-    layout = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+    layout = training_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id, source, unit)
     db_path = layout.training_db
     if not db_path.is_dir():
         raise FileNotFoundError(f"pivoted database not found: {db_path} (run the filter stage first)")

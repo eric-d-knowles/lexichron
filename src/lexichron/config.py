@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Mapping
 
 import yaml
 
-__all__ = ["ConfigError", "load_project", "apply_overrides", "build_call", "expand_directory"]
+__all__ = ["ConfigError", "load_project", "apply_overrides", "build_call", "expand_directory", "corpus_source"]
 
 
 class ConfigError(ValueError):
@@ -132,6 +132,8 @@ def apply_overrides(config: Dict[str, Any], overrides: list[str]) -> Dict[str, A
 # How ``corpus`` keys are named in the Python API.
 CORPUS_KEY_MAP = {
     "release": "repo_release_id",
+    "source": "source",
+    "unit": "unit",
     "name": "repo_corpus_id",
     "ngram_size": "ngram_size",
     "db_path_stub": "db_path_stub",
@@ -154,6 +156,15 @@ def expand_directory(value: Any, where: str = "a directory") -> str:
         return expand_path(value)
     except UnsetVariable as exc:
         raise ConfigError(f"{where}: {exc}") from None
+
+
+def corpus_source(config: Mapping[str, Any]) -> str:
+    """The kind of corpus a project file describes: ``ngrams`` (Google
+    Books, the default) or ``davies``."""
+    source = str((config.get("corpus") or {}).get("source") or "ngrams").lower()
+    if source not in ("ngrams", "davies"):
+        raise ConfigError(f"corpus.source must be ngrams or davies, got {source!r}")
+    return source
 
 
 def _coerce(name: str, value: Any, annotation: Any) -> Any:
@@ -184,6 +195,23 @@ def build_call(
     kwargs: Dict[str, Any] = {}
 
     corpus = config.get("corpus") or {}
+    source = corpus_source(config)
+    if source == "davies":
+        # A Davies corpus is named and has no release or n-gram size; a file
+        # that gives them was probably copied from an n-gram corpus's.
+        extra = [k for k in ("release", "ngram_size") if corpus.get(k) is not None]
+        if extra:
+            raise ConfigError(f"corpus.source is davies, which has no {' or '.join(extra)}: remove "
+                              f"{' and '.join('corpus.' + k for k in extra)} from the settings")
+        if corpus.get("unit") not in (None, "sentences", "tokens"):
+            raise ConfigError(f"corpus.unit must be sentences or tokens, got {corpus['unit']!r}")
+        # the stages name an n-gram corpus by these; a Davies corpus has neither
+        for absent in ("ngram_size", "repo_release_id"):
+            if absent in params:
+                kwargs[absent] = None
+    elif corpus.get("unit") is not None:
+        raise ConfigError("corpus.unit belongs to a Davies corpus (corpus.source: davies); an n-gram corpus "
+                          "has corpus.ngram_size")
     for key, value in corpus.items():
         if key not in CORPUS_KEY_MAP:
             raise ConfigError(

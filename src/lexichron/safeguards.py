@@ -86,25 +86,32 @@ def _target(stage: str, kwargs: Dict[str, Any]) -> Optional[tuple[Path, str, str
     do not ask for deletion."""
     n = kwargs.get("ngram_size")
     release, lang, stub = kwargs.get("repo_release_id"), kwargs.get("repo_corpus_id"), kwargs.get("db_path_stub")
-    if not (n and release and lang and stub):
+    source = str(kwargs.get("source") or "ngrams")
+    if not (lang and stub) or (source == "ngrams" and not (n and release)):
         return None
 
     def layout():                       # only when something would be deleted: an unset $VAR is the stage's to report
         from lexichron.corpora import corpus_layout
+        if source != "ngrams":
+            return corpus_layout(str(stub), None, None, str(lang), source=source,
+                                 unit=str(kwargs.get("unit") or "sentences"))
         return corpus_layout(str(stub), int(n), str(release), str(lang))
     if stage == "acquire":
         if not kwargs.get("overwrite_db"):
             return None
-        return layout().raw_db, f"the raw {n}-gram database", "acquire.overwrite_db = true"
+        return layout().raw_db, (f"the raw {n}-gram database" if source == "ngrams" else "the raw database"), \
+            "acquire.overwrite_db = true"
     if stage == "filter":
         if kwargs.get("mode", "resume") != "restart":
             return None
         pivot = kwargs.get("pivot")
         if pivot is None:
-            pivot = int(n) > 1
+            pivot = kwargs.get("unit", "sentences") != "tokens" if source != "ngrams" else int(n) > 1
         if pivot:
-            return layout().training_db, f"the pivoted {n}-gram database", "filter.mode = restart"
-        return layout().processed_db, f"the processed {n}-gram database", "filter.mode = restart"
+            return layout().training_db, (f"the pivoted {n}-gram database" if source == "ngrams"
+                                          else "the pivoted database"), "filter.mode = restart"
+        return layout().processed_db, (f"the processed {n}-gram database" if source == "ngrams"
+                                       else "the processed database"), "filter.mode = restart"
     if stage == "tune":
         if kwargs.get("mode", "resume") != "restart" or not kwargs.get("name"):
             return None                     # an unnamed search gets a fresh timestamp directory

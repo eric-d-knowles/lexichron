@@ -34,7 +34,7 @@ from ngramprep.common_db.compress import compress_db
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["download_and_ingest_to_rocksdb", "AcquisitionError"]
+__all__ = ["download_and_ingest_to_rocksdb", "run_acquisition", "AcquisitionError"]
 
 
 class AcquisitionError(RuntimeError):
@@ -210,6 +210,103 @@ def download_and_ingest_to_rocksdb(
                       + (["archiving"] if archive_path_stub is not None else []))
     progress.set_checks(verify_counts=bool(verify_counts), allow_unparsed_lines=bool(allow_unparsed_lines))
 
+    # Discover available files
+    page_url, file_urls_available = discover_files(ngram_size, repo_release_id, repo_corpus_id)
+
+    # Select file subset
+    file_urls_to_use, start_idx, end_idx = select_file_subset(file_urls_available, file_range)
+
+    # Validate and normalize open_type
+    open_type = open_type.lower()
+    valid_profiles = {"read", "write", "read:packed24", "write:packed24"}
+    if open_type not in valid_profiles:
+        raise ValueError(f"open_type must be one of {valid_profiles}, got {open_type!r}")
+    logger.info("Using RocksDB profile: %s", open_type)
+
+    def header(files_to_get: int, files_to_skip: int, n_workers: int) -> None:
+        print_pipeline_header(
+            start_time=start_time,
+            page_url=page_url,
+            db_path=db_path,
+            start_idx=start_idx,
+            end_idx=end_idx,
+            total_files=len(file_urls_available),
+            files_to_get=files_to_get,
+            files_to_skip=files_to_skip,
+            workers=n_workers,
+            write_batch_size=chunk_entries,
+            ngram_size=ngram_size,
+            ngram_type=ngram_type,
+            overwrite_db=overwrite_db,
+            open_type=open_type,
+        )
+
+    run_acquisition(
+        db_path, file_urls_to_use,
+        sizes=getattr(file_urls_available, "sizes", None) or {},
+        workers=workers, overwrite_db=overwrite_db, open_type=open_type, random_seed=random_seed,
+        progress=progress, start_time=start_time, verify_counts=verify_counts,
+        allow_unparsed_lines=allow_unparsed_lines, print_header=header,
+        process_kwargs=dict(filter_pred=make_ngram_type_predicate(ngram_type),
+                            combined_multigrams=combined_multigrams, spool_dir=spool_dir,
+                            chunk_entries=chunk_entries, spool_format=spool_format),
+        archive=(lambda: _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id))
+        if archive_path_stub is not None else None,
+    )
+    return None
+
+
+def run_acquisition(
+        db_path: str,
+        units: list,
+        *,
+        sizes: Optional[dict] = None,
+        workers: Optional[int] = None,
+        overwrite_db: bool = False,
+        open_type: str = "write:packed24",
+        random_seed: Optional[int] = None,
+        progress: ProgressReporter,
+        start_time: datetime,
+        verify_counts: bool = True,
+        allow_unparsed_lines: bool = False,
+        print_header=None,
+        process_kwargs: Optional[dict] = None,
+        archive=None,
+) -> None:
+    """Take a list of source files into a raw database and vouch for it.
+
+    This is the part of an acquisition that does not depend on where the
+    files come from or what they look like: each of ``units`` (a URL or a
+    path; its last component names it) is handed to a worker, which returns
+    one sorted SST file of summed counts and the totals of what it kept; the
+    file is ingested together with its marker; files already marked are
+    skipped; the database is compacted; and the whole of it is read once
+    and must hold exactly the totals the markers record. The reader (what a
+    worker does with a file) comes in ``process_kwargs`` (see
+    :func:`ngramprep.ngram_acquire.executor.process_files`): by default the
+    Google Books n-gram worker, or another ``worker_fn``.
+
+    Args:
+        db_path: The raw database to create or resume
+        units: The files to acquire, already narrowed to the run's selection
+        sizes: Their sizes by name, where known, for progress by size
+        workers: Processes (default: the allocation's CPUs less one, at most one per file)
+        overwrite_db: Remove an existing database first; otherwise resume it
+        open_type: RocksDB profile
+        random_seed: Shuffle the order of the files with this seed
+        progress: The run's progress reporter
+        start_time: When the run began
+        verify_counts: Check the finished database against the markers' totals
+        allow_unparsed_lines: Accept lines (or rows) that could not be read in full
+        print_header: Called as (files to get, files to skip, workers) to print the run's banner
+        process_kwargs: Keyword arguments for ``process_files``
+        archive: Called with nothing after a verified run, to archive the database
+
+    Raises:
+        AcquisitionError: as :func:`download_and_ingest_to_rocksdb`.
+    """
+    file_urls_to_use = list(units)
+    process_kwargs = dict(process_kwargs or {})
     # Handle existing database
     if overwrite_db and os.path.exists(db_path):
         logger.info("Removing existing database for fresh start")
@@ -225,12 +322,6 @@ def download_and_ingest_to_rocksdb(
     if db_dir:
         os.makedirs(db_dir, exist_ok=True)
 
-    # Discover available files
-    page_url, file_urls_available = discover_files(ngram_size, repo_release_id, repo_corpus_id)
-
-    # Select file subset
-    file_urls_to_use, start_idx, end_idx = select_file_subset(file_urls_available, file_range)
-
     # Determine worker count based on available CPUs and number of files
     if workers is None:
         try:                                   # the allocation's CPUs inside a Slurm job, not the node's
@@ -241,13 +332,6 @@ def download_and_ingest_to_rocksdb(
         workers = min(cpu_count - 1, len(file_urls_to_use))
         # Ensure at least 1 worker
         workers = max(1, workers)
-
-    # Validate and normalize open_type
-    open_type = open_type.lower()
-    valid_profiles = {"read", "write", "read:packed24", "write:packed24"}
-    if open_type not in valid_profiles:
-        raise ValueError(f"open_type must be one of {valid_profiles}, got {open_type!r}")
-    logger.info("Using RocksDB profile: %s", open_type)
 
     # Open database with specified profile (flush happens automatically on exit)
     with open_db(db_path, profile=open_type, create_if_missing=True) as db:
@@ -262,8 +346,7 @@ def download_and_ingest_to_rocksdb(
                             files_skipped=files_to_skip, prior=prior)
         # The listing's sizes, where it gave them: progress by how much there
         # is to fetch, since files differ enormously in what they hold.
-        progress.set_sizes(getattr(file_urls_available, "sizes", None) or {},
-                           [PurePosixPath(u).name for u in file_urls_to_use])
+        progress.set_sizes(sizes or {}, [PurePosixPath(u).name for u in file_urls_to_use])
         to_fetch = progress.doc.get("bytes_total")
         logger.info("Files: %d to fetch%s, %d already in the database, %d workers",
                     len(file_urls_to_use), f" ({to_fetch / 1e9:,.1f} GB compressed)" if to_fetch else "",
@@ -273,41 +356,18 @@ def download_and_ingest_to_rocksdb(
         if random_seed is not None:
             randomize_file_order(file_urls_to_use, random_seed)
 
-        # Configure executor (always use processes for better parallelism)
-        executor_class: Type = ProcessPoolExecutor
-        filter_pred = make_ngram_type_predicate(ngram_type)
-
         # Print run summary
-        print_pipeline_header(
-            start_time=start_time,
-            page_url=page_url,
-            db_path=db_path,
-            start_idx=start_idx,
-            end_idx=end_idx,
-            total_files=len(file_urls_available),
-            files_to_get=len(file_urls_to_use),
-            files_to_skip=files_to_skip,
-            workers=workers,
-            write_batch_size=chunk_entries,
-            ngram_size=ngram_size,
-            ngram_type=ngram_type,
-            overwrite_db=overwrite_db,
-            open_type=open_type,
-        )
+        if print_header is not None:
+            print_header(len(file_urls_to_use), files_to_skip, workers)
 
-        # Process and ingest files
+        # Process and ingest files (always processes, for parallelism)
         success, failure, written, batches, uncompressed_bytes = process_files(
             urls=file_urls_to_use,
-            executor_class=executor_class,
+            executor_class=ProcessPoolExecutor,
             workers=workers,
             db=db,
-            filter_pred=filter_pred,
-            combined_multigrams=combined_multigrams,
-
-            spool_dir=spool_dir,
-            chunk_entries=chunk_entries,
             progress=progress,
-            spool_format=spool_format,
+            **process_kwargs,
         )
         # Database is automatically flushed by context manager on exit
         logger.info("Files finished in %s: %d ingested, %d failed; %s entries handed to the database, "
@@ -424,16 +484,14 @@ def download_and_ingest_to_rocksdb(
         )
 
     # Optional archiving: compress DB to archive directory
-    if archive_path_stub is not None:
+    if archive is not None:
         with progress.long_phase("archiving"):
-            _archive_database(db_path, archive_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+            archive()
 
     progress.finish("done")
     logger.info("Acquisition finished in %s: %s", timedelta(seconds=int((datetime.now() - start_time).total_seconds())),
                 db_path)
 
-    # Return None to avoid Jupyter displaying the path
-    # (the path is already printed in the summary)
     return None
 
 

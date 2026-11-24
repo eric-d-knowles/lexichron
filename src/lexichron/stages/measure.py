@@ -40,7 +40,7 @@ from lexichron.training.measures import (KINDS, Measured, Spec, measure as measu
 from lexichron.training.scores import write_json
 from lexichron.training.trainer import load_vectors
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from lexichron.corpora import corpus_layout
+from lexichron.corpora import training_layout
 
 __all__ = ["measure_series", "MANIFEST_FILE", "SERIES_FILE", "SUMMARY_FILE", "SERIES_COLUMNS", "year_file",
            "year_values_file"]
@@ -85,6 +85,8 @@ def measure_series(
     array_task: Optional[int] = None,
     array_count: Optional[int] = None,
     progress_path: Optional[str] = None,
+    source: str = "ngrams",
+    unit: str = "sentences",
 ) -> str:
     """Measure one scalar for a list of words inside every model of an
     ensemble, year by year, and write the series with its error.
@@ -128,8 +130,12 @@ def measure_series(
             outside an array
         array_count: How many tasks the job array has
         progress_path: Progress document for the UI
+        source: The kind of corpus: ``ngrams`` (Google Books) or ``davies``.
+            A Davies corpus has no ngram_size or repo_release_id (pass None).
+        unit: For a Davies corpus, ``sentences``: the ensemble is of models trained on
+            its running text.
     """
-    corpus_dir = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id).dir
+    corpus_dir = training_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id, source, unit).dir
     ens_dir = _ensemble_dir(corpus_dir, ensemble)
     manifest = json.loads((ens_dir / "train.json").read_text())
     corpora, seeds = int(manifest.get("corpus_replicates") or 1), int(manifest.get("seeds_per_corpus") or 1)

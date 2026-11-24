@@ -90,6 +90,8 @@ def filter_ngrams(
     chunk_entries: int = 200_000,
     spool_dir: Optional[str] = None,
     progress_path: Optional[str] = None,
+    source: str = "ngrams",
+    unit: str = "sentences",
 ) -> str:
     """
     Filter a raw n-gram database. Unigrams become a processed database (and
@@ -193,6 +195,12 @@ def filter_ngrams(
         chunk_entries: Entries per chunk file (bounds each worker's memory)
         spool_dir: Where workers write chunk files (default: $TMPDIR)
         progress_path: Progress document for this run (set by the CLI)
+        source: The kind of corpus: ``ngrams`` (Google Books) or ``davies``.
+            A Davies corpus has no ngram_size or repo_release_id (pass None).
+        unit: For a Davies corpus, which of its two databases to filter:
+            ``tokens`` is treated as the 1-grams are (it yields the
+            vocabulary), ``sentences`` as longer n-grams are (filtered
+            against that vocabulary and pivoted for training).
 
     Returns:
         Path to the processed database directory
@@ -201,11 +209,21 @@ def filter_ngrams(
     from lexichron.corpora import corpus_layout
     from ngramprep.ngram_filter.pipeline.orchestrator import build_processed_db
 
-    lang = text_language or text_language_for(repo_corpus_id)
+    davies = source == "davies"
+    if davies:
+        from lexichron.davies.formats import corpus_format
+        lang = text_language or corpus_format(repo_corpus_id).text_language
+        layout = corpus_layout(db_path_stub, None, None, repo_corpus_id, source=source, unit=unit)
+        # What the defaults below turn on: one token per record, as in 1-grams, or text.
+        ngram_size = 1 if unit == "tokens" else 2
+        what = f"the corpus's {unit}"
+    else:
+        lang = text_language or text_language_for(repo_corpus_id)
+        ngram_size = int(ngram_size)
+        layout = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+        what = f"{ngram_size}-grams"
     if ascii_only is None:
         ascii_only = lang == "en"
-    ngram_size = int(ngram_size)
-    layout = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
     if min_context_tokens is None:
         min_context_tokens = 1 if ngram_size == 1 else 2
     if pivot is None:
@@ -221,12 +239,14 @@ def filter_ngrams(
     if vocabulary is None and ngram_size > 1 and not no_vocabulary:
         unigram = layout.shared_vocabulary
         if not unigram.exists():
+            first = ("Filter this corpus's tokens first (corpus.unit: tokens; acquire them if that has not been "
+                     "done)" if davies else "Run the unigram filter for this corpus first")
             raise FileNotFoundError(
-                f"{ngram_size}-grams are filtered against a vocabulary, and none was given or found at "
-                f"{unigram}. Run the unigram filter for this corpus first, set vocabulary, "
+                f"{what[0].upper() + what[1:]} are filtered against a vocabulary, and none was given or found at "
+                f"{unigram}. {first}, set vocabulary, "
                 f"or set no_vocabulary to filter with the rules alone.")
         vocabulary = str(unigram)
-        print(f"Vocabulary:   {vocabulary} (this corpus's unigram vocabulary)")
+        print(f"Vocabulary:   {vocabulary} (this corpus's {'token' if davies else 'unigram'} vocabulary)")
     by_tag = bool(lemmatize and lemmatize_by_tag and lang in TAG_LEMMA_LANGUAGES)
     # A source of untagged n-grams has no tags to use: every token gets the
     # lookup's lemma whatever the setting, and the run must say so, since a

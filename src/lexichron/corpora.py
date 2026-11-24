@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-__all__ = ["CorpusInfo", "CorpusLayout", "corpus_info", "corpus_layout", "scan_corpora", "stage_prerequisites",
-           "SETTINGS_FILENAME"]
+__all__ = ["CorpusInfo", "CorpusLayout", "corpus_info", "corpus_layout", "training_layout", "scan_corpora",
+           "stage_prerequisites",
+           "SETTINGS_FILENAME", "SOURCES", "UNITS"]
 
 SETTINGS_FILENAME = "lexichron.yaml"
 _RELEASE = re.compile(r"^\d{8}$")
@@ -44,12 +45,36 @@ class CorpusLayout:
         return self.dir / "models"
 
 
-def corpus_layout(db_path_stub: str | Path, ngram_size: int, repo_release_id: str,
-                  repo_corpus_id: str) -> CorpusLayout:
-    """The layout of a Google Books n-gram corpus,
-    ``<stub>/<release>/<name>/<N>gram_files/``. Environment variables
-    and ``~`` in the stub are expanded; one that is not set raises
-    ``ValueError``."""
+SOURCES = ("ngrams", "davies")
+UNITS = ("sentences", "tokens")
+
+
+def corpus_layout(db_path_stub: str | Path, ngram_size: Optional[int], repo_release_id: Optional[str],
+                  repo_corpus_id: str, source: str = "ngrams", unit: str = "sentences") -> CorpusLayout:
+    """Where a corpus keeps its files. Environment variables and ``~`` in
+    the stub are expanded; one that is not set raises ``ValueError``.
+
+    A Google Books n-gram corpus (``source="ngrams"``) is
+    ``<stub>/<release>/<name>/<N>gram_files/``. A Davies corpus
+    (``source="davies"``) has no release or n-gram size; it is read twice,
+    as Google's files come twice: ``unit="tokens"`` is its single tokens
+    (``<stub>/<name>/token_files/``, the counterpart of the 1-grams, from
+    which the vocabulary is built) and ``unit="sentences"`` its running
+    text (``<stub>/<name>/sentence_files/``, the counterpart of the
+    5-grams, which is filtered against that vocabulary and trained on)."""
+    if source not in SOURCES:
+        raise ValueError(f"corpus source must be one of {SOURCES}, got {source!r}")
+    if source == "davies":
+        from ngramprep.utilities.paths import expand_path
+        if unit not in UNITS:
+            raise ValueError(f"corpus unit must be one of {UNITS}, got {unit!r}")
+        root = Path(expand_path(str(db_path_stub))) / str(repo_corpus_id).lower()
+        d = root / f"{unit[:-1]}_files"
+        return CorpusLayout(dir=d, raw_db=d / f"{unit}.db", processed_db=d / f"{unit}_processed.db",
+                            training_db=d / f"{unit}_pivoted.db",
+                            vocabulary=d / f"{unit}_processed.db" / "whitelist.txt",
+                            shared_vocabulary=root / "token_files" / "tokens_processed.db" / "whitelist.txt",
+                            tmp_dir=d / "processing_tmp")
     from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
     n = int(ngram_size)
     paths = derive_paths(str(db_path_stub), n, str(repo_release_id), str(repo_corpus_id))
@@ -58,6 +83,17 @@ def corpus_layout(db_path_stub: str | Path, ngram_size: int, repo_release_id: st
     return CorpusLayout(dir=raw.parent, raw_db=raw, processed_db=Path(paths["dst_db"]),
                         training_db=Path(paths["pivoted_db"]), vocabulary=Path(paths["whitelist"]),
                         shared_vocabulary=Path(unigram["whitelist"]), tmp_dir=Path(paths["tmp_dir"]))
+
+
+def training_layout(db_path_stub: str | Path, ngram_size: Optional[int], repo_release_id: Optional[str],
+                    repo_corpus_id: str, source: str = "ngrams", unit: str = "sentences") -> CorpusLayout:
+    """The layout of the corpus a stage trains or measures models on (tune,
+    train, measure). A Davies corpus is trained on its sentences; its tokens
+    exist to give the vocabulary, and asking for them here is refused."""
+    if source == "davies" and unit != "sentences":
+        raise ValueError(f"models are trained on a Davies corpus's sentences, and corpus.unit is {unit!r}: "
+                         f"use the settings file in the corpus's sentence_files directory (corpus.unit: sentences)")
+    return corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id, source=source, unit=unit)
 
 
 @dataclass
