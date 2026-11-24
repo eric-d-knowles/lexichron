@@ -1,7 +1,7 @@
 """The corpora under a directory, and what state each is in.
 
-A corpus is a Google Books n-gram set identified by release, language and
-n-gram size, kept at ``<root>/<release>/<language>/<N>gram_files/`` with
+A corpus is a Google Books n-gram set identified by release, name and
+n-gram size, kept at ``<root>/<release>/<name>/<N>gram_files/`` with
 its database, its pivoted database, its tuning searches, its model
 ensembles and its settings file. The UI's corpus bar lists what a root
 holds and says how far each has got; the stage buttons follow.
@@ -13,20 +13,60 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 
-__all__ = ["CorpusInfo", "corpus_info", "scan_corpora", "stage_prerequisites", "SETTINGS_FILENAME"]
+__all__ = ["CorpusInfo", "CorpusLayout", "corpus_info", "corpus_layout", "scan_corpora", "stage_prerequisites",
+           "SETTINGS_FILENAME"]
 
 SETTINGS_FILENAME = "lexichron.yaml"
 _RELEASE = re.compile(r"^\d{8}$")
 _FILES_DIR = re.compile(r"^(\d)gram_files$")
 
 
+@dataclass(frozen=True)
+class CorpusLayout:
+    """Where a corpus keeps what the stages read and write. Every stage,
+    the safeguards and the UI get their paths here, so a corpus of another
+    kind needs one more function that returns this, and nothing else has to
+    know how its directory is named."""
+    dir: Path                       # the corpus directory: databases, tuning/, models/, lexichron.yaml
+    raw_db: Path                    # what acquire writes
+    processed_db: Path              # filter's output keyed like the raw database (the unigram vocabulary's source)
+    training_db: Path               # filter's year-keyed output, which tune and train read
+    vocabulary: Path                # the vocabulary this corpus's filter writes
+    shared_vocabulary: Path         # the vocabulary its n-grams are filtered against by default (the unigrams')
+    tmp_dir: Path                   # the filter's working directory
+
+    @property
+    def tuning(self) -> Path:
+        return self.dir / "tuning"
+
+    @property
+    def models(self) -> Path:
+        return self.dir / "models"
+
+
+def corpus_layout(db_path_stub: str | Path, ngram_size: int, repo_release_id: str,
+                  repo_corpus_id: str) -> CorpusLayout:
+    """The layout of a Google Books n-gram corpus,
+    ``<stub>/<release>/<name>/<N>gram_files/``. Environment variables
+    and ``~`` in the stub are expanded; one that is not set raises
+    ``ValueError``."""
+    from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+    n = int(ngram_size)
+    paths = derive_paths(str(db_path_stub), n, str(repo_release_id), str(repo_corpus_id))
+    unigram = paths if n == 1 else derive_paths(str(db_path_stub), 1, str(repo_release_id), str(repo_corpus_id))
+    raw = Path(paths["src_db"])
+    return CorpusLayout(dir=raw.parent, raw_db=raw, processed_db=Path(paths["dst_db"]),
+                        training_db=Path(paths["pivoted_db"]), vocabulary=Path(paths["whitelist"]),
+                        shared_vocabulary=Path(unigram["whitelist"]), tmp_dir=Path(paths["tmp_dir"]))
+
+
 @dataclass
 class CorpusInfo:
     root: Path
     release: str
-    language: str
+    name: str                       # the corpus's identifier: eng, eng-us, eng-fiction, ...
     ngram_size: int
-    dir: Path                       # <root>/<release>/<language>/<N>gram_files
+    dir: Path                       # <root>/<release>/<name>/<N>gram_files
     settings: Optional[Path]        # its lexichron.yaml, when there is one
     database: bool                  # <N>grams.db exists: acquired
     pivoted: bool                   # <N>grams_pivoted.db exists: filtered and pivoted
@@ -35,7 +75,7 @@ class CorpusInfo:
 
     @property
     def label(self) -> str:
-        return f"{self.language} · {self.release} · {self.ngram_size}-grams"
+        return f"{self.name} · {self.release} · {self.ngram_size}-grams"
 
     @property
     def state(self) -> str:
@@ -55,29 +95,28 @@ def _is_db(p: Path) -> bool:
     return p.is_dir() and (p / "CURRENT").exists()
 
 
-def corpus_info(root: str | Path, release: str, language: str, ngram_size: int) -> CorpusInfo:
+def corpus_info(root: str | Path, release: str, name: str, ngram_size: int) -> CorpusInfo:
     """What the directory of one corpus holds (it need not exist yet)."""
-    from ngramprep.ngram_acquire.db.build_path import build_db_path
     from ngramprep.utilities.paths import expand_path
     root = Path(expand_path(root))
     n = int(ngram_size)
-    db = Path(build_db_path(str(root), n, str(release), str(language)))
-    d = db.parent
+    layout = corpus_layout(root, n, release, name)
+    db, d = layout.raw_db, layout.dir
     settings = d / SETTINGS_FILENAME
-    tuning, models = d / "tuning", d / "models"
+    tuning, models = layout.tuning, layout.models
     searches = sum(1 for s in tuning.iterdir() if s.is_dir()) if tuning.is_dir() else 0
     ensembles = sum(1 for s in models.iterdir() if s.is_dir() and (s / "train.json").is_file()) \
         if models.is_dir() else 0
-    return CorpusInfo(root=root, release=str(release), language=str(language), ngram_size=n, dir=d,
+    return CorpusInfo(root=root, release=str(release), name=str(name), ngram_size=n, dir=d,
                       settings=settings if settings.is_file() else None,
-                      database=_is_db(db), pivoted=_is_db(d / f"{n}grams_pivoted.db"),
+                      database=_is_db(db), pivoted=_is_db(layout.training_db),
                       searches=searches, ensembles=ensembles)
 
 
 def scan_corpora(root: str | Path) -> List[CorpusInfo]:
-    """The corpora under ``root``: every ``<release>/<language>/<N>gram_files``
+    """The corpora under ``root``: every ``<release>/<name>/<N>gram_files``
     directory that holds a database, a settings file, or anything else
-    lexichron writes. Sorted by language, release, size. A directory that
+    lexichron writes. Sorted by name, release, size. A directory that
     names an environment variable which is not set holds none."""
     from ngramprep.utilities.paths import UnsetVariable, expand_path
     try:
@@ -106,7 +145,7 @@ def scan_corpora(root: str | Path) -> List[CorpusInfo]:
                 info = corpus_info(root, rel.name, lang.name, n)
                 if info.settings or info.database or info.pivoted or info.searches or info.ensembles:
                     out.append(info)
-    out.sort(key=lambda i: (i.language, i.release, i.ngram_size))
+    out.sort(key=lambda i: (i.name, i.release, i.ngram_size))
     return out
 
 

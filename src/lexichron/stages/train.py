@@ -44,7 +44,7 @@ from lexichron.training.scheduler import train_across_years
 from lexichron.training.scores import write_json
 from lexichron.training.trainer import TrainFn, load_vectors, load_words
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+from lexichron.corpora import corpus_layout
 
 __all__ = ["train_models", "MANIFEST_FILE", "YEAR_FILE"]
 
@@ -146,8 +146,8 @@ def train_models(
         array_count: How many tasks the job array has
         progress_path: Progress document for the UI
     """
-    paths = derive_paths(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
-    db_path = Path(paths["pivoted_db"])
+    layout = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+    db_path = layout.training_db
     if not db_path.is_dir():
         raise FileNotFoundError(f"pivoted database not found: {db_path} (run the filter stage first)")
     if unk_mode not in UNK_MODES:

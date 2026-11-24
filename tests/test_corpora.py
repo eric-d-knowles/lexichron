@@ -55,3 +55,27 @@ def test_prerequisites_follow_the_state(tmp_path):
     (root / "20200217" / "ger" / "3gram_files" / "models" / "e1" / "train.json").write_text("{}")
     assert all(v is None for v in stage_prerequisites(corpus_info(root, "20200217", "ger", 3)).values())
     assert all(v is None for v in stage_prerequisites(None).values())
+
+
+def test_corpus_layout_is_where_every_stage_looks(tmp_path, monkeypatch):
+    """One function says where a corpus keeps its databases, vocabulary,
+    searches and ensembles; it agrees with the paths the acquire and filter
+    engines build for themselves."""
+    from lexichron.corpora import corpus_layout
+    from ngramprep.ngram_acquire.db.build_path import build_db_path
+    from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+    five = corpus_layout(tmp_path, 5, "20200217", "eng-us")
+    d = tmp_path / "20200217" / "eng-us" / "5gram_files"
+    assert five.dir == d and five.raw_db == d / "5grams.db" == Path(build_db_path(str(tmp_path), 5, "20200217", "eng-us"))
+    assert five.processed_db == d / "5grams_processed.db" and five.training_db == d / "5grams_pivoted.db"
+    assert five.tuning == d / "tuning" and five.models == d / "models" and five.tmp_dir == d / "processing_tmp"
+    paths = derive_paths(str(tmp_path), 5, "20200217", "eng-us")
+    assert (five.raw_db, five.processed_db, five.training_db, five.vocabulary, five.tmp_dir) == \
+        (paths["src_db"], paths["dst_db"], paths["pivoted_db"], paths["whitelist"], paths["tmp_dir"])
+    # n-grams are filtered against the unigrams' vocabulary; the unigrams' own is the same file
+    one = corpus_layout(tmp_path, 1, "20200217", "eng-us")
+    assert five.shared_vocabulary == one.vocabulary == one.shared_vocabulary
+    assert one.vocabulary == tmp_path / "20200217" / "eng-us" / "1gram_files" / "1grams_processed.db" / "whitelist.txt"
+    # the stub may name an environment variable, expanded where the stage runs
+    monkeypatch.setenv("LEXI_ROOT", str(tmp_path))
+    assert corpus_layout("$LEXI_ROOT", 5, "20200217", "eng-us").dir == d

@@ -40,7 +40,7 @@ from lexichron.training.measures import (KINDS, Measured, Spec, measure as measu
 from lexichron.training.scores import write_json
 from lexichron.training.trainer import load_vectors
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+from lexichron.corpora import corpus_layout
 
 __all__ = ["measure_series", "MANIFEST_FILE", "SERIES_FILE", "SUMMARY_FILE", "SERIES_COLUMNS", "year_file",
            "year_values_file"]
@@ -92,7 +92,7 @@ def measure_series(
     Args:
         ngram_size: N-gram size of the corpus
         repo_release_id: Google Books release (e.g. 20200217)
-        repo_corpus_id: Language/corpus id (e.g. eng-us)
+        repo_corpus_id: Corpus identifier (e.g. eng-us)
         db_path_stub: Root directory of the corpora
         ensemble: The ensemble to measure: its name under <corpus>/models/,
             or the directory itself
@@ -129,8 +129,7 @@ def measure_series(
         array_count: How many tasks the job array has
         progress_path: Progress document for the UI
     """
-    paths = derive_paths(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
-    corpus_dir = Path(paths["pivoted_db"]).parent
+    corpus_dir = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id).dir
     ens_dir = _ensemble_dir(corpus_dir, ensemble)
     manifest = json.loads((ens_dir / "train.json").read_text())
     corpora, seeds = int(manifest.get("corpus_replicates") or 1), int(manifest.get("seeds_per_corpus") or 1)

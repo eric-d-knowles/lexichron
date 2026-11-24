@@ -198,12 +198,14 @@ def filter_ngrams(
         Path to the processed database directory
     """
     from ngramprep.ngram_filter.config import FilterConfig, PipelineConfig
-    from ngramprep.ngram_filter.pipeline.orchestrator import build_processed_db, derive_paths
+    from lexichron.corpora import corpus_layout
+    from ngramprep.ngram_filter.pipeline.orchestrator import build_processed_db
 
     lang = text_language or text_language_for(repo_corpus_id)
     if ascii_only is None:
         ascii_only = lang == "en"
     ngram_size = int(ngram_size)
+    layout = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
     if min_context_tokens is None:
         min_context_tokens = 1 if ngram_size == 1 else 2
     if pivot is None:
@@ -217,7 +219,7 @@ def filter_ngrams(
     if no_vocabulary and vocabulary:
         raise ValueError("no_vocabulary is set but a vocabulary file is given as well; choose one")
     if vocabulary is None and ngram_size > 1 and not no_vocabulary:
-        unigram = derive_paths(db_path_stub, 1, str(repo_release_id), str(repo_corpus_id))["whitelist"]
+        unigram = layout.shared_vocabulary
         if not unigram.exists():
             raise FileNotFoundError(
                 f"{ngram_size}-grams are filtered against a vocabulary, and none was given or found at "
@@ -226,11 +228,10 @@ def filter_ngrams(
         vocabulary = str(unigram)
         print(f"Vocabulary:   {vocabulary} (this corpus's unigram vocabulary)")
     by_tag = bool(lemmatize and lemmatize_by_tag and lang in TAG_LEMMA_LANGUAGES)
-    paths = derive_paths(db_path_stub, ngram_size, str(repo_release_id), str(repo_corpus_id))
     # A source of untagged n-grams has no tags to use: every token gets the
     # lookup's lemma whatever the setting, and the run must say so, since a
     # vocabulary is matched to the n-grams by how their lemmas were made.
-    untagged = by_tag and source_is_untagged(paths["src_db"])
+    untagged = by_tag and source_is_untagged(layout.raw_db)
     if untagged:
         by_tag = False
     if vocabulary and lemmatize:
@@ -248,12 +249,12 @@ def filter_ngrams(
               + (" (the source holds untagged n-grams, so there are no tags to use)" if untagged else ""))
 
     keep = [str(t) for t in (always_include or []) if str(t).strip()]
-    handed = [t for t in combined_tokens_from_acquire(paths["src_db"]) if t not in keep]
+    handed = [t for t in combined_tokens_from_acquire(layout.raw_db) if t not in keep]
     if handed:
         print(f"Always keep:  {', '.join(handed)} (combined by the acquire run that made the raw database)")
         keep += handed
     keep_case = [str(t) for t in (always_include_case or []) if str(t).strip()]
-    combined = combined_tokens_from_acquire(paths["src_db"])
+    combined = combined_tokens_from_acquire(layout.raw_db)
     if combined and lemmatize:
         print(f"Not lemmatized: {', '.join(combined)} (tokens the acquire run combined are kept as they were made)")
     filter_config = FilterConfig(
@@ -268,14 +269,14 @@ def filter_ngrams(
         bin_size=int(bin_size),
     )
     pipeline_config = PipelineConfig(
-        src_db=paths["src_db"], tmp_dir=paths["tmp_dir"],
+        src_db=layout.raw_db, tmp_dir=layout.tmp_dir,
         num_workers=workers or max(1, available_cpus() - 1),
         num_initial_work_units=None, mode=mode, output=output,
         use_smart_partitioning=True,
         compact_after_ingest=compact_after_ingest,
-        verify_counts=bool(verify_counts), source_totals=verified_source_totals(paths["src_db"]),
-        output_whitelist_path=paths["whitelist"] if output_vocabulary else None,
-        dst_db=paths["pivoted_db"] if output == "pivoted" else paths["dst_db"],
+        verify_counts=bool(verify_counts), source_totals=verified_source_totals(layout.raw_db),
+        output_whitelist_path=layout.vocabulary if output_vocabulary else None,
+        dst_db=layout.training_db if output == "pivoted" else layout.processed_db,
         output_whitelist_top_n=output_vocabulary_top_n,
         output_whitelist_year_range=tuple(output_vocabulary_year_range) if output_vocabulary_year_range else None,
         output_whitelist_spell_check=output_vocabulary_spell_check,

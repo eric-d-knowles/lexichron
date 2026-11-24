@@ -9,7 +9,7 @@ Example::
 
     corpus:
       release: "20200217"
-      language: eng-us
+      name: eng-us
       ngram_size: 1
       db_path_stub: /scratch/$USER/NLP_corpora/Google_Books/   # $VARS and ~ are expanded
 
@@ -69,7 +69,10 @@ _DROPPED_KEYS = {("filter", "smart_partitioning"), ("filter", "samples_per_worke
 # Keys renamed within their section, as (section, old key) -> new key: the
 # setting is the same, the name grew with what it does.
 _RENAMED_KEYS = {("acquire", "combined_bigrams"): "combined_multigrams",
-                 ("acquire", "bigram_case_sensitive"): "multigram_case_sensitive"}
+                 ("acquire", "bigram_case_sensitive"): "multigram_case_sensitive",
+                 # the corpus's identifier (eng-us, eng-fiction) was called its language, which it is
+                 # not always, and which a corpus from another source (COHA) is not at all
+                 ("corpus", "language"): "name"}
 
 
 def _migrate(data: Dict[str, Any]) -> Dict[str, Any]:
@@ -110,6 +113,7 @@ def apply_overrides(config: Dict[str, Any], overrides: list[str]) -> Dict[str, A
         if len(parts) != 2 or not all(parts):
             raise ConfigError(f"override key must be section.key: {dotted}")
         section, key = parts
+        key = _RENAMED_KEYS.get((section, key), key)        # --set corpus.language=eng still means the corpus
         try:
             value = yaml.safe_load(raw)
         except yaml.YAMLError as exc:
@@ -128,7 +132,7 @@ def apply_overrides(config: Dict[str, Any], overrides: list[str]) -> Dict[str, A
 # How ``corpus`` keys are named in the Python API.
 CORPUS_KEY_MAP = {
     "release": "repo_release_id",
-    "language": "repo_corpus_id",
+    "name": "repo_corpus_id",
     "ngram_size": "ngram_size",
     "db_path_stub": "db_path_stub",
     "archive_path_stub": "archive_path_stub",

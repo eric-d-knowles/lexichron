@@ -2,7 +2,7 @@
 submitting pipeline stages from a settings file.
 
 Terminology: the *settings file* (default ``lexichron.yaml`` in the corpus's
-own directory, ``<stub>/<release>/<language>/<n>gram_files/``) holds the corpus, the stage settings and the Slurm resources; it is
+own directory, ``<stub>/<release>/<name>/<n>gram_files/``) holds the corpus, the stage settings and the Slurm resources; it is
 what ``lexichron <stage> file.yaml`` runs from. It is not a "project
 environment" (what ``new-project`` creates), which the UI does not need.
 
@@ -60,7 +60,7 @@ from lexichron import __version__
 from lexichron.bridge import BridgeUnavailable, SlurmRunner, slurm_backend
 from lexichron.cli import STAGES, _format_call, _resolve
 from lexichron.config import ConfigError, build_call, expand_directory, load_project
-from lexichron.corpora import CorpusInfo, corpus_info, scan_corpora, stage_prerequisites
+from lexichron.corpora import CorpusInfo, corpus_info, corpus_layout, scan_corpora, stage_prerequisites
 from lexichron.inspection import (ENSEMBLE_LEGEND, FAMILY_LABELS, LAYOUTS, MEASURE_LEGEND, MEASURE_VIEWS, PARAM_KEYS,
                                   SEARCH_COLUMNS, STABILITY_NOTE,
                                   best_in_columns, ensemble_overview, ensemble_profile, ensemble_table, ensembles,
@@ -79,7 +79,6 @@ from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, r
                                       resolve as resolve_slurm, seed_user_defaults, stage_override,
                                       state_dir as _state_dir, write_user_defaults)
 from lexichron.ui.slurm import ARRAY_STAGES, array_size, stage_command, write_sbatch
-from ngramprep.ngram_acquire.db.build_path import build_db_path
 from ngramprep.ngram_acquire.io.parse import TARGET_ARROW, parse_multigram_entry
 from ngramprep.ngram_acquire.progress import read_progress
 
@@ -439,8 +438,8 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
     def compose(self) -> ComposeResult:
         with Vertical():
             yield Static("New corpus", id="new-title")
-            yield Static("Acquire creates it: the Google Books n-gram files for this language and size are "
-                         "downloaded into <corpus directory>/<release>/<language>/<N>gram_files, and the other "
+            yield Static("Acquire creates it: the Google Books n-gram files for this corpus and size are "
+                         "downloaded into <corpus directory>/<release>/<corpus>/<N>gram_files, and the other "
                          "stages open up as it is built.", id="new-note")
             with Horizontal(classes="row"):
                 yield Label("Corpus directory")
@@ -449,8 +448,8 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
                 yield Label("Release")
                 yield Static(CHOICES["release"][0], id="new-release")
             with Horizontal(classes="row"):
-                yield Label("Language")
-                yield Select([(c, c) for c in CHOICES["language"]], allow_blank=True, id="new-language", compact=True)
+                yield Label("Corpus")
+                yield Select([(c, c) for c in CHOICES["corpus.name"]], allow_blank=True, id="new-name", compact=True)
             with Horizontal(classes="row"):
                 yield Label("N-gram size")
                 yield Select([(c, c) for c in CHOICES["ngram_size"]], allow_blank=True, id="new-size", compact=True)
@@ -466,12 +465,12 @@ class NewCorpus(ModalScreen[Optional[Dict[str, Any]]]):
     @on(Button.Pressed, "#new-create")
     def _create(self) -> None:
         root = self.query_one("#new-root", Input).value.strip()
-        lang = self.query_one("#new-language", Select).value
+        lang = self.query_one("#new-name", Select).value
         size = self.query_one("#new-size", Select).value
         if not root or lang is Select.NULL or size is Select.NULL:
-            self.query_one("#new-error", Static).update("Fill in the corpus directory, language and n-gram size.")
+            self.query_one("#new-error", Static).update("Fill in the corpus directory, corpus and n-gram size.")
             return
-        self.dismiss({"db_path_stub": root, "release": CHOICES["release"][0], "language": str(lang),
+        self.dismiss({"db_path_stub": root, "release": CHOICES["release"][0], "name": str(lang),
                       "ngram_size": int(str(size))})
 
 
@@ -1004,7 +1003,7 @@ class LexichronApp(App):
     @property
     def project_path(self) -> Optional[Path]:
         """Where the settings file is (or will be) saved: by default beside
-        the database it describes, <stub>/<release>/<language>/<n>gram_files/
+        the database it describes, <stub>/<release>/<name>/<n>gram_files/
         lexichron.yaml. A file that was opened explicitly (command-line
         argument, or reopened from last time) stays the target until the
         corpus it describes is changed, at which point the file follows."""
@@ -1020,10 +1019,10 @@ class LexichronApp(App):
 
     def _corpus_dir(self, config: Dict[str, Any]) -> Optional[Path]:
         """The directory of the database these settings describe, or None
-        until the corpus directory, release, language and n-gram size are set."""
+        until the corpus directory, release, corpus name and n-gram size are set."""
         corpus = config.get("corpus") or {}
         stage = config.get(self.stage) or {}
-        stub, release, lang = corpus.get("db_path_stub"), corpus.get("release"), corpus.get("language")
+        stub, release, lang = corpus.get("db_path_stub"), corpus.get("release"), corpus.get("name")
         n = corpus.get("ngram_size") or stage.get("ngram_size")
         if not (stub and release and lang and n):
             return None
@@ -1031,12 +1030,12 @@ class LexichronApp(App):
             root = Path(expand_directory(stub, "corpus directory")).resolve()   # $USER, ~: as the job will see it
         except ConfigError:
             return None
-        return Path(build_db_path(str(root), int(n), str(release), str(lang))).parent
+        return corpus_layout(root, int(n), str(release), str(lang)).dir
 
     def _require_project_path(self) -> Path:
         p = self.project_path
         if p is None:
-            raise ConfigError("fill in the corpus directory, language and n-gram size first")
+            raise ConfigError("fill in the corpus directory, corpus and n-gram size first")
         return p
 
     # -- layout -----------------------------------------------------------------
@@ -1452,7 +1451,7 @@ class LexichronApp(App):
             self._refresh_corpus_state()
         dest = self.project_path
         self.query_one("#dest", Static).update(
-            f"Settings file: {dest if dest else '(fill in the corpus directory, language and n-gram size)'}"
+            f"Settings file: {dest if dest else '(fill in the corpus directory, corpus and n-gram size)'}"
             + ("  (reopened from last time)" if self.reopened else ""))
         self._refresh_command_line(dest)
         try:
@@ -1480,8 +1479,8 @@ class LexichronApp(App):
         what Filter keeps without being told."""
         try:
             from lexichron.stages.filter import combined_tokens_from_acquire
-            raw = build_db_path(str(kwargs["db_path_stub"]), int(kwargs["ngram_size"]),
-                                str(kwargs["repo_release_id"]), str(kwargs["repo_corpus_id"]))
+            raw = corpus_layout(kwargs["db_path_stub"], int(kwargs["ngram_size"]),
+                                kwargs["repo_release_id"], kwargs["repo_corpus_id"]).raw_db
             handed = combined_tokens_from_acquire(raw)
         except (KeyError, TypeError, ValueError):
             handed = []
@@ -1816,10 +1815,10 @@ class LexichronApp(App):
     def _current_info(self) -> Optional[CorpusInfo]:
         c = self.config.get("corpus") or {}
         n = c.get("ngram_size") or (self.config.get(self.stage) or {}).get("ngram_size")
-        if not (c.get("db_path_stub") and c.get("release") and c.get("language") and n):
+        if not (c.get("db_path_stub") and c.get("release") and c.get("name") and n):
             return None
         try:
-            return corpus_info(str(c["db_path_stub"]), str(c["release"]), str(c["language"]), int(n))
+            return corpus_info(str(c["db_path_stub"]), str(c["release"]), str(c["name"]), int(n))
         except (OSError, ValueError):
             return None
 
@@ -1833,7 +1832,7 @@ class LexichronApp(App):
         if current and str(current) not in self._corpus_infos:
             c = self.config.get("corpus") or {}
             n = c.get("ngram_size") or (self.config.get(self.stage) or {}).get("ngram_size")
-            options.insert(0, (f"{c.get('language')} · {c.get('release')} · {n}-grams", str(current)))
+            options.insert(0, (f"{c.get('name')} · {c.get('release')} · {n}-grams", str(current)))
         sel = self.query_one("#corpus-select", Select)
         self._selecting = True
         try:
@@ -1892,7 +1891,7 @@ class LexichronApp(App):
         self.push_screen(NewCorpus(root), lambda d: self._start_new_corpus(d) if d else None)
 
     def _start_new_corpus(self, ident: Dict[str, Any]) -> None:
-        info = corpus_info(ident["db_path_stub"], ident["release"], ident["language"], ident["ngram_size"])
+        info = corpus_info(ident["db_path_stub"], ident["release"], ident["name"], ident["ngram_size"])
         root_input = self.query_one("#corpus-root", Input)
         if root_input.value.strip() != ident["db_path_stub"]:
             root_input.value = ident["db_path_stub"]
@@ -1917,7 +1916,7 @@ class LexichronApp(App):
             remember_settings_path(info.settings)
         else:
             cfg = {"corpus": {"db_path_stub": str(info.root), "release": info.release,
-                              "language": info.language, "ngram_size": info.ngram_size}}
+                              "name": info.name, "ngram_size": info.ngram_size}}
             self.explicit_project = None
         self.reopened = False
         self.config = cfg
@@ -2523,7 +2522,7 @@ class LexichronApp(App):
         log = self.query_one("#run-log", RichLog)
         if not self.selected_run:
             if self.project_path is None:
-                title.update("Fill in the corpus directory, language and n-gram size on the Settings tab; "
+                title.update("Fill in the corpus directory, corpus and n-gram size on the Settings tab; "
                              "that corpus's runs will appear here.")
             else:
                 title.update("No runs yet. Use 'Run here' or 'Submit to Slurm'; runs appear here as they start.")

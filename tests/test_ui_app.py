@@ -28,7 +28,7 @@ def _assert_clean(app):
 def test_app_builds_form_and_preview(tmp_path):
     proj = tmp_path / "project.yaml"
     proj.write_text(
-        "corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 2\n  db_path_stub: /data/\n"
+        "corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 2\n  db_path_stub: /data/\n"
         "acquire:\n  ngram_type: tagged\n  workers: 4\n  file_range: [3, 7]\n"
     )
 
@@ -70,7 +70,7 @@ def test_app_builds_form_and_preview(tmp_path):
         _assert_clean(app)
         import yaml
         saved = yaml.safe_load(proj.read_text())
-        assert saved["acquire"]["workers"] == 8 and saved["corpus"]["language"] == "eng-us"
+        assert saved["acquire"]["workers"] == 8 and saved["corpus"]["name"] == "eng-us"
         assert saved["acquire"]["file_range"] == [3, 7]
         assert saved["corpus"]["release"] == "20200217"
 
@@ -84,10 +84,10 @@ def test_app_without_project_derives_path_from_db_stub(tmp_path):
             await pilot.pause()
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert "(fill in the corpus directory, language and n-gram size)" in str(app.query_one("#dest").content)
-            assert app.query_one("#f-corpus-language", Select).value is Select.NULL
+            assert "(fill in the corpus directory, corpus and n-gram size)" in str(app.query_one("#dest").content)
+            assert app.query_one("#f-corpus-name", Select).value is Select.NULL
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corpora")
-            app.query_one("#f-corpus-language").value = "eng"
+            app.query_one("#f-corpus-name").value = "eng"
             app.query_one("#f-corpus-ngram_size").value = "1"
             await pilot.pause()
             # the settings file goes beside the database it describes
@@ -126,7 +126,7 @@ def test_progress_tab_shows_selected_run(tmp_path):
     import json
     from datetime import datetime, timedelta, timezone
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  db_path_stub: {tmp_path}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  db_path_stub: {tmp_path}\n"
                     "acquire:\n  ngram_size: 1\n")
     now = datetime.now(timezone.utc)
     log = tmp_path / "run.log"
@@ -209,7 +209,7 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
             await app.workers.wait_for_complete()
             await pilot.pause()
             app.query_one("#f-corpus-db_path_stub").value = str(tmp_path / "corp")
-            app.query_one("#f-corpus-language").value = "eng"
+            app.query_one("#f-corpus-name").value = "eng"
             app.query_one("#f-corpus-ngram_size").value = "1"
             await pilot.pause()
             app.action_save()
@@ -223,7 +223,7 @@ def test_reopening_without_argument_restores_last_settings(tmp_path):
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert app.reopened and app.project_path == proj
-            assert app.query_one("#f-corpus-language").value == "eng"
+            assert app.query_one("#f-corpus-name").value == "eng"
             assert "(reopened from last time)" in str(app.query_one("#dest").content)
             # changing which corpus it describes moves the settings file with it
             app.query_one("#f-corpus-ngram_size").value = "2"
@@ -240,7 +240,7 @@ def test_run_whose_job_left_the_queue_is_stopped(tmp_path):
     import json
     from datetime import datetime, timedelta, timezone
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  db_path_stub: {tmp_path}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  db_path_stub: {tmp_path}\n"
                     "acquire:\n  ngram_size: 1\n")
     now = datetime.now(timezone.utc)
 
@@ -289,7 +289,7 @@ def test_run_whose_job_left_the_queue_is_stopped(tmp_path):
 
 def test_stage_selector_switches_form_and_keeps_other_sections(tmp_path):
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
                     "acquire:\n  workers: 4\nfilter:\n  min_len: 4\n")
     db = tmp_path / "20200217" / "eng" / "1gram_files" / "1grams.db"       # acquired: Filter's button is live
     db.mkdir(parents=True); (db / "CURRENT").write_text("x")
@@ -334,7 +334,7 @@ def test_stale_file_handle_does_not_crash_refresh(tmp_path, monkeypatch):
     import json
     import pathlib
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
     run = tmp_path / ".lexichron" / "runs" / "20261010_144558_acquire"
     run.mkdir(parents=True)
     run.joinpath("progress.json").write_text(json.dumps({"state": "running", "started": "2026-10-10T14:45:58+00:00",
@@ -379,7 +379,7 @@ def test_inspect_tab_lists_databases_and_shows_records(tmp_path, monkeypatch):
     corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
     corpus.mkdir(parents=True)
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "filter: {}\n")
     db = fake_rocks.open(str(corpus / "5grams_pivoted.db"), mode="rw", create_if_missing=True)
     with db.write_batch() as wb:
@@ -432,7 +432,7 @@ def test_inspect_tab_shows_provenance_and_year_series(tmp_path, monkeypatch):
     corpus = tmp_path / "corp" / "20200217" / "eng" / "1gram_files"
     corpus.mkdir(parents=True)
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "filter: {}\n")
     db_dir = corpus / "1grams_processed.db"
     db = fake_rocks.open(str(db_dir), mode="rw", create_if_missing=True)
@@ -483,7 +483,7 @@ def test_tune_form_toggles_build_the_grid(tmp_path):
     corpus = tmp_path / "corp" / "20200217" / "eng" / "5gram_files"
     corpus.mkdir(parents=True)
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "tune:\n  vector_size: [100, 300]\n  name: t\nslurm:\n  cpus: 40\n")
 
     async def scenario():
@@ -533,7 +533,7 @@ def test_tune_inspect_shows_the_search_scores(tmp_path):
     search = corpus / "tuning" / "t1"
     search.mkdir(parents=True)
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "tune:\n  name: t1\n")
     (search / "search.json").write_text(json.dumps({"grid": {"vector_size": [100, 300], "window": [2]},
                                                      "sample_years": [1990, 1991, 2010, 2011], "seeds": 2,
@@ -629,7 +629,7 @@ def test_run_asks_before_deleting_earlier_output(tmp_path, monkeypatch):
     db.mkdir(parents=True)
     (db / "000001.sst").write_bytes(b"x" * 4000); (db / "CURRENT").write_text("MANIFEST\n")
     proj = tmp_path / "project.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
                     "filter:\n  mode: restart\n")
     started = []
 
@@ -678,7 +678,7 @@ def test_clear_runs_keeps_every_run_still_going(tmp_path):
     import json
     from datetime import datetime, timedelta, timezone
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  db_path_stub: {tmp_path}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  db_path_stub: {tmp_path}\n"
                     "acquire:\n  ngram_size: 1\n")
     now = datetime.now(timezone.utc)
     runs = tmp_path / ".lexichron" / "runs"
@@ -721,7 +721,7 @@ def test_submit_warns_when_memory_is_too_small_for_the_workers(tmp_path, monkeyp
     from lexichron.ui.app import ConfirmMemory
     stub = tmp_path / "data"
     proj = tmp_path / "project.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
                     "acquire: {}\nslurm:\n  account: acct\n  cpus: 64\n  mem: 16G\n")
     written = []
     monkeypatch.setattr(app_module, "write_sbatch", lambda *a, **k: written.append(k.get("assume_yes")) or (tmp_path / "x.sbatch"))
@@ -775,7 +775,7 @@ def test_restart_submitted_as_a_job_array_deletes_before_the_tasks_start(tmp_pat
     (search / "search.json").write_text("{}"); (search / "models").mkdir()
     (search / "models" / "a.npz").write_bytes(b"x" * 1000)
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "tune:\n  vector_size: [100, 300]\n  name: t\n  mode: restart\n"
                     "slurm:\n  account: acct\n  cpus: 40\n  mem: 64G\n  jobs: 4\n")
 
@@ -840,7 +840,7 @@ def test_train_form_summary_tuned_cell_and_inspect(tmp_path):
         "simlex_rho": 0.35, "simlex_se_mean": 0.004, "wordsim_rho": 0.66, "wordsim_se_mean": 0.006}))
     (ens / "y1991" / "c00_s0.npz").write_bytes(b"x")
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "train:\n  name: e1\n  years: [1990, 1991]\n  corpus_replicates: 2\n  seeds_per_corpus: 2\n"
                     "slurm:\n  cpus: 32\n  jobs: 2\n")
 
@@ -903,7 +903,7 @@ def test_slurm_backend_chosen_at_startup(tmp_path, monkeypatch):
     monkeypatch.setattr("lexichron.ui.app.slurm_backend", bridge.slurm_backend)   # the real chooser
     proj = tmp_path / "project.yaml"
     proj.write_text(
-        "corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 2\n  db_path_stub: /data/\n"
+        "corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 2\n  db_path_stub: /data/\n"
         "acquire:\n  ngram_type: tagged\n  workers: 4\n"
     )
     fake = tmp_path / "bin"; fake.mkdir()
@@ -957,10 +957,10 @@ def test_save_asks_before_replacing_a_file_this_session_did_not_open(tmp_path):
     from textual.widgets import Button
     from lexichron.ui.app import ConfirmReplaceSettings
     opened = tmp_path / "a.yaml"
-    opened.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+    opened.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
     other = tmp_path / "20200217" / "eng" / "2gram_files" / "lexichron.yaml"
     other.parent.mkdir(parents=True)
-    original = (f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 2\n  db_path_stub: {tmp_path}\n"
+    original = (f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 2\n  db_path_stub: {tmp_path}\n"
                 "filter:\n  min_len: 9\ntune:\n  name: precious\n")
     other.write_text(original)
 
@@ -1003,7 +1003,7 @@ def test_save_asks_before_replacing_a_file_this_session_did_not_open(tmp_path):
 def test_submit_tab_says_what_a_job_would_run(tmp_path, monkeypatch):
     from textual.widgets import Static
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
 
     async def scenario(expect: str):
         app = LexichronApp(proj)
@@ -1025,7 +1025,7 @@ def test_jobs_field_appears_only_for_stages_that_split_over_an_array(tmp_path):
     """Acquire and filter write one database and run as one job, so the Jobs
     row would be a no-op there; it is shown for tune and train."""
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n")
 
     async def scenario():
         app = LexichronApp(proj)
@@ -1053,7 +1053,7 @@ def test_submit_tab_resolves_slurm_settings_per_stage_and_saves_them_in_layers(t
     from textual.widgets import Input, Static
     from lexichron.slurm_settings import read_user_defaults
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {tmp_path}\n"
                     "slurm:\n  mem: 30G\n")                                 # an older file: one block for every stage
 
     async def scenario():
@@ -1118,7 +1118,7 @@ def test_corpus_bar_lists_the_root_and_opens_a_corpus_with_its_settings(tmp_path
     from textual.widgets import Button, Input, Select, Static
     root = tmp_path / "corpora"
     one = _corpus_dir(root, "eng", 1, db=True, settings=(
-        f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 1\n  db_path_stub: {root}\n"
+        f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 1\n  db_path_stub: {root}\n"
         "filter:\n  min_len: 9\nslurm:\n  account: proj_x\n"))
     five = _corpus_dir(root, "eng-us", 5, db=True, pivoted=True)
 
@@ -1139,7 +1139,7 @@ def test_corpus_bar_lists_the_root_and_opens_a_corpus_with_its_settings(tmp_path
             await pilot.pause()
             assert app.project_path == one / "lexichron.yaml" and one / "lexichron.yaml" in app._known_settings
             assert app.query_one("#f-filter-min_len", Input).value == "9"         # the file's settings are on the form
-            assert app.query_one("#f-corpus-language").value == "eng"
+            assert app.query_one("#f-corpus-name").value == "eng"
             assert app.query_one("#f-slurm-account", Input).value == "proj_x"
             state = str(app.query_one("#corpus-state", Static).content)
             assert state.startswith("eng · 20200217 · 1-grams: acquired · not filtered") and "settings" in state
@@ -1152,7 +1152,7 @@ def test_corpus_bar_lists_the_root_and_opens_a_corpus_with_its_settings(tmp_path
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert app.project_path == five / "lexichron.yaml" and not (five / "lexichron.yaml").exists()
-            assert app.query_one("#f-corpus-language").value == "eng-us" and app.query_one("#f-corpus-ngram_size").value == "5"
+            assert app.query_one("#f-corpus-name").value == "eng-us" and app.query_one("#f-corpus-ngram_size").value == "5"
             assert app.query_one("#f-filter-min_len", Input).value == "3"          # back to the default: nothing carried over
             assert not app.query_one("#stage-btn-tune", Button).disabled and not app.query_one("#stage-btn-train", Button).disabled
             assert "acquired · filtered" in str(app.query_one("#corpus-state", Static).content)
@@ -1178,7 +1178,7 @@ def test_new_corpus_dialog_starts_at_acquire(tmp_path):
             await pilot.click("#new-create")                                      # nothing filled in: stays open
             await pilot.pause()
             assert isinstance(app.screen, NewCorpus) and "Fill in" in str(app.screen.query_one("#new-error", Static).content)
-            app.screen.query_one("#new-language", Select).value = "ger"
+            app.screen.query_one("#new-name", Select).value = "ger"
             app.screen.query_one("#new-size", Select).value = "3"
             await pilot.pause()
             app.screen._create()                 # the Create button's handler (a click can race the relayout)
@@ -1186,7 +1186,7 @@ def test_new_corpus_dialog_starts_at_acquire(tmp_path):
             await pilot.pause()
             assert not isinstance(app.screen, NewCorpus)
             assert app.stage == "acquire"                                         # the stage that creates it
-            assert app.config["corpus"] == {"db_path_stub": str(root), "release": "20200217", "language": "ger", "ngram_size": 3}
+            assert app.config["corpus"] == {"db_path_stub": str(root), "release": "20200217", "name": "ger", "ngram_size": 3}
             assert app.project_path == root / "20200217" / "ger" / "3gram_files" / "lexichron.yaml"
             assert app.query_one("#stage-btn-filter", Button).disabled and app.query_one("#stage-btn-train", Button).disabled
             assert "new: nothing acquired yet" in str(app.query_one("#corpus-state", Static).content)
@@ -1221,7 +1221,7 @@ def test_measure_stage_form_and_inspect_pane(tmp_path):
     measure_series(5, "20200217", "eng", str(tmp_path / "corp"), ensemble="e1", name="gender", words=["doctor", "nurse"],
                    positive=["he", "man", "king"], negative=["she", "woman", "queen"])
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "measure:\n  ensemble: e1\n  name: gender\n  words: [doctor, nurse]\n"
                     "  positive: [he, man, king]\n  negative: [she, woman, queen]\n")
 
@@ -1283,7 +1283,7 @@ def test_multigram_editor_fills_the_target_and_writes_entries(tmp_path):
     from textual.widgets import Input, Static
     from lexichron.ui.app import MultigramEditor, MultigramField, MultigramRow, multigram_entry
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text("corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: /data/\n"
+    proj.write_text("corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 5\n  db_path_stub: /data/\n"
                     "acquire:\n  combined_multigrams: ['a . i . => A.I.', working class]\n"
                     "  combined_multigrams_case: ['US Army']\n")
     assert multigram_entry(["human", "being"], "human-being") == "human being"
@@ -1348,7 +1348,7 @@ def test_multigram_editor_fills_the_target_and_writes_entries(tmp_path):
 def test_multigram_field_takes_the_editor_result(tmp_path):
     from lexichron.ui.app import MultigramField
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text("corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: /data/\n")
+    proj.write_text("corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 5\n  db_path_stub: /data/\n")
 
     async def scenario():
         app = LexichronApp(str(proj), "acquire")
@@ -1383,7 +1383,7 @@ def test_always_keep_editor_splits_the_two_lists_and_shows_handed_over_tokens(tm
     (raw / "lexichron.json").write_text(json.dumps({"format": 1, "stage": "acquire",
                                                     "settings": {"combined_multigrams": ["a . i . => A.I."]}}))
     proj = corpus / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corp'}\n"
                     "filter:\n  always_include: [he, she]\n  always_include_case: [AI]\n")
 
     async def scenario():
@@ -1450,7 +1450,7 @@ def test_a_corpus_directory_written_with_a_variable_is_used_expanded_and_saved_a
             await app.workers.wait_for_complete()
             await pilot.pause()
             app.query_one("#f-corpus-db_path_stub").value = "$CORPUS_ROOT"
-            app.query_one("#f-corpus-language").value = "eng"
+            app.query_one("#f-corpus-name").value = "eng"
             app.query_one("#f-corpus-ngram_size").value = "1"
             await pilot.pause()
             assert app.project_path == tmp_path / "corpora" / "20200217" / "eng" / "1gram_files" / "lexichron.yaml"

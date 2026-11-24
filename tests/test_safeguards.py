@@ -86,7 +86,7 @@ def project(tmp_path, monkeypatch):
     stub = tmp_path / "data"
     _fill(_corpus_dir(stub) / "5grams_pivoted.db", n=3)
     proj = tmp_path / "project.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 5\n  db_path_stub: {stub}\n"
                     "filter:\n  mode: restart\n")
     monkeypatch.setattr(cli, "_resolve", lambda dotted: _Stage.run)
     import lexichron.provenance as provenance

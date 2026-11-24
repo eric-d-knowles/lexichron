@@ -36,7 +36,7 @@ def test_a_stage_receives_the_expanded_directory_and_the_file_keeps_it_as_writte
     def stage(ngram_size, repo_release_id, repo_corpus_id, db_path_stub, archive_path_stub=None):
         pass
 
-    text = "corpus:\n  release: '20200217'\n  language: eng-us\n  ngram_size: 5\n  db_path_stub: /scratch/$USER/NLP\n"
+    text = "corpus:\n  release: '20200217'\n  name: eng-us\n  ngram_size: 5\n  db_path_stub: /scratch/$USER/NLP\n"
     proj = tmp_path / "lexichron.yaml"; proj.write_text(text)
     cfg = config.load_project(proj)
     assert cfg["corpus"]["db_path_stub"] == "/scratch/$USER/NLP"                 # as written, for saving back

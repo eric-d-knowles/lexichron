@@ -88,36 +88,32 @@ def _target(stage: str, kwargs: Dict[str, Any]) -> Optional[tuple[Path, str, str
     release, lang, stub = kwargs.get("repo_release_id"), kwargs.get("repo_corpus_id"), kwargs.get("db_path_stub")
     if not (n and release and lang and stub):
         return None
+
+    def layout():                       # only when something would be deleted: an unset $VAR is the stage's to report
+        from lexichron.corpora import corpus_layout
+        return corpus_layout(str(stub), int(n), str(release), str(lang))
     if stage == "acquire":
         if not kwargs.get("overwrite_db"):
             return None
-        from ngramprep.ngram_acquire.db.build_path import build_db_path
-        return Path(build_db_path(str(stub), int(n), str(release), str(lang))), f"the raw {n}-gram database", \
-            "acquire.overwrite_db = true"
+        return layout().raw_db, f"the raw {n}-gram database", "acquire.overwrite_db = true"
     if stage == "filter":
         if kwargs.get("mode", "resume") != "restart":
             return None
-        from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
-        paths = derive_paths(str(stub), int(n), str(release), str(lang))
         pivot = kwargs.get("pivot")
         if pivot is None:
             pivot = int(n) > 1
         if pivot:
-            return Path(paths["pivoted_db"]), f"the pivoted {n}-gram database", "filter.mode = restart"
-        return Path(paths["dst_db"]), f"the processed {n}-gram database", "filter.mode = restart"
+            return layout().training_db, f"the pivoted {n}-gram database", "filter.mode = restart"
+        return layout().processed_db, f"the processed {n}-gram database", "filter.mode = restart"
     if stage == "tune":
         if kwargs.get("mode", "resume") != "restart" or not kwargs.get("name"):
             return None                     # an unnamed search gets a fresh timestamp directory
-        from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
-        paths = derive_paths(str(stub), int(n), str(release), str(lang))
-        return Path(paths["pivoted_db"]).parent / "tuning" / str(kwargs["name"]), \
+        return layout().tuning / str(kwargs["name"]), \
             f"the tuning search '{kwargs['name']}' (its models and scores)", "tune.mode = restart"
     if stage == "train":
         if kwargs.get("mode", "resume") != "restart" or not kwargs.get("name"):
             return None                     # an unnamed ensemble gets a fresh timestamp directory
-        from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
-        paths = derive_paths(str(stub), int(n), str(release), str(lang))
-        return Path(paths["pivoted_db"]).parent / "models" / str(kwargs["name"]), \
+        return layout().models / str(kwargs["name"]), \
             f"the model ensemble '{kwargs['name']}' (every year's replicates)", "train.mode = restart"
     if stage == "measure":
         if kwargs.get("mode", "resume") != "restart" or not kwargs.get("name"):
@@ -125,11 +121,9 @@ def _target(stage: str, kwargs: Dict[str, Any]) -> Optional[tuple[Path, str, str
         if kwargs.get("out_dir"):
             return Path(os.path.expandvars(os.path.expanduser(str(kwargs["out_dir"])))), \
                 f"the measure '{kwargs['name']}' (its series and per-year values)", "measure.mode = restart"
-        from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
-        paths = derive_paths(str(stub), int(n), str(release), str(lang))
         ens = str(kwargs.get("ensemble") or "")
         ens_dir = Path(os.path.expandvars(os.path.expanduser(ens))) if ens.startswith(("/", "~", "$")) or "/" in ens \
-            else Path(paths["pivoted_db"]).parent / "models" / ens
+            else layout().models / ens
         return ens_dir / "measures" / str(kwargs["name"]), \
             f"the measure '{kwargs['name']}' of ensemble '{ens_dir.name}' (its series and per-year values)", \
             "measure.mode = restart"

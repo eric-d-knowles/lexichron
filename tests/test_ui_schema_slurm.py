@@ -10,7 +10,7 @@ from ngramprep.ngram_acquire import download_and_ingest_to_rocksdb as acquire
 
 def test_sections_cover_every_visible_argument():
     corpus, stage = stage_sections(acquire, "acquire")
-    assert [f.name for f in corpus.fields] == ["release", "language", "ngram_size", "db_path_stub", "archive_path_stub"]
+    assert [f.name for f in corpus.fields] == ["release", "name", "ngram_size", "db_path_stub", "archive_path_stub"]
     names = {f.name for f in stage.fields}
     assert {"ngram_type", "workers", "overwrite_db", "combined_multigrams", "chunk_entries"} <= names
     assert "ngram_size" not in names

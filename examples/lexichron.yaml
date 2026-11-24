@@ -9,7 +9,7 @@
 
 corpus:
   release: "20200217"          # Google Books Ngrams release (YYYYMMDD)
-  language: eng-us             # corpus id: eng, eng-us, eng-gb, fre, ger, ita, rus, spa, heb, chi-sim
+  name: eng-us                 # which corpus: eng, eng-us, eng-gb, fre, ger, ita, rus, spa, heb, chi-sim
   ngram_size: 1                # 1-5
   db_path_stub: /scratch/USERNAME/NLP_corpora/Google_Books/
   # archive_path_stub: /scratch/USERNAME/NLP_corpora/archives/   # optional .tar.zst archive after ingest

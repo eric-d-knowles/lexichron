@@ -50,7 +50,7 @@ CHOICES: Dict[str, List[str]] = {
     "ngram_size": ["1", "2", "3", "4", "5"],
     "ngram_type": ["tagged", "untagged", "all"],
     "open_type": ["write:packed24", "write", "read:packed24", "read"],
-    "language": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"],
+    "corpus.name": ["eng", "eng-us", "eng-gb", "eng-fiction", "chi-sim", "fre", "ger", "heb", "ita", "rus", "spa"],
     "mode": ["resume", "restart"],
     "text_language": ["en", "fr", "de", "it", "es", "ru", "he", "zh"],
     "unk_mode": ["strip", "reject", "retain"],
@@ -67,7 +67,7 @@ GRID_AXES = ("vector_size", "window", "min_count", "epochs", "approach", "weight
 
 # Preferred order within a section (what to get, then how); anything not listed
 # follows in signature order.
-ORDER = ["release", "language", "ngram_size", "db_path_stub",
+ORDER = ["release", "corpus.name", "ngram_size", "db_path_stub",
          "ngram_type", "combined_multigrams", "overwrite_db", "file_range",
          # filter
          "lowercase", "lemmatize", "lemmatize_by_tag", "drop_stopwords", "alpha_only", "ascii_only", "min_len",
@@ -75,14 +75,14 @@ ORDER = ["release", "language", "ngram_size", "db_path_stub",
          "pivot", "output_vocabulary", "output_vocabulary_top_n", "output_vocabulary_year_range", "mode",
          "workers"]
 ORDER_BY_STAGE = {
-    "tune": ["release", "language", "ngram_size", "db_path_stub",
+    "tune": ["release", "corpus.name", "ngram_size", "db_path_stub",
              "years", "sample_years", "year_pairs", "vector_size", "window", "min_count", "epochs", "approach",
              "weight_by", "seeds", "split_half", "unk_mode", "name", "mode", "workers", "workers_per_model"],
-    "train": ["release", "language", "ngram_size", "db_path_stub",
+    "train": ["release", "corpus.name", "ngram_size", "db_path_stub",
               "years", "vector_size", "window", "min_count", "epochs", "approach", "weight_by",
               "corpus_replicates", "seeds_per_corpus", "resampling", "unk_mode", "name", "mode", "workers",
               "workers_per_model"],
-    "measure": ["release", "language", "ngram_size", "db_path_stub",
+    "measure": ["release", "corpus.name", "ngram_size", "db_path_stub",
                 "ensemble", "name", "kind", "words", "words_file", "positive", "negative", "poles_file", "target",
                 "years", "mode", "workers"],
 }
@@ -92,7 +92,7 @@ ORDER_BY_STAGE = {
 # for a parameter two stages share under one name but mean differently.
 LABELS: Dict[str, str] = {
     "release": "Release",
-    "language": "Language",
+    "corpus.name": "Corpus",
     "db_path_stub": "Corpus directory",
     "archive_path_stub": "Archive directory",
     "ngram_size": "N-gram size",
@@ -175,7 +175,7 @@ LABELS: Dict[str, str] = {
 # User-facing help, where the docstring is too terse or too technical.
 HELP: Dict[str, str] = {
     "release": "Google Books n-gram release. Only the February 2020 release is supported.",
-    "language": "Which Google Books corpus (eng = all English, eng-us, eng-gb, eng-fiction, ...).",
+    "corpus.name": "Which Google Books corpus (eng = all English, eng-us, eng-gb, eng-fiction, ...).",
     "db_path_stub": ("Where Google Books corpora are kept, e.g. /scratch/<you>/NLP_corpora/Google_Books. "
                      "Each corpus goes in <dir>/<release>/<language>/<n>gram_files/, with its database, "
                      "this settings file and its run logs. Created if missing."),
@@ -417,22 +417,32 @@ def stage_sections(func: Callable[..., Any], stage: str) -> List[Section]:
         default = None if p.default is inspect.Parameter.empty else p.default
         required = p.default is inspect.Parameter.empty
         key = api_to_corpus.get(pname, pname)
-        kind = _kind_for(ann, default, key, stage)
-        choices = CHOICES.get(key)
+        # A corpus key can share its name with a stage's own setting (the corpus's
+        # name, a search's name): its choices, label, help and place are looked up
+        # as corpus.<key> first.
+        ckey = f"corpus.{key}" if pname in api_to_corpus else key
+        kind = "choice" if ckey in CHOICES else _kind_for(ann, default, key, stage)
+        choices = CHOICES.get(ckey) or CHOICES.get(key)
         if kind == "grid":
             from lexichron.training.grid import AXIS_BY_NAME
             axis = AXIS_BY_NAME[key]
             choices = [str(v) for v in axis.presets]
             default = list(axis.default)
         f = Field(key, kind, default, required,
-                  choices, HELP.get(f"{stage}.{key}") or HELP.get(key) or docs.get(pname, ""),
+                  choices, (HELP.get(ckey) if ckey != key else None) or HELP.get(f"{stage}.{key}") or HELP.get(key)
+                  or docs.get(pname, ""),
                   api_name=pname if key != pname else None,
-                  label=LABELS.get(f"{stage}.{key}") or LABELS.get(key),
+                  label=(LABELS.get(ckey) if ckey != key else None) or LABELS.get(f"{stage}.{key}") or LABELS.get(key),
                   advanced=key in ADVANCED)
         (corpus if pname in api_to_corpus else stage_sec).fields.append(f)
     order = ORDER_BY_STAGE.get(stage, ORDER)
+    def place(section: str, f: Field) -> int:
+        for k in ((f"corpus.{f.name}",) if section == "corpus" else ()) + (f.name,):
+            if k in order:
+                return order.index(k)
+        return len(order)
     for sec in (corpus, stage_sec):
-        sec.fields.sort(key=lambda f: order.index(f.name) if f.name in order else len(order))
+        sec.fields.sort(key=lambda f, name=sec.name: place(name, f))
     return [corpus, stage_sec]
 
 

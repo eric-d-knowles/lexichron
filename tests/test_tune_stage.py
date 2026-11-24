@@ -243,7 +243,7 @@ def test_cli_runs_tune_from_a_settings_file(rocks, tmp_path, monkeypatch):
     import lexichron.stages.tune as tune_mod
     monkeypatch.setattr(tune_mod, "ProcessPoolExecutor", Inline)
     proj = tmp_path / "lexichron.yaml"
-    proj.write_text(f"corpus:\n  release: '20200217'\n  language: eng\n  ngram_size: 5\n  db_path_stub: {stub}\n"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {stub}\n"
                     "tune:\n  years: [1990, 1991]\n  sample_years: [1990, 1991]\n  vector_size: [8]\n  window: 2\n"
                     "  min_count: 2\n  epochs: 1\n  seeds: 2\n  split_half: false\n  name: cli\n  workers: 1\n"
                     "  probes_per_decile: 2\n")

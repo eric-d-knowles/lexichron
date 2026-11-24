@@ -191,7 +191,7 @@ def test_cli_runs_train_from_a_settings_file(rocks, tmp_path, monkeypatch):
     monkeypatch.setattr(train_mod, "_pool", lambda n: __import__("concurrent.futures").futures.ThreadPoolExecutor(max_workers=n))
     project = tmp_path / "lexichron.yaml"
     project.write_text(yaml.safe_dump({
-        "corpus": {"release": "20200217", "language": "eng", "ngram_size": 5, "db_path_stub": str(stub)},
+        "corpus": {"release": "20200217", "name": "eng", "ngram_size": 5, "db_path_stub": str(stub)},
         "train": {"years": [1990, 1990], "vector_size": 8, "window": 2, "min_count": 2, "epochs": 1,
                   "corpus_replicates": 2, "seeds_per_corpus": 2, "name": "cli", "workers": 2, "workers_per_model": 1},
     }))

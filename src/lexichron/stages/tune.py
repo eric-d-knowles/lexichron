@@ -45,7 +45,7 @@ from lexichron.training.scores import (PAIRS_FILE, RESULTS_FILE, SUMMARY_FILE, S
                                        read_tsv_rows, write_json)
 from lexichron.training.trainer import TrainFn, Vectors, load_vectors, save_vectors, train_model
 from ngramprep.ngram_acquire.progress import ProgressReporter
-from ngramprep.ngram_filter.pipeline.orchestrator import derive_paths
+from lexichron.corpora import corpus_layout
 
 __all__ = ["tune_models", "sample_years", "plan_models", "summarize_results"]
 
@@ -146,8 +146,8 @@ def tune_models(
         array_count: How many tasks the job array has
         progress_path: Progress document for the UI
     """
-    paths = derive_paths(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
-    db_path = Path(paths["pivoted_db"])
+    layout = corpus_layout(db_path_stub, ngram_size, repo_release_id, repo_corpus_id)
+    db_path = layout.training_db
     if not db_path.is_dir():
         raise FileNotFoundError(f"pivoted database not found: {db_path} (run the filter stage first)")
     if unk_mode not in UNK_MODES:
@@ -195,7 +195,7 @@ def tune_models(
         # four models with every thread it has rather than four each
         return max(per_model, total_cpus // max(1, min(n_models, parallel)))
 
-    whitelist = derive_paths(db_path_stub, 1, repo_release_id, repo_corpus_id)["whitelist"]
+    whitelist = layout.shared_vocabulary
     vocab_words = _read_vocabulary(whitelist) if Path(whitelist).is_file() else []
     sim_sets = _similarity_sets(similarity_dataset)
     ana_set = analogy_dataset or benchmarks.bundled_dataset("questions-words.txt")

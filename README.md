@@ -401,7 +401,7 @@ Pipeline stages can also be run from a settings file instead of a notebook.
 The file holds the settings a notebook's setup cells would hold, named exactly
 as in the stage's Python function; `examples/lexichron.yaml` is a commented
 template. One file describes one corpus: a shared `corpus` section (release,
-language, n-gram size, database directory) and a section per stage.
+name, n-gram size, database directory) and a section per stage.
 
 ```bash
 lexichron acquire lexichron.yaml                       # download and ingest
@@ -708,12 +708,12 @@ that uses that environment.)
 Above the tabs, two bars:
 
 - **Corpus** — the corpus everything below acts on. Type the directory that
-  holds your corpora (the one `<release>/<language>/<N>gram_files` folders
+  holds your corpora (the one `<release>/<name>/<N>gram_files` folders
   live under) and pick one of those found; the line beneath says how far it
   has got (acquired, filtered, how many searches and ensembles) and where its
   settings file is. Choosing a corpus opens that file, so the form always
   describes the corpus you are looking at. *New corpus* asks for the
-  directory, language and n-gram size of one that does not exist yet and
+  directory, corpus and n-gram size of one that does not exist yet and
   takes you to Acquire, the stage that creates it. The UI remembers the
   directory and the last settings file between sessions.
 - **Stage** — *Acquire*, *Filter*, *Tune* and *Train* choose the stage that
@@ -728,7 +728,7 @@ Tabs:
   corpus itself is named at the top of the form and chosen on the bar. Hover a `?` (or press F1) for help on a setting. Missing or
   invalid settings are reported at the top as you type. *Save* writes the
   settings file beside the database it describes,
-  `<corpus directory>/<release>/<language>/<n>gram_files/lexichron.yaml`, so
+  `<corpus directory>/<release>/<name>/<n>gram_files/lexichron.yaml`, so
   each corpus carries its own settings; that corpus's runs, logs and
   progress go in `.lexichron/` next to it. If that file exists but was not
   the one opened (the UI was started with no path, or the corpus fields
@@ -886,7 +886,7 @@ serves everyone on a cluster. A variable that is not set is an error, not a
 directory named `$USER`.
 
 ```
-{db_path_stub}/{release}/{language}/{N}gram_files/
+{db_path_stub}/{release}/{name}/{N}gram_files/
     {N}grams.db                 raw n-grams as downloaded (acquire)
     {N}grams.db/lexichron.json  how the database was made (every database
                                 a stage writes carries one; see below)
