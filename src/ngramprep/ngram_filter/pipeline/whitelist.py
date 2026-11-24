@@ -154,6 +154,7 @@ def _rank_all_counter(
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
         bin_size: int = 1,
+        required: Optional[set] = None,
 ) -> List[Tuple[Union[str, bytes], int]]:
     """Use Counter for better performance on frequency operations.
 
@@ -182,7 +183,7 @@ def _rank_all_counter(
         for k, v in _iter_db_items(db):
             # Apply year range filter if enabled
             if year_range is not None:
-                if not _check_year_coverage(v, year_range, bin_size):
+                if not _check_year_coverage(v, year_range, bin_size, required):
                     continue
 
             # Apply spell check filter if enabled
@@ -195,19 +196,79 @@ def _rank_all_counter(
     return counter.most_common()
 
 
-def _check_year_coverage(value_bytes: bytes, year_range: tuple[int, int], bin_size: int = 1) -> bool:
+def _range_years(year_range: tuple[int, int], bin_size: int = 1) -> set:
+    """The years (or, with bins, the bin starts) a year range covers."""
+    start_year, end_year = int(year_range[0]), int(year_range[1])
+    if bin_size > 1:
+        from ngramprep.ngram_filter.year_binning import get_bin_start
+        first, last = get_bin_start(start_year, bin_size), get_bin_start(end_year, bin_size)
+        return set(range(first, last + bin_size, bin_size))
+    return set(range(start_year, end_year + 1))
+
+
+def years_held(db_or_path: Union[str, Path, "rs.DB"], year_range: tuple[int, int], bin_size: int = 1) -> set:
+    """The years (bin starts, with bins) of ``year_range`` for which the
+    database holds any record at all.
+
+    A token is required to occur in every year of the range, and a year the
+    corpus has no text for would rule out every token: COHA ends in 2009,
+    so asking a COHA vocabulary for 1968 to 2019 kept nothing but the words
+    kept by request. Only the years that have data are required. The scan
+    stops as soon as every year of the range has been seen, which in a
+    corpus that covers the range is within the first records."""
+    wanted = _range_years(year_range, bin_size)
+    seen: set = set()
+    with _db_from(db_or_path) as db:
+        for _k, v in _iter_db_items(db):
+            usable = (len(v) // TUPLE_SIZE) * TUPLE_SIZE
+            for (year, _match, _vol) in struct.iter_unpack(FMT, v[:usable]):
+                if year in wanted:
+                    seen.add(year)
+            if len(seen) == len(wanted):
+                break
+    return seen
+
+
+def describe_years(years, step: int = 1) -> str:
+    """1968-1971, 1975, 1980-2009: runs of consecutive years (of bins
+    ``step`` apart, with bins) joined, for a message."""
+    ys = sorted(int(y) for y in years)
+    if not ys:
+        return "none"
+    runs, start, prev = [], ys[0], ys[0]
+    for y in ys[1:]:
+        if y != prev + step:
+            runs.append((start, prev)); start = y
+        prev = y
+    runs.append((start, prev))
+    return ", ".join(str(a) if a == b else f"{a}-{b}" for a, b in runs)
+
+
+def _check_year_coverage(value_bytes: bytes, year_range: tuple[int, int], bin_size: int = 1,
+                         required: Optional[set] = None) -> bool:
     """Check if an ngram has data for all years/bins in the specified range.
 
     Args:
         value_bytes: Packed records (<QQQ format)
         year_range: (start_year, end_year) inclusive range
         bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
+        required: The years (bin starts) that must be present, when only some
+            of the range's are (see :func:`years_held`); default: all of them
 
     Returns:
         True if ngram appears in all years/bins within range, False otherwise
     """
     if len(value_bytes) < TUPLE_SIZE:
         return False
+
+    if required is not None:
+        need = set(required)
+        usable = (len(value_bytes) // TUPLE_SIZE) * TUPLE_SIZE
+        for (year, _match, _vol) in struct.iter_unpack(FMT, value_bytes[:usable]):
+            need.discard(year)
+            if not need:
+                return True
+        return not need
 
     start_year, end_year = year_range
 
@@ -259,6 +320,7 @@ def _top_k_optimized(
         spell_check_language: str = "en_US",
         year_range: Optional[tuple[int, int]] = None,
         bin_size: int = 1,
+        required: Optional[set] = None,
 ) -> List[Tuple[Union[str, bytes], int]]:
     """Streaming top-K via min-heap (RAM ~ O(K)) with optimizations.
 
@@ -292,7 +354,7 @@ def _top_k_optimized(
         for kbytes, vbytes in _iter_db_items(db):
             # Apply year range filter if enabled
             if year_range is not None:
-                if not _check_year_coverage(vbytes, year_range, bin_size):
+                if not _check_year_coverage(vbytes, year_range, bin_size, required):
                     continue
 
             tot = _total_matches(vbytes)
@@ -329,6 +391,7 @@ def write_whitelist_streaming(
         year_range: Optional[tuple[int, int]] = None,
         bin_size: int = 1,
         keep=None,
+        required: Optional[set] = None,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc) using streaming.
@@ -350,10 +413,14 @@ def write_whitelist_streaming(
         sep: Separator between token and count
         spell_check: If True, only include correctly spelled words
         spell_check_language: Language for spell checking (default: en_US)
-        year_range: Optional (start_year, end_year) tuple - only include ngrams present in all years
+        year_range: Optional (start_year, end_year) tuple - only include ngrams present in every
+            year of it that the database has any record for (see :func:`years_held`)
         bin_size: Size of year bins (1 = annual data, 5 = 5-year bins, etc.)
+        required: Those years, when the caller has found them already
     """
     dest = Path(dest)
+    if year_range is not None and required is None:
+        required = years_held(db_or_path, year_range, bin_size)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(dest.suffix + ".tmp")
 
@@ -365,7 +432,8 @@ def write_whitelist_streaming(
                 spell_check=spell_check,
                 spell_check_language=spell_check_language,
                 year_range=year_range,
-                bin_size=bin_size
+                bin_size=bin_size,
+                required=required,
             )
         else:
             # Use streaming approach with Counter for better performance
@@ -374,7 +442,8 @@ def write_whitelist_streaming(
                 spell_check=spell_check,
                 spell_check_language=spell_check_language,
                 year_range=year_range,
-                bin_size=bin_size
+                bin_size=bin_size,
+                required=required,
             )
 
         if keep and top is not None:
@@ -411,6 +480,7 @@ def write_whitelist(
         year_range: Optional[tuple[int, int]] = None,
         bin_size: int = 1,
         keep=None,
+        required: Optional[set] = None,
 ) -> Path:
     """
     Write a plain TXT file of tokens ranked by total frequency (desc).
@@ -434,7 +504,7 @@ def write_whitelist(
     return write_whitelist_streaming(
         db_or_path, dest, top=top, decode=decode, sep=sep,
         spell_check=spell_check, spell_check_language=spell_check_language,
-        year_range=year_range, bin_size=bin_size, keep=keep
+        year_range=year_range, bin_size=bin_size, keep=keep, required=required
     )
 
 

@@ -568,7 +568,11 @@ each time:
    n-gram, a packed list of per-year counts each) and, from it,
    `1grams_processed.db/whitelist.txt`: the `output_vocabulary_top_n` most
    frequent lemmas, optionally only those present in every year of
-   `output_vocabulary_year_range` and optionally spell-checked.
+   `output_vocabulary_year_range` and optionally spell-checked. Only the
+   years the corpus has text for are required: a range that runs past the
+   corpus's end (COHA ends in 2009) asks nothing of the years beyond it,
+   and the run says which years it left out. A range with no text at all
+   is refused, and a vocabulary far smaller than asked for is warned about.
 2. **Longer n-grams** use that whitelist (by default this corpus's own; a
    token is kept only if its lemma is in it) and write `<n>grams_pivoted.db` directly: keyed by year then
    n-gram, one record per (year, n-gram), which is what training reads.

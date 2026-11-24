@@ -392,3 +392,55 @@ def test_models_are_tuned_and_trained_on_a_davies_corpus_s_sentences(tmp_path, m
                         (measure.measure_series, {"ensemble": "e1", "name": "m2"})):
         with pytest.raises(ValueError, match="trained on a Davies corpus's sentences"):
             stage(None, None, "coha", str(stub), source="davies", unit="tokens", **call)
+
+
+def test_the_vocabulary_s_year_range_asks_only_for_the_years_the_corpus_has(coha, tmp_path, monkeypatch):
+    """A token must occur in every year of output_vocabulary_year_range. A
+    range that runs past the corpus's end (COHA ends in 2009; asked for
+    1968-2019) kept no token at all, the always-keep words apart: only the
+    years with text are required now, and a range with none is refused."""
+    import fake_rocks
+    import ngramprep.ngram_filter.lemmatizer as lm
+    import ngramprep.ngram_filter.stopwords as sw
+    from ngramprep.common_db import api
+    from ngramprep.ngram_filter.pipeline.orchestrator import FilterError
+    from ngramprep.ngram_filter.pipeline.whitelist import describe_years, years_held
+    from lexichron.stages.filter import filter_ngrams
+    fake_rocks.reset()
+    monkeypatch.setattr(api, "rs", fake_rocks)
+
+    class Lemmatizer:
+        def __init__(self, language=None, use_tags=True, **kw):
+            self._use_tags = use_tags
+        def lemmatize(self, word, pos=None):
+            return {("buildings", "NOUN"): "building", ("stood", "VERB"): "stand"}.get((word, pos), word)
+
+    monkeypatch.setattr(sw, "load_stopwords", lambda lang: ({"the", "was", "one"}, lang))
+    monkeypatch.setattr(lm, "CachedSpacyLemmatizer", Lemmatizer)
+    stub = tmp_path / "corpora"
+    words = corpus_layout(stub, None, None, "coha", source="davies", unit="tokens")
+    db = fake_rocks.open(str(words.raw_db), mode="rw", create_if_missing=True)
+    process_files([str(p) for p in archives(coha, COHA, "tagged")], ThreadPoolExecutor, 2, db,
+                  spool_dir=str(tmp_path / "spool"), worker_fn=process_archive,
+                  worker_kwargs=dict(corpus="coha", ngram_type="tagged", unit="tokens"))
+    db.compact_all()
+    db.close()
+
+    def vocabulary(year_range, **kw):
+        filter_ngrams(None, None, "coha", str(stub), source="davies", unit="tokens", workers=2, mode="restart",
+                      spool_dir=str(tmp_path), verify_counts=False, output_vocabulary_year_range=year_range,
+                      always_include=["he"], **kw)
+        return [line.split("\t")[0] for line in words.vocabulary.read_text().splitlines()]
+
+    # the corpus has 1815, 1817 and 1821: those are required, the other years of the range are not
+    assert years_held(words.raw_db, (1810, 1830)) == {1815, 1817, 1821}
+    assert describe_years({1815, 1816, 1817, 1821}) == "1815-1817, 1821" and describe_years(set()) == "none"
+    assert describe_years({1815, 1817}) == "1815, 1817" and describe_years({1810, 1820, 1840}, 10) == "1810-1820, 1840"
+    assert vocabulary([1810, 1830]) == ["building", "stand", "he"]          # in all three years, then the kept word
+    assert vocabulary([1815, 1817]) == ["building", "stand", "he"]          # 1815 and 1817 (1816 has no text)
+    one_year = set(vocabulary([1815, 1815]))
+    assert {"building", "stand", "better", "fall", "slowly", "he"} <= one_year and "art" not in one_year
+    # with decades the corpus has the 1810s and the 1820s, and "art" (1817, 1821) is in both
+    assert set(vocabulary([1810, 2019], bin_size=10)) == {"building", "stand", "art", "he"}
+    with pytest.raises(FilterError, match="year range 1968-2019 holds no data"):
+        vocabulary([1968, 2019])

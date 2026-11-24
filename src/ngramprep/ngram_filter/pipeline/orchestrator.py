@@ -27,7 +27,7 @@ from ngramprep.rangemap import RangeMapConfig, UNIT_MARKER_PREFIX, run_rangemap
 from ngramprep.utilities.display import format_banner, truncate_path_to_fit
 from .mapper import FilterMapper, PivotFilterMapper
 from .setup import PipelineSetup
-from .whitelist import write_whitelist
+from .whitelist import _range_years, describe_years, write_whitelist, years_held
 
 logger = logging.getLogger(__name__)
 
@@ -366,12 +366,40 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
         # told again, and the file lists every word that corpus can hold.
         from ..filters.processor_factory import kept_forms
         keep = kept_forms(filter_config)
+        required = None
+        yr = pc.output_whitelist_year_range
+        if yr:
+            # A token must occur in every year of the range, but only the years the
+            # corpus has text for can be asked of it: a range that runs past the
+            # corpus's end (COHA's is 2009) would otherwise keep no token at all.
+            bins = int(filter_config.bin_size or 1)
+            wanted = _range_years(yr, bins)
+            required = years_held(pc.dst_db, yr, bins)
+            unit = "bins" if bins > 1 else "years"
+            if not required:
+                progress.finish("failed", f"no data in the vocabulary's year range {yr[0]}-{yr[1]}")
+                raise FilterError(
+                    f"The vocabulary's year range {yr[0]}-{yr[1]} holds no data: the filtered database has no "
+                    f"record in any of those {unit}, so no token could qualify. Set output_vocabulary_year_range "
+                    f"to years the corpus covers, or clear it. The filtered database itself is complete; "
+                    f"a re-run in resume mode only writes the vocabulary.")
+            missing = wanted - required
+            if missing:
+                note = (f"  Years: tokens present in every one of the {len(required):,} {unit} of {yr[0]}-{yr[1]} "
+                        f"the corpus has text for ({describe_years(required, bins)}); {describe_years(missing, bins)} "
+                        f"{'has' if len(missing) == 1 else 'have'} none and {'is' if len(missing) == 1 else 'are'} "
+                        f"not required")
+                print(note)
+                logger.warning("Vocabulary year range %s-%s: the corpus has no data for %s; tokens are required "
+                               "in the %d %s it has (%s)", yr[0], yr[1], describe_years(missing, bins), len(required),
+                               unit, describe_years(required, bins))
+            else:
+                print(f"  Years: tokens present in every one of the {len(required):,} {unit} of {yr[0]}-{yr[1]}")
         with progress.long_phase("whitelist"):
             write_whitelist(db_or_path=pc.dst_db, dest=wl, top=pc.output_whitelist_top_n,
                             decode=True, sep="\t", spell_check=pc.output_whitelist_spell_check,
                             spell_check_language=pc.output_whitelist_spell_check_language,
-                            year_range=pc.output_whitelist_year_range,
-                            bin_size=filter_config.bin_size, keep=keep)
+                            year_range=yr, bin_size=filter_config.bin_size, keep=keep, required=required)
         try:
             with open(wl, "r", encoding="utf-8") as fh:
                 words = [line.split("\t", 1)[0] for line in fh]
@@ -385,6 +413,16 @@ def run_filter_pipeline(filter_config: FilterConfig, pipeline_config: PipelineCo
                             "that rank below them: %s", n, top, len(added), shown)
             else:
                 print(f"  {n:,} tokens")
+            ranked = n - len(added)
+            if top and ranked < min(top, 100):
+                # far fewer than asked for: something in the settings excludes nearly everything
+                why = ("the year range" if yr else "") + (" and " if yr and pc.output_whitelist_spell_check else "") + \
+                      ("the spell check" if pc.output_whitelist_spell_check else "")
+                text = (f"Only {ranked:,} token{'s' if ranked != 1 else ''} qualified for a vocabulary of {top:,}"
+                        + (f" (besides {len(added)} kept by request)" if added else "")
+                        + (f": check {why}" if why else "") + ".")
+                print("  Warning: " + text)
+                logger.warning("%s", text)
         except OSError:
             pass
 

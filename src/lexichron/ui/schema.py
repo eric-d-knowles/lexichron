@@ -274,7 +274,8 @@ HELP: Dict[str, str] = {
                        "after the top N, so listing a word there keeps it in the longer n-grams too."),
     "output_vocabulary": "Write the vocabulary (whitelist.txt) from the result. Blank: on for unigrams and a Davies corpus's tokens, off for longer n-grams and sentences. The blank field shows which applies to this corpus.",
     "output_vocabulary_top_n": "How many of the most frequent tokens the vocabulary keeps.",
-    "output_vocabulary_year_range": "Only tokens present in every year of this range, e.g. 1968 to 2019.",
+    "output_vocabulary_year_range": ("Only tokens present in every year of this range, e.g. 1968 to 2019. Years "
+                                     "the corpus has no text for (after COHA's 2009, say) are not required."),
     "output_vocabulary_spell_check": "Only correctly spelled tokens (enchant dictionary).",
     "mode": "resume = continue from what the destination already has; restart = delete it first.",
     "filter.workers": "Parallel filtering workers. Blank = one per CPU, minus one. Slurm jobs use the job's CPU count automatically.",
