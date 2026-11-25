@@ -76,7 +76,8 @@ from lexichron.training.grid import AXIS_BY_NAME, Grid as HyperGrid
 from lexichron.ui.progress_view import bar_state, fmt_count, fmt_duration, meters, notice_text, summarize, tail_lines
 from lexichron.ui.schema import (CHOICES, DAVIES_CORPORA, Field, NGRAM_CORPORA, SLURM_FIELDS, Section,
                                  stage_sections)
-from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, read_user_defaults,
+from lexichron.slurm_settings import (STAGE_KEYS, USER_KEYS, describe_sources, guidance as slurm_guidance,
+                                      read_user_defaults,
                                       resolve as resolve_slurm, seed_user_defaults, stage_override,
                                       state_dir as _state_dir, write_user_defaults)
 from lexichron.ui.slurm import ARRAY_STAGES, array_size, stage_command, write_sbatch
@@ -1082,6 +1083,37 @@ class LexichronApp(App):
         corpus = (self.config if config is None else config).get("corpus") or {}
         return "davies" if str(corpus.get("source") or "").lower() == "davies" else "ngrams"
 
+    def _slurm_kind(self) -> Dict[str, Any]:
+        """The kind of corpus lexichron's Slurm defaults depend on: its source
+        and, for a Davies corpus, its unit."""
+        corpus = self.config.get("corpus") or {}
+        return {"source": self._source(), "unit": str(corpus.get("unit") or "sentences")}
+
+    def _archive_count(self) -> Optional[int]:
+        """How many archives a Davies acquire run would read (one per
+        worker), from the settings' source directory; None when unknown."""
+        try:
+            from lexichron.davies.formats import corpus_format
+            from lexichron.davies.reader import archives
+            corpus = self.config.get("corpus") or {}
+            sec = self.config.get("acquire") or {}
+            src = sec.get("source_dir")
+            if not src:
+                return None
+            return len(archives(expand_directory(str(src), "source directory"), corpus_format(str(corpus["name"])),
+                                str(sec.get("ngram_type") or "tagged")))
+        except Exception:
+            return None
+
+    def _refresh_guidance(self) -> None:
+        """The Submit tab's sizing note for this stage and kind of corpus."""
+        kind = self._slurm_kind()
+        count = self._archive_count() if self.stage == "acquire" and kind["source"] == "davies" else None
+        try:
+            self.query_one("#submit-guide", Static).update(slurm_guidance(self.stage, archives=count, **kind))
+        except Exception:
+            pass
+
     def _identity_hint(self) -> str:
         """What is still needed before these settings name a corpus."""
         if self._source() == "davies":
@@ -1194,6 +1226,7 @@ class LexichronApp(App):
                     for f in SLURM_FIELDS.fields:
                         yield from self._field_widgets("slurm", f)
                     yield Static("", id="submit-sources", classes="muted")
+                    yield Static("", id="submit-guide", classes="muted")
                     with Horizontal(classes="actions"):
                         yield Button("Write batch script", id="write-sbatch")
                         yield Button("Submit to Slurm", id="submit", variant="primary")
@@ -1482,7 +1515,7 @@ class LexichronApp(App):
     def _slurm_resolved(self) -> Dict[str, Any]:
         """The Slurm settings a job of the current stage would get, from the
         saved settings and the user's defaults (not the form)."""
-        return resolve_slurm(self.stage, self.config.get("slurm"))[0]
+        return resolve_slurm(self.stage, self.config.get("slurm"), **self._slurm_kind())[0]
 
     def _collect(self) -> Dict[str, Any]:
         cfg: Dict[str, Any] = {}
@@ -2327,7 +2360,7 @@ class LexichronApp(App):
 
     def _slurm_cfg(self) -> Dict[str, Any]:
         """What a job of this stage gets, with the Submit tab's values as typed."""
-        return resolve_slurm(self.stage, self._collect().get("slurm"))[0]
+        return resolve_slurm(self.stage, self._collect().get("slurm"), **self._slurm_kind())[0]
 
     def _populate_slurm(self) -> None:
         """Show the stage's resolved Slurm settings on the Submit tab."""
@@ -2338,6 +2371,7 @@ class LexichronApp(App):
             if w.value != text:
                 w.value = text
         self._refresh_sources_line()
+        self._refresh_guidance()
 
     def _stash_slurm(self) -> None:
         """Keep the Submit tab's values for the stage being left, so coming
@@ -2359,7 +2393,7 @@ class LexichronApp(App):
         except ConfigError as exc:
             self.query_one("#submit-sources", Static).update(str(exc))
             return
-        values, sources = resolve_slurm(self.stage, self._saved_slurm)
+        values, sources = resolve_slurm(self.stage, self._saved_slurm, **self._slurm_kind())
         for key, typed in form.items():
             if key == "jobs" and self.stage not in ARRAY_STAGES:
                 continue

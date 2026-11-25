@@ -64,3 +64,29 @@ def test_no_script_without_an_account(tmp_path, monkeypatch):
     with pytest.raises(ConfigError, match="no Slurm account"):
         write_sbatch(yaml_path, "train", {"cpus": 64, "mem": "64G", "time": "1-00:00:00"})
     assert not yaml_path.with_suffix(".train.sbatch").exists()
+
+
+def test_a_davies_corpus_has_its_own_smaller_defaults(state):
+    from lexichron.resources import memory_estimate
+    from lexichron.slurm_settings import guidance
+    values, sources = resolve("acquire", None, {}, source="davies", unit="tokens")
+    assert values == {"cpus": 20, "mem": "12G", "time": "01:00:00"}
+    assert sources["cpus"] == "lexichron's default for acquire, Davies tokens"
+    assert resolve("filter", None, {}, source="davies", unit="tokens")[0]["mem"] == "8G"
+    assert resolve("filter", None, {}, source="davies", unit="sentences")[0] == \
+        {"cpus": 20, "mem": "16G", "time": "00:30:00"}
+    train, _ = resolve("train", None, {}, source="davies")
+    assert train["cpus"] == 32 and train["jobs"] == 3 and train["time"] == "12:00:00"
+    # the corpus's own settings still win, and an n-gram corpus keeps its defaults
+    assert resolve("acquire", {"acquire": {"cpus": 8}}, {}, source="davies", unit="sentences")[0]["cpus"] == 8
+    assert resolve("acquire", None, {})[0]["cpus"] == 40
+    # the defaults fit the memory estimate for a Davies corpus
+    for stage, unit in (("acquire", "tokens"), ("filter", "tokens"), ("filter", "sentences"), ("tune", "sentences"),
+                        ("train", "sentences")):
+        slurm, _ = resolve(stage, None, {}, source="davies", unit=unit)
+        est = memory_estimate(stage, {"source": "davies", "unit": unit}, slurm)
+        assert est.fits, (stage, unit, est.describe())
+    assert "20 archives, so CPUs past 20 sit idle" in guidance("acquire", "davies", "tokens", archives=20)
+    assert "raise the time, not the CPUs" in guidance("acquire", "davies", "sentences")
+    assert guidance("filter", "davies", "tokens") != guidance("filter", "davies", "sentences")
+    assert guidance("acquire").startswith("Sizing: acquisition gains little past 40")

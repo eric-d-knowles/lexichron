@@ -58,6 +58,11 @@ ACQUIRE_BASE, ACQUIRE_PER_WORKER, ACQUIRE_CHUNK_ENTRIES = 3_000, 600, 200_000
 FILTER_BASE = 4_000
 FILTER_PER_WORKER = 400            # a run keyed by n-gram (the unigram run): scanning, and a small merge
 FILTER_PER_WORKER_PIVOT = 900      # a pivoted run: the end-of-unit merge of a thousand or two parts
+# A Davies corpus (COHA, 2026-11-24): acquisition with 20 workers peaked under
+# 4.7G and the pivoting sentence filter with 20 under 6.4G by Slurm's MaxRSS,
+# which overcounts; a worker's documents and its spooled units are small.
+DAVIES_ACQUIRE_BASE, DAVIES_ACQUIRE_PER_WORKER = 2_000, 300
+DAVIES_FILTER_PER_WORKER_PIVOT = 500
 TUNE_BASE, TUNE_PER_TRAINER = 3_000, 600
 TRAIN_PER_WRITER = 500          # a corpus writer streams the pivoted database with a small cache
 
@@ -117,15 +122,18 @@ def memory_estimate(stage: str, kwargs: Dict[str, Any], slurm: Dict[str, Any]) -
     without a model."""
     cpus = max(1, _int(slurm.get("cpus"), 1))
     have = parse_mem_mb(slurm.get("mem"))
+    davies = kwargs.get("source") == "davies"
     if stage == "acquire":
         workers = _int(kwargs.get("workers"), cpus)      # the script sets workers from the CPUs unless set
-        per = int(ACQUIRE_PER_WORKER * max(0.25, _int(kwargs.get("chunk_entries"), ACQUIRE_CHUNK_ENTRIES)
-                                           / ACQUIRE_CHUNK_ENTRIES))
-        need = ACQUIRE_BASE + per * workers
-        fit_workers = max(1, ((have or 0) - ACQUIRE_BASE) // per) if have else 0
+        base, per_worker = (DAVIES_ACQUIRE_BASE, DAVIES_ACQUIRE_PER_WORKER) if davies \
+            else (ACQUIRE_BASE, ACQUIRE_PER_WORKER)
+        per = int(per_worker * max(0.25, _int(kwargs.get("chunk_entries"), ACQUIRE_CHUNK_ENTRIES)
+                                   / ACQUIRE_CHUNK_ENTRIES))
+        need = base + per * workers
+        fit_workers = max(1, ((have or 0) - base) // per) if have else 0
         fix = (f"Ask for {fmt_gb(need)}, or set acquire.workers to {fit_workers} (Advanced) so the script "
                f"does not tie the worker count to the {cpus} CPUs.")
-        return MemoryEstimate(need, have, workers, "worker", per, ACQUIRE_BASE, fix)
+        return MemoryEstimate(need, have, workers, "worker", per, base, fix)
     if stage == "filter":
         workers = _int(kwargs.get("workers"), cpus)
         # Pivoted (one record per n-gram and year) unless told otherwise: the
@@ -134,7 +142,8 @@ def memory_estimate(stage: str, kwargs: Dict[str, Any], slurm: Dict[str, Any]) -
         if pivot is None:
             pivot = kwargs.get("unit", "sentences") != "tokens" if kwargs.get("source") == "davies" \
                 else _int(kwargs.get("ngram_size"), 5) > 1
-        per = FILTER_PER_WORKER_PIVOT if pivot else FILTER_PER_WORKER
+        per = (DAVIES_FILTER_PER_WORKER_PIVOT if davies else FILTER_PER_WORKER_PIVOT) if pivot \
+            else FILTER_PER_WORKER
         need = FILTER_BASE + per * workers
         fit_workers = max(1, ((have or 0) - FILTER_BASE) // per) if have else 0
         fix = (f"Ask for {fmt_gb(need)}, or set filter.workers to {fit_workers} so the script does not tie "

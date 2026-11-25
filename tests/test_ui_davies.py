@@ -310,3 +310,38 @@ def test_a_half_filled_range_is_named_with_its_stage(tmp_path):
         _clean(app)
 
     asyncio.run(scenario())
+
+
+def test_submit_offers_davies_sized_resources_and_says_why(tmp_path):
+    """A Davies corpus is gigabytes, not terabytes: the Submit tab starts
+    from its own defaults per stage and unit, and says how to size the job
+    (for acquire, from the archives the source directory holds)."""
+    root = tmp_path / "corpora"
+    _db(root / "coha" / "token_files" / "tokens.db")
+    src = tmp_path / "COHA"
+    (src / "wlp").mkdir(parents=True)
+    for i in range(3):
+        (src / "wlp" / f"wlp_{1990 + 10 * i}s.zip").write_bytes(b"")
+
+    async def scenario():
+        app = LexichronApp(None, "filter")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await _settle(app, pilot)
+            app.query_one("#corpus-root", Input).value = str(root)
+            await pilot.pause()
+            app.query_one("#corpus-select", Select).value = str(root / "coha" / "token_files")
+            await _settle(app, pilot)
+            cpus, mem, time = (app.query_one(f"#f-slurm-{k}", Input) for k in ("cpus", "mem", "time"))
+            assert (cpus.value, mem.value, time.value) == ("10", "8G", "00:30:00")
+            assert "Davies tokens" in str(app.query_one("#submit-sources", Static).content)
+            assert "token filter took 30 seconds" in str(app.query_one("#submit-guide", Static).content)
+            app.config.setdefault("acquire", {})["source_dir"] = str(src)
+            app.select_stage("acquire")
+            await _settle(app, pilot)
+            assert (cpus.value, mem.value) == ("20", "12G")
+            assert "3 archives, so CPUs past 3 sit idle" in str(app.query_one("#submit-guide", Static).content)
+            assert "memory" not in str(app.query_one("#submit-memory", Static).content).lower() or \
+                "Slurm would kill it" not in str(app.query_one("#submit-memory", Static).content)
+        _clean(app)
+
+    asyncio.run(scenario())

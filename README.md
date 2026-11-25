@@ -38,7 +38,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.14.4}
+  version = {0.14.5}
 }
 ```
 
@@ -163,7 +163,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.14.4 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.14.5 bash install.sh`.
 
 The image is one file of about 4 GB. On a slow or unreliable connection the
 container runtime's download can be cut off partway (`FATAL: ... stream
@@ -186,7 +186,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.4.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.5.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -206,7 +206,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.14.4)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.14.5)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -305,7 +305,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.14.4.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.14.5.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -864,7 +864,12 @@ Tabs:
   and train, the number of jobs. The values come from three layers and a
   line under the form says where each came from: lexichron's defaults per
   stage (40 CPUs for acquire and filter, with 28G and 40G; a 64-CPU, 64G slice for a day or two, split
-  over a job array, for tune and train); your own account and partition,
+  over a job array, for tune and train), and smaller ones for a Davies
+  corpus, by stage and unit, sized from COHA (20 CPUs and 12G for an hour to
+  acquire, one worker an archive; 10 or 20 CPUs for half an hour to filter;
+  32 CPUs and 32G for 12 hours to tune or train, train split over 3 jobs);
+  a note under the form says how to size the job for the corpus at hand
+  (for a Davies acquire run, how many archives there are to read); your own account and partition,
   kept in `~/.lexichron/slurm.yaml` for every corpus (the first account you
   save goes there; *Use account as my default* moves a later change there);
   and the corpus's settings file, whose `slurm:` section holds a block per
@@ -969,7 +974,7 @@ Tabs:
   own output instead: a search's scores, an ensemble's years and noise
   profile, or a measure's years × words (below).
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.14.4.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.14.5.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 

@@ -4,7 +4,9 @@ Three layers, each kept where its owner would look for it:
 
 1. lexichron's defaults per stage (``STAGE_DEFAULTS``): acquisition stops
    gaining around 40 workers; a tuning search or a replicate ensemble wants
-   a 64-core slice of a node for a day or two, split over a job array.
+   a 64-core slice of a node for a day or two, split over a job array. A
+   Davies corpus is a few gigabytes, not terabytes, and has its own
+   (``DAVIES_DEFAULTS``, by stage and unit).
 2. the user's defaults (``~/.lexichron/slurm.yaml``, or under
    ``$LEXICHRON_STATE_DIR``): the account and partition, which are about the
    person, not the corpus, and so the same for every settings file.
@@ -25,7 +27,7 @@ from typing import Any, Dict, Mapping, Optional, Tuple
 
 import yaml
 
-__all__ = ["ARRAY_STAGES", "STAGE_DEFAULTS", "STAGE_KEYS", "USER_KEYS", "describe_sources", "read_user_defaults",
+__all__ = ["ARRAY_STAGES", "DAVIES_DEFAULTS", "STAGE_DEFAULTS", "defaults_for", "guidance", "STAGE_KEYS", "USER_KEYS", "describe_sources", "read_user_defaults",
            "resolve", "seed_user_defaults", "stage_override", "state_dir", "user_defaults_path",
            "write_user_defaults"]
 
@@ -50,6 +52,78 @@ STAGE_DEFAULTS: Dict[str, Dict[str, Any]] = {
     # a small job, limited by reading the models; 8 in memory at a time.
     "measure": {"cpus": 8, "mem": "16G", "time": "04:00:00", "jobs": 1},
 }
+
+# A Davies corpus, sized from COHA (2026-11-24; 20 archives an edition, about
+# 400 million words): acquisition reads one archive per worker, so CPUs past
+# the archive count sit idle, and took 1.5 minutes with 20 or 40 workers and
+# under 6G by Slurm's MaxRSS (which overcounts shared pages); the token filter
+# 30 seconds and 2.5G with 10 workers, the sentence filter (pivoting) 2
+# minutes and 6.4G with 20. Times leave room for a corpus several times
+# COHA's size. A bin of COHA sentences is millions of tokens, so its models
+# train in minutes: a search or an ensemble fits a 32-core job, and train's
+# array splits the bins (9 five-year bins over three jobs).
+DAVIES_DEFAULTS: Dict[Tuple[str, str], Dict[str, Any]] = {
+    ("acquire", "tokens"): {"cpus": 20, "mem": "12G", "time": "01:00:00"},
+    ("acquire", "sentences"): {"cpus": 20, "mem": "12G", "time": "01:00:00"},
+    ("filter", "tokens"): {"cpus": 10, "mem": "8G", "time": "00:30:00"},
+    ("filter", "sentences"): {"cpus": 20, "mem": "16G", "time": "00:30:00"},
+    ("tune", "sentences"): {"cpus": 32, "mem": "32G", "time": "12:00:00", "jobs": 1},
+    ("train", "sentences"): {"cpus": 32, "mem": "32G", "time": "12:00:00", "jobs": 3},
+    ("measure", "sentences"): {"cpus": 4, "mem": "8G", "time": "01:00:00", "jobs": 1},
+}
+
+
+def defaults_for(stage: str, source: str = "ngrams", unit: Optional[str] = None) -> Tuple[Dict[str, Any], str]:
+    """lexichron's default resources for a job of ``stage`` on this kind of
+    corpus, and how to name where they came from."""
+    if source == "davies":
+        unit = unit or "sentences"
+        found = DAVIES_DEFAULTS.get((stage, unit)) or DAVIES_DEFAULTS.get((stage, "sentences"))
+        if found:
+            return dict(found), f"lexichron's default for {stage}, Davies {unit}"
+    return dict(STAGE_DEFAULTS.get(stage) or STAGE_DEFAULTS["acquire"]), f"lexichron's default for {stage}"
+
+
+def guidance(stage: str, source: str = "ngrams", unit: Optional[str] = None,
+             archives: Optional[int] = None) -> str:
+    """A few sentences for the Submit tab on sizing a job of ``stage`` for
+    this kind of corpus; ``archives`` is the acquire run's archive count
+    when it is known."""
+    if source != "davies":
+        return {
+            "acquire": "Sizing: acquisition gains little past 40 workers. 5-grams take hours; 1-grams minutes.",
+            "filter": "Sizing: the 5-gram filter (it pivots) runs for hours and needs about 0.9G a worker; "
+                      "the 1-gram filter is much lighter.",
+            "tune": "Sizing: a search trains (cells x sampled years x models per year); split it over a job "
+                    "array with Jobs so each task takes some of the years.",
+            "train": "Sizing: an ensemble trains (corpus replicates x seeds) models for every year; Jobs splits "
+                     "the years over a job array.",
+            "measure": "Sizing: measuring reads each model once; one small job is usually enough.",
+        }.get(stage, "")
+    unit = unit or "sentences"
+    if stage == "acquire":
+        count = (f"This edition has {archives} archive{'s' if archives != 1 else ''}, so CPUs past "
+                 f"{archives} sit idle. " if archives else "CPUs past the number of archives sit idle. ")
+        return ("Sizing (Davies): one worker reads one archive. " + count +
+                "COHA (20 archives) took about 1.5 minutes and under 6G. A larger corpus takes longer in "
+                "proportion: raise the time, not the CPUs.")
+    if stage == "filter":
+        if unit == "tokens":
+            return ("Sizing (Davies tokens): COHA's token filter took 30 seconds and 2.5G with 10 workers; "
+                    "more CPUs gain little.")
+        return ("Sizing (Davies sentences): COHA's sentence filter (it pivots) took 2 minutes and 6.4G with "
+                "20 workers.")
+    if stage == "tune":
+        return ("Sizing (Davies): a year or bin of a Davies corpus is millions of tokens, so each model "
+                "trains in minutes; one 32-core job runs a search of a few cells on six sampled bins in "
+                "hours. Larger vectors and more epochs take longer in proportion.")
+    if stage == "train":
+        return ("Sizing (Davies): every bin gets (corpus replicates x seeds) models of a few minutes each; "
+                "Jobs splits the bins over a job array (3 jobs for 9 five-year bins). With annual years, "
+                "raise Jobs rather than the time.")
+    if stage == "measure":
+        return "Sizing (Davies): the models are small; a few CPUs and an hour are plenty."
+    return ""
 
 
 def state_dir() -> Path:
@@ -93,13 +167,14 @@ def seed_user_defaults(values: Mapping[str, Any]) -> bool:
 
 
 def resolve(stage: str, section: Optional[Mapping[str, Any]], user: Optional[Mapping[str, Any]] = None,
-            ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+            *, source: str = "ngrams", unit: Optional[str] = None) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """The Slurm settings a job of ``stage`` gets, and the source of each:
     ``"lexichron's default for <stage>"``, ``"your defaults"``,
     ``"this corpus"`` (a top-level key of the section) or
-    ``"this corpus, <stage>"`` (the stage's own block)."""
-    values: Dict[str, Any] = dict(STAGE_DEFAULTS.get(stage) or STAGE_DEFAULTS["acquire"])
-    sources = {k: f"lexichron's default for {stage}" for k in values}
+    ``"this corpus, <stage>"`` (the stage's own block). ``source`` and
+    ``unit`` choose lexichron's defaults (a Davies corpus has its own)."""
+    values, origin = defaults_for(stage, source, unit)
+    sources = {k: origin for k in values}
     user = read_user_defaults() if user is None else user
     for key in USER_KEYS:
         if user.get(key) not in (None, ""):

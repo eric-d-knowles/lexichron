@@ -493,14 +493,16 @@ SLURM_FIELDS = Section("slurm", [
           "account as your default.", label="Partition"),
     Field("cpus", "int", 40, True, help="CPUs for the job (also the worker count unless set). Each stage has its "
           "own default: 40 for acquire and filter (acquisition gains little beyond that), 64 for tune and train "
-          "(a 64-core slice starts within minutes). Saved for the stage shown.", label="CPUs"),
+          "(a 64-core slice starts within minutes). A Davies corpus is far smaller and has its own: 20 for acquire "
+          "(one worker an archive; COHA has 20), 10 or 20 for filter, 32 for tune and train. Saved for the stage shown.", label="CPUs"),
     Field("mem", "text", "28G", True, help="Memory, e.g. 28G. Acquisition needs about 0.6G per worker plus 3G; filtering "
           "about 0.9G per worker plus 4G when it pivots (0.4G for unigrams); tune and train default to 64G, mostly "
-          "reclaimable page cache. The Submit tab shows the estimate. Slurm's own MaxRSS reads much higher than a "
+          "reclaimable page cache. A Davies corpus needs far less (COHA: under 7G at every stage before training). The Submit tab shows the estimate. Slurm's own MaxRSS reads much higher than a "
           "job needs: it counts the pages forked workers share once per worker.",
           label="Memory"),
     Field("time", "text", "12:00:00", True, help="Time limit, HH:MM:SS or D-HH:MM:SS. Defaults: 12 hours for "
-          "acquire and filter, two days for tune, one day for train.", label="Time limit"),
+          "acquire and filter, two days for tune, one day for train; for a Davies corpus an hour or less for acquire "
+          "and filter (COHA took minutes) and 12 hours for tune and train.", label="Time limit"),
     Field("job_name", "text", "lexichron", False, help="Job name shown in squeue", label="Job name"),
     Field("jobs", "int", 1, False, help=("Split the run over this many jobs (a Slurm job array), each taking "
           "every N-th year and writing into the same output. Each job gets the CPUs, memory and time "
