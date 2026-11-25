@@ -1671,6 +1671,21 @@ class LexichronApp(App):
         finally:
             self._populating = was
 
+    @staticmethod
+    def _recorded_bin_size(kwargs: Dict[str, Any]) -> int:
+        """The year bins of the database tune and train would read, from its
+        provenance record (a file read, no database scan); 1 when unknown."""
+        try:
+            from lexichron.corpora import training_layout
+            from lexichron.training.corpus import recorded_bin_size
+            n = kwargs.get("ngram_size")
+            layout = training_layout(kwargs["db_path_stub"], int(n) if n else None, kwargs.get("repo_release_id"),
+                                     kwargs["repo_corpus_id"], kwargs.get("source") or "ngrams",
+                                     str(kwargs.get("unit") or "sentences"))
+            return recorded_bin_size(str(layout.training_db)) or 1
+        except Exception:
+            return 1
+
     def _refresh_grid_summary(self, kwargs: Dict[str, Any]) -> None:
         """Under the tune form: what the grid amounts to, and whether the
         parallelism fits the job's CPUs."""
@@ -1679,7 +1694,8 @@ class LexichronApp(App):
         try:
             grid = HyperGrid.from_settings(kwargs)
             years = kwargs.get("sample_years") or sample_years_in(tuple(kwargs.get("years", (1968, 2019))),
-                                                                 int(kwargs.get("year_pairs", 4)))
+                                                                 int(kwargs.get("year_pairs", 4)),
+                                                                 self._recorded_bin_size(kwargs))
             per = int(kwargs.get("seeds", 2)) + (2 if kwargs.get("split_half", True) else 0)
             models = len(grid) * len(years) * per
             cpus = int(self._slurm_resolved().get("cpus") or kwargs.get("workers") or os.cpu_count() or 1)

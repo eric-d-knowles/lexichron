@@ -38,7 +38,7 @@ from lexichron.arrays import ArrayTask, task_share
 from lexichron.arrays import array_task as _array_task
 from lexichron.resources import available_cpus
 from lexichron.training import axis, benchmarks, stability
-from lexichron.training.corpus import UNK_MODES, CorpusStats, corpus_file_name, write_corpus
+from lexichron.training.corpus import UNK_MODES, CorpusStats, corpus_file_name, study_years, write_corpus
 from lexichron.training.grid import AXES, Cell, Grid, corpus_variants
 from lexichron.training.scheduler import train_across_years
 from lexichron.training.scores import (PAIRS_FILE, RESULTS_FILE, SUMMARY_FILE, SUMMARY_JSON, ScoreStore,
@@ -98,7 +98,9 @@ def tune_models(
         db_path_stub: Base directory of the corpora
         years: The study period, [first, last]: sampled years are drawn from it
         sample_years: The years to train on, given explicitly; adjacent pairs
-            (1970, 1971, ...) let adjacent-year stability be measured
+            (1970, 1971, ...) let adjacent-year stability be measured. In a
+            database filtered into year bins these are bins' first years,
+            and two bins in a row (1965, 1970) are an adjacent pair
         year_pairs: Without sample_years, this many adjacent pairs spread
             evenly over the study period (4 -> 8 years)
         vector_size: Grid axis: dimensions of the vectors (one or more values)
@@ -163,10 +165,20 @@ def tune_models(
     grid = Grid.from_settings({"vector_size": vector_size, "window": window, "min_count": min_count,
                                "epochs": epochs, "approach": approach, "weight_by": weight_by})
     cells = grid.cells()
-    sampled = list(sample_years) if sample_years else sample_years_in(years, year_pairs)
+    # a database filtered with year bins holds each bin under its first year:
+    # sample bins, and call two bins in a row adjacent
+    step, _ = study_years(str(db_path), int(years[0]), int(years[1]))
+    sampled = list(sample_years) if sample_years else sample_years_in(years, year_pairs, step)
     sampled = sorted(set(int(y) for y in sampled))
     if not sampled:
         raise ValueError("no years to sample")
+    if step > 1:
+        stray = [y for y in sampled if y % step]
+        if stray:
+            raise ValueError(f"the database holds {step}-year bins, each under its first year (a multiple of "
+                             f"{step}); {', '.join(map(str, stray))} "
+                             f"{'is not one' if len(stray) == 1 else 'are not'}: sample those bins' first years "
+                             f"({', '.join(str(y - y % step) for y in stray)}) or leave the years to the search")
     task = _array_task(array_task, array_count)
     mine = task_share(sampled, task)
     if mode not in ("resume", "restart"):
@@ -245,13 +257,14 @@ def tune_models(
     existing = {t.stem for t in tasks if (models_dir / f"{t.stem}.npz").exists()}
     progress.set_totals(len(tasks), files_skipped=len(existing))
     share = f" ({task.label}: years {mine})" if task else ""
-    print(f"Hyperparameter search '{name}': {grid.describe()}; years {sampled}{share}; "
+    bins = f" ({step}-year bins, each under its first year)" if step > 1 else ""
+    print(f"Hyperparameter search '{name}': {grid.describe()}; years {sampled}{bins}{share}; "
           f"{seeds} seed(s){' + split halves' if split_half else ''} -> {len(tasks)} models "
           f"({len(existing)} already trained); {parallel} at a time x {per_model} threads")
     logger.info("grid %s; years %s%s; %d models; %d already trained", grid.describe(), sampled, share,
                 len(tasks), len(existing))
 
-    settings_record = {"grid": grid.as_settings(), "years": list(years), "sample_years": sampled,
+    settings_record = {"grid": grid.as_settings(), "years": list(years), "year_step": step, "sample_years": sampled,
                        "seeds": seeds, "split_half": split_half, "unk_mode": unk_mode,
                        "neighbours": neighbours, "probes_per_decile": probes_per_decile,
                        "similarity_datasets": sim_sets, "analogy_dataset": ana_set,
@@ -316,7 +329,7 @@ def tune_models(
         progress.doc["counters"]["ngrams_used"] = progress.doc["counters"].get("ngrams_used", 0) + \
             sum(s.ngrams_used for (y, _), s in corpus_stats.items() if y == year)
 
-    all_pairs = year_pairs_of(sampled)                            # every task's years: pairs cross tasks
+    all_pairs = year_pairs_of(sampled, step)                          # every task's years: pairs cross tasks
     scored_cells: set = set()                                     # (cell stem, year) with a row this run
     paired_now: set = set()                                       # pairs scored in this run
     written: List[str] = []                                       # score files this run wrote
@@ -540,25 +553,31 @@ def plan_models(cells: Sequence[Cell], years: Sequence[int], seeds: int, split_h
     return tasks
 
 
-def sample_years_in(years: Tuple[int, int], pairs: int) -> List[int]:
+def sample_years_in(years: Tuple[int, int], pairs: int, step: int = 1) -> List[int]:
     """``pairs`` adjacent year pairs spread evenly over [first, last]:
-    (1968, 2019, 4) -> 1968, 1969, 1984, 1985, 2001, 2002, 2018, 2019."""
+    (1968, 2019, 4) -> 1968, 1969, 1984, 1985, 2001, 2002, 2018, 2019.
+    With ``step`` > 1 (a database filtered into bins of that many years,
+    each held under its first year) the pairs are of adjacent bins and the
+    period starts at the bin holding ``first``: (1968, 2009, 3, step=5) ->
+    1965, 1970, 1985, 1990, 2000, 2005."""
+    from ngramprep.ngram_filter.year_binning import get_bin_start
     first, last = int(years[0]), int(years[1])
     if last < first:
         raise ValueError("years must be [first, last] with first <= last")
-    span = last - first
-    if span < 1:
-        return [first]
+    step = max(1, int(step))
+    slots = list(range(get_bin_start(first, step), last + 1, step))
+    if len(slots) < 2:
+        return slots[:1]
     pairs = max(1, int(pairs))
     if pairs == 1:
-        starts = [first + (span - 1) // 2]
+        starts = [(len(slots) - 2) // 2]
     else:
-        starts = [round(first + i * (span - 1) / (pairs - 1)) for i in range(pairs)]
+        starts = [round(i * (len(slots) - 2) / (pairs - 1)) for i in range(pairs)]
     out: List[int] = []
     for s in starts:
-        for y in (s, s + 1):
-            if first <= y <= last and y not in out:
-                out.append(y)
+        for i in (s, s + 1):
+            if i < len(slots) and slots[i] not in out:
+                out.append(slots[i])
     return out
 
 
@@ -637,16 +656,17 @@ def _lacks_axis(record: Dict[str, Any], yard: Optional[axis.Axis]) -> bool:
     return ("axis_coverage" if "year" in record else "axis") not in record
 
 
-def year_pairs_of(sampled: Sequence[int]) -> List[Tuple[int, int, str]]:
+def year_pairs_of(sampled: Sequence[int], step: int = 1) -> List[Tuple[int, int, str]]:
     """The year pairs a search compares, as (earlier, later, kind): every
-    ``adjacent`` pair (noise: one year apart), every ``period`` pair (the
-    first year of each adjacent pair against the others: change across the
-    span, whatever its shape), and ``distant`` (first vs last sampled year)
-    for reference."""
-    out: List[Tuple[int, int, str]] = [(y - 1, y, "adjacent") for y in sampled if y - 1 in sampled]
-    firsts = [y for y in sampled if y - 1 not in sampled]
-    out += [(a, b, "period") for i, a in enumerate(firsts) for b in firsts[i + 1:] if b - a > 1]
-    if sampled[-1] - sampled[0] > 1 and (sampled[0], sampled[-1], "period") not in out:
+    ``adjacent`` pair (noise: one year apart, or one bin with ``step``-year
+    bins), every ``period`` pair (the first year of each adjacent pair
+    against the others: change across the span, whatever its shape), and
+    ``distant`` (first vs last sampled year) for reference."""
+    step = max(1, int(step))
+    out: List[Tuple[int, int, str]] = [(y - step, y, "adjacent") for y in sampled if y - step in sampled]
+    firsts = [y for y in sampled if y - step not in sampled]
+    out += [(a, b, "period") for i, a in enumerate(firsts) for b in firsts[i + 1:] if b - a > step]
+    if sampled[-1] - sampled[0] > step and (sampled[0], sampled[-1], "period") not in out:
         out.append((sampled[0], sampled[-1], "distant"))
     return out
 

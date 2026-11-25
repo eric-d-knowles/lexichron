@@ -38,7 +38,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.14.3}
+  version = {0.14.4}
 }
 ```
 
@@ -163,7 +163,7 @@ This pulls the current release image into `$SCRATCH/lexichron/` (or
 
 Both run inside the image without you having to type any container commands,
 and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.14.3 bash install.sh`.
+install a specific version: `LEXICHRON_VERSION=0.14.4 bash install.sh`.
 
 The image is one file of about 4 GB. On a slow or unreliable connection the
 container runtime's download can be cut off partway (`FATAL: ... stream
@@ -186,7 +186,7 @@ can be empty or an existing project, such as a fresh clone of a repository.
 Run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.3.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.4.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates a Python environment in `gender-semantics/.venv` that inherits
@@ -206,7 +206,7 @@ folder of this repository; put the ones you want in your project directory and
 adapt them. They track the latest release, so use them with the latest image.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.14.3)* from the kernel menu. If the
+*Python (gender-semantics | lexichron 0.14.4)* from the kernel menu. If the
 kernel is not listed, reload the editor window.
 
 #### Adding packages to a project
@@ -305,7 +305,7 @@ Notes on the container route:
   pull its image and run `new-project` with it (the project's environment is
   tied to the image's Python version, so it may need to be recreated; the
   command tells you if so).
-- `apptainer run-help lexichron-0.14.3.sif` prints a short usage summary.
+- `apptainer run-help lexichron-0.14.4.sif` prints a short usage summary.
 - How the image is built and released is described in `container/README.md`.
 
 ### Development installation (conda)
@@ -778,7 +778,18 @@ has no place for them. Another selection is another `db_path_stub`.
 **Time.** A document's own year is stored. One year of COHA is little text
 (a tuning search on 2004 and 2005 trained usable models, but two halves of a
 year's text agreed on almost none of a word's nearest neighbours), so set
-the filter's `bin_size` to 10 for decades unless you have a reason not to.
+the filter's `bin_size` (5 or 10) unless you have a reason not to. Set the
+same `bin_size` on the tokens, so the vocabulary's year range asks a word to
+occur in every bin rather than every year.
+
+A binned database holds each bin under its first year (1965, 1970, ... for
+five-year bins). Tune and train read the bin size from the filter's record
+in the database: train makes an ensemble for every bin the study period
+touches (1968-2009 gives 1965 ... 2005, the first bin holding 1965-1969),
+tune samples bins and scores two bins in a row as adjacent, and chosen
+`sample_years` must be bins' first years. A rare word can be present in a
+bin and still too thin to measure: check each word's count per bin before
+reading its estimates.
 
 **Checks.** Acquisition is the n-gram acquisition's own machinery: one
 sorted file per archive ingested with its marker, a mandatory compaction,
@@ -958,7 +969,7 @@ Tabs:
   own output instead: a search's scores, an ensemble's years and noise
   profile, or a measure's years × words (below).
 
-Run straight from the image instead (`apptainer run --app ui lexichron-0.14.3.sif`)
+Run straight from the image instead (`apptainer run --app ui lexichron-0.14.4.sif`)
 and everything works except *Submit* and the job table, since Slurm commands
 are not visible from inside the container.
 

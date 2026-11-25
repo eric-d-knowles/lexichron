@@ -607,3 +607,55 @@ def test_within_a_year_the_costliest_cells_are_queued_first():
     assert tune.relative_cost(cbow) == tune.relative_cost(sg) / 5
     same = [Cell(100, 5, mc, 10, "skip-gram", "none") for mc in (1, 5, 10)]
     assert [t.cell.min_count for t in tune.plan_models(same, [1990], 1, False)] == [1, 5, 10]
+
+
+def _record_bins(db_dir, bin_size):
+    """The provenance record a filter run given bin_size leaves in its database."""
+    Path(db_dir).mkdir(parents=True, exist_ok=True)
+    (Path(db_dir) / "lexichron.json").write_text(json.dumps({"format": 1, "stage": "filter",
+                                                              "settings": {"bin_size": bin_size}}))
+
+
+def test_binned_years_are_sampled_and_paired_by_bin():
+    # five-year bins held under their first years: the period 1968-2009 starts with the 1965 bin
+    assert tune.sample_years_in((1968, 2009), 3, step=5) == [1965, 1970, 1985, 1990, 2000, 2005]
+    assert tune.sample_years_in((1968, 1972), 4, step=5) == [1965, 1970]
+    assert tune.sample_years_in((1968, 1969), 2, step=5) == [1965]
+    pairs = tune.year_pairs_of([1965, 1970, 1985, 1990], step=5)
+    assert [p for p in pairs if p[2] == "adjacent"] == [(1965, 1970, "adjacent"), (1985, 1990, "adjacent")]
+    assert [p[:2] for p in pairs if p[2] == "period"] == [(1965, 1985)]
+    assert (1965, 1990, "distant") in pairs
+
+
+def test_study_years_follow_the_recorded_bins(rocks, tmp_path):
+    from lexichron.training.corpus import study_years
+    stub = tmp_path / "corpora"
+    paths = _corpus(stub, [1965, 1970, 1975])
+    db = str(paths["pivoted_db"])
+    # no record: annual, so 1968-1979 holds 1970 and 1975 and the 1965 bin is outside it
+    assert study_years(db, 1968, 1979) == (1, [1970, 1975])
+    _record_bins(db, 5)
+    assert study_years(db, 1968, 1979) == (5, [1965, 1970, 1975])
+
+
+def test_tune_samples_bins_and_refuses_a_year_inside_one(rocks, tmp_path):
+    stub = tmp_path / "corpora"
+    paths = _corpus(stub, [1965, 1970, 1975, 1980])
+    _record_bins(paths["pivoted_db"], 5)
+    common = dict(vector_size=[8], window=[2], min_count=[2], epochs=[1], approach=["skip-gram"], weight_by=["none"],
+                  seeds=2, split_half=False, mode="restart", workers=1, workers_per_model=1, probes_per_decile=3,
+                  similarity_dataset=str(_datasets(tmp_path) / "simlex999.txt"),
+                  analogy_dataset=str(tmp_path / "data" / "questions-words.txt"),
+                  axis_lexicon=str(tmp_path / "data" / "vader_lexicon.txt"),
+                  axis_poles=str(tmp_path / "data" / "poles.txt"), train_fn=fake_train)
+    out = Path(tune.tune_models(5, "20200217", "eng", str(stub), years=(1968, 1984), year_pairs=2, name="b1",
+                                **common))
+    search = json.loads((out / "search.json").read_text())
+    assert search["year_step"] == 5 and search["sample_years"] == [1965, 1970, 1975, 1980]
+    lines = (out / "pairs.tsv").read_text().splitlines()
+    rows = [dict(zip(lines[0].split("\t"), line.split("\t"))) for line in lines[1:]]
+    kinds = {(r["year_a"], r["year_b"]): r["kind"] for r in rows}
+    assert kinds.get(("1965", "1970")) == "adjacent" and kinds.get(("1975", "1980")) == "adjacent"
+    with pytest.raises(ValueError, match="1968 is not one.*1965"):
+        tune.tune_models(5, "20200217", "eng", str(stub), years=(1968, 1984), sample_years=[1968, 1970],
+                         name="b2", **common)

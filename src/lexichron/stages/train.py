@@ -36,7 +36,8 @@ from lexichron.arrays import task_share
 from lexichron.arrays import array_task as _array_task
 from lexichron.resources import available_cpus
 from lexichron.training import axis, benchmarks, stability
-from lexichron.training.corpus import UNK_MODES, CorpusStats, write_corpus, years_with_data
+from lexichron.training.corpus import UNK_MODES, CorpusStats, study_years, write_corpus
+from ngramprep.ngram_filter.year_binning import get_bin_start
 from lexichron.training.ensemble import (RESAMPLINGS, ReplicaTask, plan_replicas, projection_cube,
                                          resample_seed, variance_components)
 from lexichron.training.grid import AXIS_BY_NAME, Cell
@@ -98,7 +99,9 @@ def train_models(
         repo_corpus_id: Corpus identifier (e.g., "eng-us")
         db_path_stub: Base directory of the corpora
         years: The study period, [first, last]: every year of it with data
-            in the database gets an ensemble
+            in the database gets an ensemble. A database filtered into year
+            bins holds each bin under its first year; every bin the period
+            touches gets one (1968-2009 in five-year bins: 1965 ... 2005)
         vector_size: Dimensions of the vectors
         window: Context words on each side
         min_count: Words seen fewer times in a year's corpus are left out
@@ -237,13 +240,14 @@ def train_models(
     progress = ProgressReporter(progress_path, stage="train", db_path=out_dir, log_path=log_file,
                                 unit_label="models", inputs=inputs)
 
-    all_years = years_with_data(str(db_path), range(first, last + 1))
-    skipped = (last - first + 1) - len(all_years)
+    # a database filtered with year bins holds each bin under its first year
+    step, all_years = study_years(str(db_path), first, last)
+    skipped = len(range(get_bin_start(first, step), last + 1, step)) - len(all_years)
     if not all_years:
         progress.finish("failed", f"no year of {first}-{last} has data in {db_path}")
         raise ValueError(f"no year of {first}-{last} has data in {db_path}")
     mine = task_share(all_years, task)
-    manifest = {"cell": cell.as_dict(), "cell_stem": cell.stem, "years": [first, last], "years_with_data": all_years,
+    manifest = {"cell": cell.as_dict(), "cell_stem": cell.stem, "years": [first, last], "year_step": step, "years_with_data": all_years,
                 "corpus_replicates": corpora, "seeds_per_corpus": seeds, "resampling": resampling,
                 "noise_seed": int(noise_seed), "unk_mode": unk_mode,
                 "axis_lexicon": yard.lexicon_path if yard else None, "axis_poles": yard.poles_path if yard else None,
@@ -267,7 +271,8 @@ def train_models(
             ensemble["in_hand"][str(t.year)] = ensemble["in_hand"].get(str(t.year), 0) + 1
     progress.doc["ensemble"] = ensemble
     share = f" ({task.label}: {len(mine)} years)" if task else ""
-    print(f"Ensemble '{name}': {cell.stem}; years {first}-{last} ({len(all_years)} with data"
+    bins = f" in {step}-year bins, each under its first year" if step > 1 else ""
+    print(f"Ensemble '{name}': {cell.stem}; years {first}-{last}{bins} ({len(all_years)} with data"
           f"{f', {skipped} without' if skipped else ''}){share}; {corpora} corpus x {seeds} seed replicates "
           f"= {corpora * seeds} models per year -> {len(tasks)} models ({len(existing)} already trained); "
           f"{parallel} at a time x {per_model} threads")

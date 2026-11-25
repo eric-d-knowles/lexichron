@@ -23,7 +23,7 @@ import numpy as np
 
 from ngramprep.ngram_pivot.encoding import decode_year_ngram_key, decode_year_stats, year_prefix
 
-__all__ = ["CorpusStats", "write_corpus", "weight_for", "years_with_data", "UNK_MODES", "WEIGHTINGS"]
+__all__ = ["CorpusStats", "write_corpus", "weight_for", "years_with_data", "study_years", "UNK_MODES", "WEIGHTINGS"]
 
 UNK = "<UNK>"
 UNK_MODES = ("strip", "reject", "retain")
@@ -143,6 +143,39 @@ def years_with_data(db_path: str, years: Iterable[int]) -> List[int]:
                 out.append(int(year))
                 break
     return out
+
+
+def recorded_bin_size(db_path: str) -> Optional[int]:
+    """The bin size the filter run that wrote ``db_path`` was given, from the
+    database's provenance record; None when there is no record or the run
+    did not set it (a record keeps only the settings a run was given)."""
+    from lexichron.provenance import read_provenance
+    try:
+        record = read_provenance(db_path) or {}
+    except Exception:
+        return None
+    value = (record.get("settings") or {}).get("bin_size")
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def study_years(db_path: str, first: int, last: int) -> Tuple[int, List[int]]:
+    """The step between a pivoted database's years and the years of
+    [first, last] it holds, as (step, years). A database filtered with
+    year bins holds only each bin's first year (1965, 1970, ... for five-
+    year bins), so a study period that starts inside a bin (1968) begins
+    with that bin's year (1965), and two bins in a row are a step apart,
+    not one year. The step is the bin size the filter run recorded, else 1:
+    it is not guessed from the gaps between the years held, which annual
+    data with missing years would make look like bins."""
+    from ngramprep.ngram_filter.year_binning import get_bin_start
+    first, last = int(first), int(last)
+    step = recorded_bin_size(db_path) or 1
+    if step < 2:
+        return 1, years_with_data(db_path, range(first, last + 1))
+    return step, years_with_data(db_path, range(get_bin_start(first, step), last + 1, step))
 
 
 def corpus_file_name(year: int, weight_by: str, unk_mode: str, part: str = "") -> str:

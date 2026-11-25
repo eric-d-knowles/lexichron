@@ -226,3 +226,18 @@ def test_inspect_reads_an_ensemble(rocks, tmp_path, capsys):
     assert cli.main(["inspect", str(out)]) == 0
     text = capsys.readouterr().out
     assert "ensemble ins" in text and "1990" in text
+
+
+def test_train_takes_every_bin_the_period_touches(rocks, tmp_path, monkeypatch):
+    from test_tune_stage import _record_bins
+    stub = tmp_path / "corpora"
+    paths = _corpus(stub, [1965, 1970, 1975])
+    _record_bins(paths["pivoted_db"], 5)
+    d = _datasets(tmp_path, monkeypatch)
+    out = Path(train.train_models(5, "20200217", "eng", str(stub), years=(1968, 1979), vector_size=8, window=2,
+                                  min_count=2, epochs=1, approach="skip-gram", weight_by="none",
+                                  corpus_replicates=1, seeds_per_corpus=1, name="b1", mode="restart", workers=1,
+                                  axis_lexicon=str(d / "vader_lexicon.txt"), axis_poles=str(d / "poles.txt"),
+                                  train_fn=fake_train))
+    manifest = json.loads((out / "train.json").read_text())
+    assert manifest["year_step"] == 5 and manifest["years_with_data"] == [1965, 1970, 1975]
