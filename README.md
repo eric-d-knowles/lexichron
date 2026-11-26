@@ -1,32 +1,37 @@
 # lexichron
 
-Tools for studying semantic change over time with word embeddings trained on
-large historical corpora. lexichron covers the whole pipeline: acquiring
-Google Books Ngrams (1- to 5-grams) or one of Mark Davies' corpora (COHA so
-far), filtering and normalizing the text, storing it in a queryable RocksDB
-database, training per-year `word2vec` models, aligning them, and analyzing how
-word meanings move.
+Tools for studying semantic change with word embeddings trained on large
+historical corpora. lexichron acquires Google Books Ngrams (1- to 5-grams) or
+one of Mark Davies' corpora (COHA so far), filters and normalizes the text
+into RocksDB databases, searches word2vec hyperparameters for stable models,
+trains each year as an ensemble of replicate models, and measures your words'
+time series with error bars from those ensembles.
 
-The pipelines are built for corpora of millions to billions of records and are
-meant to run on an HPC cluster or similar hardware. They can be tuned for
-smaller machines at the cost of speed.
+The pipeline is built for corpora of millions to billions of records and is
+meant to run on an HPC cluster under Slurm. It works on smaller machines at
+the cost of speed.
 
 ## Contents
 
 - [Citation](#citation)
-- [Capabilities](#capabilities)
-- [Workflow](#workflow)
-- [System Requirements](#system-requirements)
+- [The pipeline](#the-pipeline)
+- [System requirements](#system-requirements)
 - [Installation](#installation)
   - [Container installation](#container-installation)
   - [Development installation (conda)](#development-installation-conda)
 - [Command line](#command-line)
+  - [The acquire stage](#the-acquire-stage)
+  - [The filter stage](#the-filter-stage)
 - [Davies corpora](#davies-corpora)
 - [Terminal user interface](#terminal-user-interface)
+- [Hyperparameter search (`tune`)](#hyperparameter-search-tune)
+- [Final models (`train`)](#final-models-train)
+- [Your words' time series (`measure`)](#your-words-time-series-measure)
 - [Example notebooks](#example-notebooks)
 - [Output files](#output-files)
-- [Reading the progress display](#reading-the-progress-display)
-- [Support and Maintenance](#support-and-maintenance)
+- [Provenance](#provenance)
+- [Upgrading from older versions](#upgrading-from-older-versions)
+- [Support and maintenance](#support-and-maintenance)
 
 ## Citation
 
@@ -38,299 +43,169 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.14.6}
+  version = {0.14.7}
 }
 ```
 
-Alternatively, you can click "Cite this repository" in the GitHub sidebar for additional citation formats.
+Or click "Cite this repository" in the GitHub sidebar for other formats.
 
-## Capabilities
+## The pipeline
 
-### Data Preparation
+Five stages, each run from one settings file (`lexichron <stage>
+lexichron.yaml`), the terminal UI, or Python:
 
-- **Data acquisition:** Download n-gram datasets (1- through 5-grams) from the 2020 release of Google Books Ngrams, or read a Davies corpus from the files you hold under licence (COHA so far; see [Davies corpora](#davies-corpora)), and ingest them into a RocksDB database.
-- **Language support:** N-gram pipelines support English, Chinese (simplified), French, German, Hebrew, Italian, Russian, and Spanish.
-- **Filtering:** Any combination of case normalization, stopword removal, short-word removal, non-alphabetic token removal, and lemmatization. Discarded tokens are replaced with `<UNK>`.
-- **Whitelists:** Write the top-N most frequent unigrams, optionally spell-checked, and use the list to filter longer n-grams. With case normalization, spell-checking also drops proper nouns ("Jackson", "Einstein"). A year range restricts the list to tokens present in every year of the range.
-- **Multigram combining:** Turn chosen word sequences into single tokens as the files are read: "working class" → "working-class", "new york city" → "new-york-city", or a token of your own naming, so "A . I ." (how Google tokenizes "A.I.") becomes "A.I.". The UI's *Combine multigrams* editor takes up to five tokens per sequence and the token they become, shown as the words joined by hyphens until you type something else, with a *Match case* switch per sequence; in the settings file an entry is `working class` or `a . i . => A.I.` (`combined_multigrams_case` holds the exact-case ones). A sequence matches whatever its capitalization in the data unless its row says otherwise; where sequences overlap the longest wins.
-- **Token immunity:** Name tokens that are always kept regardless of the filtering rules, such as domain terms, proper nouns, or combined multiword expressions, matched by their spelling in the data with or without regard to case. Tokens combined at acquisition are kept automatically.
-- **Pivoting:** Reorganize n-gram data from one record per n-gram to one record per n-gram-year:
-  - BEFORE: `n-gram → (year1, count1, volumes1) (year2, count2, volumes2) ... (yearn, countn, volumesn)`
-  - AFTER:
-    - `[year1] n-gram → (count1, volumes1)`
-    - `[year2] n-gram → (count2, volumes2)`
-    - `...`
-    - `[yearn] n-gram → (countn, volumesn)`
-- **Parallel processing** with load balancing, progress reporting, and resumption after interruption.
-- **Storage** in RocksDB, a key-value database that stays fast at corpus scale.
+| Stage | What it does |
+|---|---|
+| `acquire` | Downloads a Google Books release (or reads a Davies corpus you hold) into a RocksDB database of per-year counts. Can join word sequences into single tokens as it reads ("working class" → `working-class`). |
+| `filter` | Lowercases, lemmatizes (using the part-of-speech tag where there is one) and filters tokens (stopwords, non-alphabetic, short words, a vocabulary); dropped tokens become `<UNK>`. Run on unigrams it writes a vocabulary; run on 2-5-grams it writes them keyed by year, which is what training reads. |
+| `tune` | Trains a grid of word2vec settings on a few sampled years and scores each cell's stability and quality; suggests a cell, and leaves the choice to you. |
+| `train` | Trains the chosen cell for every year as an ensemble of replicates (corpus resamples × seeds) and reports each year's noise. |
+| `measure` | Computes a scalar for your words in every replicate (a projection onto an axis, a similarity, a frequency) and writes each word's series with standard errors. |
 
-### Model Training and Evaluation
+N-gram corpora can be English, Chinese (simplified), French, German, Hebrew,
+Italian, Russian or Spanish. A Davies corpus goes through the same stages;
+only acquisition differs (see [Davies corpora](#davies-corpora)). Every
+stage resumes after an interruption, and acquire and filter check that their
+output holds exactly the counts they read.
 
-- **Word embeddings:** Train `word2vec` models on the processed n-grams with `gensim`. `corpus_file` mode gives multithreaded training and can train several years at once. Hyperparameters:
-  - `approach`: use skip-gram or continuous bag-of-words (CBOW) architectures
-  - `vector_size`: the number of vector dimensions (features) to extract
-  - `window_size`: the width of the context window
-  - `min_count`: the minimum frequency of words to include in the model
-  - `weight_by`: downweight common ngrams by frequency or document count
-- **Evaluation:** Score models on standard similarity and analogy benchmarks, plot the results, and use mixed-model regression to estimate how each hyperparameter affects performance across years.
+## System requirements
 
-## Workflow
-
-There is one pipeline with two sources of text. The stages after acquisition
-are the same for both.
-
-### Google Ngrams Pipeline
-
-1. **`ngram_acquire`**: Fetch raw n-gram files (1-5 grams) from the Google Books repository and store in a RocksDB database for fast querying.
-2. **`ngram_filter`**: Apply linguistic transformations (case normalization, lemmatization, stopword removal, a vocabulary) to prepare data. Unigrams yield a vocabulary whitelist; 2-5-grams are written, in the same pass, in the year-first ("pivoted") layout that time-series analysis and model training read.
-3. **`tune`**: Hyperparameter search for the word2vec models: a grid of settings is trained on a few sampled years and scored for stability and quality (below).
-
-### Davies Corpora
-
-A Davies corpus (`corpus.source: davies`) goes through the same stages. Only
-acquisition differs: nothing is downloaded, and the corpus's own files are
-read where you keep them. The corpus is read twice, as Google's files come
-twice: its single *tokens*, which the filter turns into the vocabulary as it
-does with 1-grams, and its *sentences*, which are filtered against that
-vocabulary, pivoted by year and trained on as 5-grams are. See
-[Davies corpora](#davies-corpora).
-
-### Analysis Tools
-
-**`analyze`**: Track semantic drift, similarity change, and projections onto semantic dimensions across years, using the trained embeddings. Works with models from either pipeline.
-
-### Model Training
-
-**`train/word2vec`**: Train per-year `word2vec` models, evaluate them, align them across years, and analyze hyperparameter effects.
-
-## System Requirements
-
-- HPC cluster or workstation with multiple CPU cores (30+ cores recommended)
-- RAM: acquisition needs roughly 3 GB plus a few hundred MB per worker
-  (parsed data is streamed through on-disk chunks); filtering and training
-  benefit from more, and 80+ GB is comfortable for 5-gram work. Allow about
-  1 GB per worker for a full 5-gram acquisition: one with 64 workers was
-  killed at its 42 GB estimate as the count check began, for a reason not
-  yet established (the check and the compaction need little memory by
-  themselves; the log's memory lines are there to explain the next one)
-- Fast local storage (NVMe SSD recommended), including a few GB of node-local
-  temp space (`$TMPDIR`) for the acquisition spool
-- Several TB of disk space for processing and storing very large corpora
-- Settings can be tuned for smaller machines at the cost of speed
+- A cluster node or workstation with many cores (30+ recommended).
+- Memory: acquisition needs about 3 GB plus up to 1 GB per worker; filtering
+  about 0.9 GB per worker plus 4 GB; 80+ GB is comfortable for 5-gram work.
+- Fast storage (NVMe recommended), including a few GB of node-local temp
+  space (`$TMPDIR`).
+- Several TB of disk for the largest corpora.
 
 ## Installation
 
-There are two ways to install lexichron:
-
-- **Container (recommended for users):** pull a prebuilt Apptainer image that
-  contains lexichron and every dependency, then run the notebooks against it.
-  Nothing to compile, no conda environment, no setup script.
-- **Conda (for developers):** an editable install from source into a conda
-  environment, for modifying the code.
+- **Container (for users):** a prebuilt Apptainer image with lexichron and
+  every dependency. Nothing to compile.
+- **Conda (for developers):** an editable install from source, for changing
+  the code.
 
 ### Container installation
 
-One command installs lexichron on a cluster that has Apptainer or
-Singularity (most do; the installer finds whichever there is, loading its
-module if it is not on your PATH):
+**1. Install.** On a cluster with Apptainer or Singularity:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eric-d-knowles/lexichron/main/install.sh | bash
 ```
 
-The `| bash` matters: without it, `curl` only prints the script.
+(Without `| bash`, `curl` only prints the script.) This pulls the current
+release image (about 4 GB) into `$SCRATCH/lexichron/` (or `~/.lexichron/`)
+and puts two commands in `~/.local/bin`:
 
-The commands below are written for Apptainer. On a cluster that has
-Singularity instead (NYUAD's Jubail, for one), type `singularity` where
-they say `apptainer` — the rest of each command is the same — or put
-`alias apptainer=singularity` in your `~/.bashrc` and use them as written.
-The batch scripts the UI's Submit tab writes need no such care: a script
-runs the image with the runtime that started the UI, or, failing that,
-whichever of the two the job's node has or can `module load`.
-The `lexichron` and `lexichron-ui` commands the installer writes do the
-same: they use whichever of the two is on your PATH, and load its module
-when neither is, so a fresh login needs no `module load` first. (A cluster
-whose module has another name is the exception: load it yourself.) The
-kernel launchers below find whichever is on your PATH; load its module in
-the shell or job that starts Jupyter.
-
-This pulls the current release image into `$SCRATCH/lexichron/` (or
-`~/.lexichron/`) and installs two commands in `~/.local/bin`:
-
-- `lexichron-ui` — the terminal interface (see below), the easiest way to
+- `lexichron-ui`: the terminal interface (see below), the easiest way to
   download and process a corpus.
-- `lexichron` — the command line, e.g. `lexichron acquire lexichron.yaml`.
+- `lexichron`: the command line, e.g. `lexichron acquire lexichron.yaml`.
 
-Both run inside the image without you having to type any container commands,
-and both re-pull the image automatically if a scratch purge removes it. To
-install a specific version: `LEXICHRON_VERSION=0.14.6 bash install.sh`.
+Both run inside the image, find Apptainer or Singularity themselves (loading
+its module if needed), and re-pull the image if a scratch purge removes it.
+The commands below say `apptainer`; on a Singularity cluster type
+`singularity` or `alias apptainer=singularity`.
 
-The image is one file of about 4 GB. On a slow or unreliable connection the
-container runtime's download can be cut off partway (`FATAL: ... stream
-error ... PROTOCOL_ERROR`), and it starts from nothing each time. The
-installer then fetches the same file with curl, which resumes where a broken
-connection left off and checks the result against the registry's SHA-256.
-If the installer itself is interrupted, run it again: it continues the
-partial download. `LEXICHRON_FETCH=curl` uses curl from the start, and
-`LEXICHRON_SIF=/path/to/lexichron-X.Y.Z.sif` installs from an image file
-copied from another machine, for a cluster that cannot reach the registry.
-Run the installer on a compute node if the login nodes' network is slow.
+- A specific version: `LEXICHRON_0.14.7=0.14.7 bash install.sh`.
+- A broken download is resumed with curl and checked against the
+  registry's SHA-256; rerun the installer if it is interrupted.
+  `LEXICHRON_FETCH=curl` uses curl from the start, and
+  `LEXICHRON_SIF=/path/to/lexichron-X.Y.Z.sif` installs from a copied image
+  file. If the login nodes' network is slow, run the installer on a compute
+  node.
 
-That is all that is needed to download and process corpora. Steps 2 and 3
-below are for people who want to work with lexichron from their own notebooks
-and scripts.
+That is all you need to download and process corpora. Steps 2 and 3 are for
+working with lexichron from your own notebooks and scripts.
 
-**2. Create a project environment** (for notebooks and your own code). Choose
-a directory for your project (your notebooks and outputs will live there). It
-can be empty or an existing project, such as a fresh clone of a repository.
-Run:
+**2. Create a project environment.** Choose a directory for the project (empty,
+or an existing one such as a fresh clone) and run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.6.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.7.sif /scratch/$USER/projects/gender-semantics
 ```
 
-This creates a Python environment in `gender-semantics/.venv` that inherits
-lexichron and all of its dependencies from the image, and registers a Jupyter
-kernel for it. If the directory contains a `requirements.txt`, those packages
-are installed too, so an existing project is set up in the same single step.
-Re-running the command on a directory that already has a `.venv` keeps the
-environment and refreshes the kernel and launcher. Your home directory and the
-usual cluster data roots (`/scratch`, `/vast`, `/gpfs`, `/work`, `/project`,
-`/projects`, `/data`) are made visible inside the container automatically when
-they exist; add other directories with `--bind /path`, and set environment
-variables for the project with `--env NAME=VALUE`.
+This creates `gender-semantics/.venv`, a Python environment that inherits
+lexichron and its dependencies from the image, installs the directory's
+`requirements.txt` if there is one, and registers a Jupyter kernel. Your home
+directory and the usual data roots (`/scratch`, `/vast`, `/gpfs`, `/work`,
+`/project`, `/projects`, `/data`) are visible inside the container; add
+others with `--bind /path`, and set environment variables for the project
+with `--env NAME=VALUE`.
 
-Example notebooks for each workflow are in the
+**3. Open a notebook** in JupyterLab, Positron or VS Code and pick
+*Python (gender-semantics | lexichron 0.14.7)* from the kernel menu (reload
+the window if it is not listed). The repository's
 [`notebooks/`](https://github.com/eric-d-knowles/lexichron/tree/main/notebooks)
-folder of this repository; put the ones you want in your project directory and
-adapt them. They track the latest release, so use them with the latest image.
+folder has examples to copy.
 
-**3. Open a notebook** in JupyterLab, Positron or VS Code and select
-*Python (gender-semantics | lexichron 0.14.6)* from the kernel menu. If the
-kernel is not listed, reload the editor window.
+#### Adding packages
 
-#### Adding packages to a project
-
-Open a notebook on the project's kernel and install packages the usual way:
-
-```python
-%pip install rpy2 pymc
-```
-
-or from a shell, using the project's launcher:
-
-```bash
-/scratch/$USER/projects/gender-semantics/.venv/host-python -m pip install rpy2 pymc
-```
-
-Packages land in the project's `.venv` and persist. Each project gets its own
-environment; `.venv/host-python -m pip freeze --local` lists what you added.
-Install on a login node if compute nodes have no internet access. The
-environment is tied to the image's Python version (3.11): if a future image
-moves to a newer Python, run `new-project` again and reinstall from your frozen
-list; the command tells you when this is needed.
+In a notebook on the project's kernel, `%pip install rpy2 pymc`; from a shell,
+`.venv/host-python -m pip install rpy2 pymc`. Packages go into the project's
+`.venv` and persist; `.venv/host-python -m pip freeze --local` lists them.
+Install on a login node if compute nodes have no internet access.
 
 #### Updating a project to a new release
 
-A project is not tied to the image that created it. To move one to a newer
-release: install the release as above (it adds the new image next to the old
-one and repoints the `lexichron` commands), then run `new-project` again on
-the same project directory with the new image:
+Install the new release (step 1), then run `new-project` again on the same
+directory with the new image:
 
 ```bash
 apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-<version>.sif /path/to/project
 ```
 
-It keeps `.venv` and everything installed into it (both images carry Python
-3.11; the command refuses and says so if a future image changes that),
-rewrites `.venv/host-python` to run the new image, copies the new release's
-Slurm host bridge into `.lexichron/`, and registers a kernel named for the new
-version. In Jupyter, switch the notebook to that kernel and restart it; the old kernel entry can be removed with
-`rm -r ~/.local/share/jupyter/kernels/<project>-lexichron-<old version>`.
-Data, settings files, searches and notebooks are untouched, and a Slurm job
-already running keeps the image it started with.
+It keeps `.venv` and what you installed, keeps the launcher's `--env` and
+`--bind` settings (passing one again replaces it; `--reset` drops them all),
+points the launchers at the new image, and registers a kernel named for the
+new version. Switch the notebook to that kernel and restart it; remove the old
+one with `rm -r ~/.local/share/jupyter/kernels/<project>-lexichron-<old version>`.
+Data, settings files and notebooks are untouched, and running jobs keep the
+image they started with. If a future image moves to a newer Python than
+3.11, the command refuses and says how to recreate the environment.
 
-#### Running scripts and batch jobs
+#### Scripts, batch jobs and Slurm from notebooks
 
-`new-project` also writes `<project>/.venv/host-python`, a launcher that runs
-the project's Python inside the image with the right directories and
-environment. It is an ordinary executable on the host, so it can be used
-anywhere a Python path is expected, including Slurm scripts:
-
-```bash
-/scratch/$USER/projects/gender-semantics/.venv/host-python my_script.py
-```
-
-To execute a notebook unattended inside a Slurm job:
+`.venv/host-python` is a launcher on the host that runs the project's Python
+inside the image, so it works anywhere a Python path does, including Slurm
+scripts:
 
 ```bash
-/scratch/$USER/projects/gender-semantics/.venv/host-python -m jupyter nbconvert \
-    --to notebook --execute --output run.ipynb unigrams_workflow.ipynb
+/path/to/project/.venv/host-python my_script.py
+/path/to/project/.venv/host-python -m jupyter nbconvert --to notebook --execute --output run.ipynb analysis.ipynb
 ```
 
-#### Submitting Slurm jobs from a notebook
-
-`sbatch` and the other Slurm commands are on the host, not in the image. The
-project's kernel runs `.venv/host-kernel`, which starts a small helper on the
-host (the same one `lexichron-ui` uses) beside the kernel and tells the code
-inside the container where to find it, so `lexichron.bridge.slurm_backend()`
-can submit and watch jobs from a notebook. The helper stops with the kernel.
-On a machine without Slurm the kernel starts without it.
-
-`new-project` writes `host-kernel` on every run. If you change it (to set
-something for your own project before the kernel starts), delete its
-`Generated by lexichron new-project` line: `new-project` then keeps your file
-and still points the new kernel at it. Kernels registered by releases before
-0.14.6 run `.venv/host-python` and have no helper; running `new-project` with
-0.14.6 or later fixes the project.
+The project's kernel runs `.venv/host-kernel`, which also starts a small
+helper on the host so that code in the container can reach `sbatch`, `squeue`
+and the other Slurm commands (`lexichron.bridge.slurm_backend()`); the helper
+stops with the kernel. `new-project` rewrites `host-kernel` on every run
+unless you have edited it and deleted its `Generated by lexichron
+new-project` line.
 
 #### GPUs and JAX
 
-The image carries [JAX](https://docs.jax.dev) with NVIDIA GPU support and two
-samplers built on it, [NumPyro](https://num.pyro.ai) and
+The image carries [JAX](https://docs.jax.dev) with NVIDIA GPU support,
+[NumPyro](https://num.pyro.ai) and
 [BlackJAX](https://blackjax-devs.github.io/blackjax/), for statistical models
-fitted downstream of lexichron (the `jax` extra in `pyproject.toml`). lexichron's
-own stages do not use them. The CUDA libraries come with the image, so the
-host needs only an NVIDIA driver (version 525 or later).
-
-The launchers (`.venv/host-python` and the project's Jupyter kernel) give the
-container the host's GPUs whenever the node has them, so a script or notebook
-started inside a GPU job sees them without changes:
+fitted downstream of lexichron; the stages do not use them. The host needs
+only an NVIDIA driver (525 or later). The launchers pass the GPUs into the
+container when the job has one and point JAX at the CPU otherwise
+(`LEXICHRON_NV=1` or `0` forces it; `JAX_PLATFORMS` chooses yourself):
 
 ```bash
 srun --gres=gpu:1 --time=00:10:00 /path/to/project/.venv/host-python -c "import jax; print(jax.devices())"
 ```
 
-On a node without a GPU they tell JAX to use the CPU. Set `LEXICHRON_NV=1` or
-`LEXICHRON_NV=0` to force the GPU flag on or off, or `JAX_PLATFORMS` to choose
-JAX's device yourself. JAX works in single precision unless a program turns on
-double precision (`jax.config.update("jax_enable_x64", True)`), which most
-statistical models need; for that, data-center GPUs (A100, H100, H200, B200)
-are much faster than workstation ones (L40S, RTX 6000), whose double-precision
-rate is 1/64 of their single-precision one. The image sets
-`XLA_PYTHON_CLIENT_PREALLOCATE=false`, so JAX takes GPU memory as it needs it
-instead of 75% at start, and two processes can share a GPU. A project created
-with an image older than 0.10 gets the GPU launchers by running `new-project`
-again with the new image (see "Updating a project to a new release").
+JAX takes GPU memory as it needs it (`XLA_PYTHON_CLIENT_PREALLOCATE=false`),
+so processes can share a GPU. For double-precision work, data-center GPUs
+(A100, H100) are far faster than workstation ones (L40S).
 
-Notes on the container route:
-
-- The image is read-only. All output paths (`db_path_stub`, model directories,
-  logs) must point at bind-mounted host directories such as `/scratch`.
-- Each image is pinned to one lexichron version. To use a different version,
-  pull its image and run `new-project` with it (the project's environment is
-  tied to the image's Python version, so it may need to be recreated; the
-  command tells you if so).
-- `apptainer run-help lexichron-0.14.6.sif` prints a short usage summary.
-- How the image is built and released is described in `container/README.md`.
+The image is read-only: every output path must be on a host directory such
+as `/scratch`. `apptainer run-help lexichron-0.14.7.sif` prints a usage
+summary; `container/README.md` describes how the image is built.
 
 ### Development installation (conda)
 
-For working on lexichron itself: the package is installed in editable mode,
-so changes to the source take effect without reinstalling. Linux x86_64 only
-(`rocks-shim`, a dependency, ships as a pre-built wheel for that platform;
-on macOS or Windows the install fails at that step, which does not affect
-HPC users).
+For working on lexichron itself, installed in editable mode. Linux x86_64
+only (`rocks-shim` ships a wheel for that platform alone).
 
 **1. Clone the repository.**
 
@@ -339,21 +214,16 @@ git clone https://github.com/eric-d-knowles/lexichron.git
 cd lexichron
 ```
 
-**2. Make an environment, or use one you have.** Building lexichron compiles
-Cython extensions, so the environment needs a C++ compiler.
-
-*A new environment* (the simple route): `environment.yml` creates one named
-`lexichron` with Python 3.11, the compiler, Cython and Enchant, and installs
-lexichron into it in editable mode (with the test tools, pytest and textual)
-as part of the same step, so there is nothing more to install afterwards:
+**2. Make an environment, or use one you have.** The Cython extensions need
+a C++ compiler. A new environment, from `environment.yml` (Python 3.11, the
+compiler, Cython, Enchant, and lexichron itself with the test tools):
 
 ```bash
 conda env create -f environment.yml
 conda activate lexichron
 ```
 
-*An existing environment*: make sure it has a compiler, then install in
-editable mode; the `dev` extra adds pytest and textual for the test suite:
+Or an existing one:
 
 ```bash
 conda activate your-environment
@@ -361,34 +231,22 @@ conda install -c conda-forge cxx-compiler
 pip install -e '.[dev]'
 ```
 
-If the container commands are installed as well, `which lexichron` should
-name the environment's command while the environment is active, not
-`~/.local/bin/lexichron`: that one runs the image, and a UI started from it
-has no Slurm access unless it was started with `lexichron-ui`. The installer
-adds `~/.local/bin` to `PATH` only when it is not there already, so an
-activated environment stays in front even in a job shell started from it;
-an older install's unconditional line is replaced by rerunning `install.sh`.
+With the environment active, `which lexichron` should name its command, not
+`~/.local/bin/lexichron` (which runs the image).
 
-**3. Install the Enchant dictionaries and NLTK data, once per environment.**
-Spell-checking uses the Enchant C library with Hunspell dictionaries, and
-model alignment the NLTK Swadesh list; neither comes through `pip`. With the
-environment active:
+**3. Install the Enchant dictionaries and NLTK data**, once per environment:
 
 ```bash
 bash scripts/setup_nlp_resources.sh
 ```
 
-The script installs the Enchant library into the active environment if it is
-missing, downloads the Hunspell dictionaries for every supported language,
-puts them inside the environment, and adds activation hooks so pyenchant
-finds both. spaCy's models need no step: they are downloaded on first import.
+It installs Enchant if missing, the Hunspell dictionaries for every supported
+language, and the NLTK Swadesh list, with activation hooks so pyenchant finds
+them. spaCy's models download on first import.
 
-**4. Rebuild gensim's corpus reader without the GIL, once per environment.**
-The stock gensim wheel re-takes the GIL for every line it reads, which on
-n-gram corpora (five tokens a line) caps a model at three or four cores
-however many threads it is given. The image rebuilds the reader at build
-time; a development environment needs the same step, with the Cython
-gensim 4.4 was generated with, used for this step only:
+**4. Rebuild gensim's corpus reader without the GIL**, once per environment.
+The stock reader re-takes the GIL for every line, which on five-token n-gram
+lines caps a model at three or four cores. The image does this at build time:
 
 ```bash
 pip install --target /tmp/cython-for-gensim "Cython==3.1.3"
@@ -396,38 +254,26 @@ PYTHONPATH=/tmp/cython-for-gensim python scripts/patch_gensim.py
 rm -rf /tmp/cython-for-gensim
 ```
 
-The script edits the installed gensim in place and recompiles its
-word2vec, doc2vec and fastText extensions; `pip install --force-reinstall
-gensim` undoes it. When you run a stage from the environment yourself, set
-`OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1` first: the batch scripts and the
-image do, and without it OpenBLAS's own threads fight gensim's and halve
-the training speed.
+`pip install --force-reinstall gensim` undoes it. When you run a stage from
+the environment yourself, set `OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1`
+first (the batch scripts and the image do), or OpenBLAS's threads halve
+training speed.
 
-**5. Register a Jupyter kernel (if you want one).** To use the environment
-from notebooks:
+**5. Register a Jupyter kernel** if you want one:
 
 ```bash
 python -m ipykernel install --user --name=lexichron --display-name="Python (lexichron)"
 ```
 
-`--name` sets the internal kernel identifier and `--display-name` what
-appears in Jupyter's kernel menu; replace both with something meaningful to
-your project, e.g. `--name=gender_semantics --display-name="Python (gender semantics)"`.
-
-`docs/architecture.md` describes how the filter and pivot pipelines are
-structured. (The container image includes all of the above, so none of these
-steps apply to it.)
+`docs/architecture.md` describes how acquire and filter work inside.
 
 ## Command line
 
-Pipeline stages can also be run from a settings file instead of a notebook.
-The file holds the settings a notebook's setup cells would hold, named exactly
-as in the stage's Python function; `examples/lexichron.yaml` is a commented
-template. One file describes one corpus: a shared `corpus` section (release,
-name, n-gram size, database directory; for a Davies corpus see
-[Davies corpora](#davies-corpora)) and a section per stage. The corpus's
-identifier is `corpus.name` (`eng-us`); files that call it `language`, as it
-was before 0.14, load as before.
+A settings file holds the stage settings, named exactly as in each stage's
+Python function; `examples/lexichron.yaml` is a commented template. One file
+describes one corpus: a `corpus` section (release, name such as `eng-us`,
+n-gram size, database directory; for a Davies corpus see
+[Davies corpora](#davies-corpora)) and a section per stage.
 
 ```bash
 lexichron acquire lexichron.yaml                       # download and ingest
@@ -442,286 +288,135 @@ lexichron inspect models/eng-us-final                  # an ensemble's years and
 lexichron inspect models/eng-us-final/measures/gender  # a measure's years x words
 ```
 
-`lexichron inspect` opens a database read-only (any size, any node) and
-prints a few decoded records: the first ones, those from `--key` onwards, or
-those with a `--prefix` (`--series` adds every year's counts under each
-n-gram-keyed record; `--info` prints the database's provenance record instead). The key layout is sniffed from the first records
-(`--layout` overrides it): a pivoted database's keys are typed with the year,
-`[2011] nuclear`; an n-gram-keyed database's as the n-gram; a Davies
-corpus's as `[fic][2000] text`. A vocabulary file is shown by rank.
+`lexichron inspect` opens a database read-only (safe on any node) and prints
+decoded records: the first ones, those from `--key` on, or those with a
+`--prefix`. `--series` adds each n-gram's year counts, and `--info` prints the
+database's provenance record. The key layout is detected (`--layout`
+overrides it): `[2011] nuclear` in a pivoted database, the n-gram itself in
+an n-gram-keyed one, `[fic][2000] text` in a Davies corpus. A vocabulary file
+is shown by rank.
 
-Misspelled or missing settings are reported before anything runs. So is
-work about to be thrown away: when the settings make a stage delete its
-earlier output first (`acquire.overwrite_db`, `filter.mode: restart`,
-`tune.mode: restart` on a named search, `train.mode: restart` on a named
-ensemble), the command says what would go and
-how much (`filter.mode = restart deletes the pivoted 5-gram database before
-starting: .../5grams_pivoted.db (412 GB in 1,204 files)`) and asks. A batch
-job has nobody to ask, so it needs `--yes` and otherwise stops right there,
-having deleted nothing; the UI adds `--yes` to the scripts it writes once you
-have confirmed in its dialog. Inside the
-container: `apptainer exec lexichron.sif lexichron acquire lexichron.yaml`
-(`singularity exec` on a Singularity cluster, or a project's
-`.venv/host-python -m lexichron.cli acquire lexichron.yaml`).
+Misspelled or missing settings are reported before anything runs. When the
+settings would delete earlier output (`acquire.overwrite_db`, or `mode:
+restart` for filter, a named search or a named ensemble), the command says
+what and how much and asks first. A batch job cannot answer, so it needs
+`--yes` and otherwise stops without deleting anything; the UI adds `--yes`
+once you have confirmed in its dialog. Inside the container, use
+`apptainer exec lexichron.sif lexichron acquire lexichron.yaml`, or a
+project's `.venv/host-python -m lexichron.cli acquire lexichron.yaml`.
 
 ### The acquire stage
 
-`lexichron acquire` downloads one release of Google Books n-grams and writes
-`<n>grams.db`, keyed by n-gram with a packed list of per-year counts under
-each key. A run is one parent process and a pool of worker processes, and
-only the parent ever writes to the database:
+`lexichron acquire` downloads one Google Books release and writes
+`<n>grams.db`, keyed by n-gram, with each key's per-year counts. Worker
+processes download and parse the files in parallel (`file_range` limits
+which; `random_seed` shuffles the order so a partial run samples the alphabet
+evenly). The database is then compacted, its counts checked, and, if
+`archive_path_stub` is set, archived as a `.tar.zst`.
 
-1. **The parent lists the files.** It reads the release's index page for the
-   corpus and n-gram size, keeps the `file_range` if one is set, and drops
-   every file already marked as processed in the database (`overwrite_db`
-   deletes the database first instead; the command line and the UI ask
-   before it does). `random_seed` shuffles the order so a partial run
-   samples the alphabet evenly.
-2. **The parent hands files to the workers.** Each worker gets one URL at a
-   time, with at most two files per worker queued ahead.
-3. **A worker downloads and parses its file in one stream.** It decompresses
-   the gzip as it arrives, parses each line, applies the `ngram_type` filter
-   and any `combined_multigrams`, and packs the year, count and volume
-   triplets into binary. It holds at most `chunk_entries` entries in memory,
-   whatever the file's size: each full batch is sorted and written under
-   `spool_dir` as an SST file (RocksDB's own file format), repeated keys
-   within it summed, and at the end of the file the batches are merged into
-   one sorted SST file. A connection dropped mid-file, or a body shorter
-   than the server announced, discards what was written and starts the file
-   again, up to three times.
-4. **The parent adopts each finished file.** It hands the worker's SST file
-   to the database together with a second, one-key file holding the file's
-   "processed" marker, in a single ingest call. RocksDB applies the call as
-   one edit of its manifest, so a file's records and its marker are in the
-   database together or not at all, wherever the job is killed: an
-   interrupted run loses only the files in flight, and the next run
-   (`overwrite_db: false`) picks up the rest. Nothing is replayed record by
-   record, so the parent keeps up with any number of workers.
-5. **The parent compacts the database.** Each file arrived as its own SST
-   file and auto-compaction is off in the write profile, so this is what
-   folds them together. It is not optional: until then an n-gram that
-   arrived from several files exists as several partial records. The one
-   case in which it is skipped is a re-run that adds no file to a database
-   a previous run already compacted (a job that ended during the count
-   check, say): every SST file is then in one sorted level, no n-gram can
-   be held twice, and compacting again would rewrite the whole database to
-   produce the same records.
-6. **The counts are verified** (`verify_counts`, on by default; see below).
-7. **The parent archives the database** when `archive_path_stub` is set,
-   as a `.tar.zst` under `<stub>/<release>/<corpus>/<n>gram_files/`.
+- **Resuming.** Each file's records go into the database together with its
+  "processed" marker, so an interrupted run loses only the files in flight,
+  and the next run (`overwrite_db: false`) does the rest. A file that fails
+  three attempts does not stop the others; the run reports it and exits with
+  an error, and a rerun fetches only the missing files.
+- **Summed counts.** With `combined_multigrams`, several raw n-grams can
+  become one key (`working_NOUN class_NOUN` and `working_NOUN class_VERB`
+  both become `working-class_NOUN`), and their counts are added.
+- **Checked counts** (`verify_counts`, on by default). Each file's marker
+  records the totals its worker kept, and after compaction the database must
+  hold exactly their sum, so a file taken in twice or a record lost fails
+  the run. Years must arrive in order. A line whose counts cannot be read in
+  full is logged and counted, and fails the run unless
+  `allow_unparsed_lines: true`. The outcome goes into the database's
+  provenance and the UI.
+- **Memory.** The log reports the job's memory use after the files and
+  around the count check, so a job killed for memory can be explained.
 
-A file that fails all its attempts does not stop the others. The run reports
-it at the end and exits with an error, skipping compaction, verification and
-archiving; re-running resumes with only the missing files.
-
-The log records what the job's memory holds after the files and before and
-after the count check: how much of the Slurm job's limit is in use, split
-into memory held by processes and file cache, which the kernel drops when it
-needs the room. A job killed for memory can then be explained from its log.
-
-**Counts are summed, never replaced.** Every record is written as a *merge*:
-when a key is already in the database, its per-year counts are added. Without
-`combined_multigrams` each n-gram occurs once in the whole release and the
-sum has one term. With them it does not: combining keeps only the first
-token's tag, so `working_NOUN class_NOUN` and `working_NOUN class_VERB` both
-become `working-class_NOUN`, and a sequence with a named token collapses its
-capitalizations too (`a . i .` and `A . I .` both become `A.I.`), which sit
-in different files. Their counts are added up within a batch by the worker,
-across a file's batches when they are merged, and across files by the
-compaction.
-
-Summing has one hazard, which is why the run checks its own arithmetic: a
-file taken in twice would be counted twice, and no later stage could tell.
-Four things guard the counts.
-
-- **A ledger, checked against the database on every run.** Each worker
-  totals the occurrences and the volume counts of every line it keeps, and
-  the totals are stored in the file's marker. Adding counts together never
-  changes a grand total, so after compaction the database must hold exactly
-  the sum of its markers' totals. The run reads the whole database once, in
-  parallel, and compares: a file ingested twice, a record lost on the way or
-  a wrong sum each leave a difference, the run fails, and the summary gives
-  both figures. The outcome is recorded in the database's provenance
-  (`lexichron inspect <database> --info`) and shown in the UI. A database
-  begun by an earlier version, whose markers hold no totals, is reported as
-  not verifiable; that is not an error.
-- **Years in order.** The merge operator assumes each value's years ascend
-  and checks nothing. Workers check every value before it is spooled and
-  rewrite any that arrive otherwise, and the verification scan checks every
-  value again in the finished database.
-- **No line dropped in silence.** A line whose counts cannot be read in full
-  (an entry that is not `year,count,volumes` in whole numbers) is logged
-  with its content and counted in the file's marker; what can be read of it
-  is kept. A run that met any such line finishes its work and then fails,
-  saying how many, because those n-grams are undercounted.
-  `allow_unparsed_lines: true` accepts them; the number is recorded either
-  way.
-- **Records and marker together.** Step 4 above. `tests/test_acquire_kill.py`
-  kills a run at chosen and at random moments against the real RocksDB and
-  requires the resumed database to equal an uninterrupted one.
+How this works inside: [docs/architecture.md](docs/architecture.md).
 
 ### The filter stage
 
-`lexichron filter` turns the acquired database (`<n>grams.db`, every raw
-n-gram as Google wrote it) into `<n>grams_processed.db`, where the text is
-normalized and the noise removed. Each token is lowercased, lemmatized
-(*women* → *woman*, with spaCy's tables for the corpus's language, and
-for English with the token's part-of-speech tag where there is one: see
-*Lemmas and part of speech* below; the
-lemma is lowercased too, since spaCy's English table maps *truer* to
-`TRUE`) and then
-either checked against a vocabulary or put through the rule filters:
-stopwords, tokens that are not purely alphabetic (ASCII letters only for
-English), and tokens shorter than `min_len` become `<UNK>`. N-grams with
-fewer than `min_context_tokens` real tokens are dropped, and years can be
-binned. Raw n-grams that collapse onto the same processed key have their
-year counts summed.
+`lexichron filter` turns the acquired database into a normalized one. Each
+token is lowercased and lemmatized (*women* → *woman*, with spaCy's tables
+for the corpus's language, and for English with the token's tag where there
+is one: see *Lemmas and part of speech* below). It is then either checked
+against a vocabulary or put through the rule filters: stopwords, tokens that
+are not purely alphabetic (ASCII letters only for English), and tokens
+shorter than `min_len` become `<UNK>`. N-grams with fewer than
+`min_context_tokens` real tokens are dropped, and years can be binned
+(`bin_size`). Raw n-grams that become the same processed key have their
+counts summed.
 
-The stage is run twice per corpus, and writes a different kind of database
-each time:
+The stage runs twice per corpus:
 
-1. **Unigrams**, with no vocabulary, write `1grams_processed.db` (keyed by
-   n-gram, a packed list of per-year counts each) and, from it,
+1. **Unigrams**, with no vocabulary, write `1grams_processed.db` and
    `1grams_processed.db/whitelist.txt`: the `output_vocabulary_top_n` most
    frequent lemmas, optionally only those present in every year of
-   `output_vocabulary_year_range` and optionally spell-checked. Only the
-   years the corpus has text for are required: a range that runs past the
-   corpus's end (COHA ends in 2009) asks nothing of the years beyond it,
-   and the run says which years it left out. A range with no text at all
-   is refused, and a vocabulary far smaller than asked for is warned about.
-2. **Longer n-grams** use that whitelist (by default this corpus's own; a
-   token is kept only if its lemma is in it) and write `<n>grams_pivoted.db` directly: keyed by year then
-   n-gram, one record per (year, n-gram), which is what training reads.
-   Filtering and pivoting are one pass over the raw database; raw spellings
-   that collapse onto one n-gram are summed by the database's merge
-   operator. (*Pivot by year* off writes an n-gram-keyed database instead.)
+   `output_vocabulary_year_range` (only years the corpus has text for are
+   required), and optionally spell-checked (which, with lowercasing, also
+   drops proper nouns).
+2. **Longer n-grams** are filtered against that vocabulary (a token is kept
+   if its lemma is in it) and written as `<n>grams_pivoted.db`, keyed by
+   year then n-gram, which is what training reads. (*Pivot by year* off
+   writes an n-gram-keyed database instead.)
 
-*Always keep* (`always_include`, and `always_include_case` for spellings whose
-capitalization must match) names tokens kept whatever the other rules say: the
-vocabulary, letters only, length and stopwords. An entry is a spelling and is
-matched against the token as it appears in the data, case-folded unless it is
-on the case list, so `he` keeps *He* and *HE*, and `AI` on the case list keeps
-*AI* but not *ai*. A kept token is then lowercased and lemmatized like any
-other; it only skips the rules that would drop it, so list every spelling you
-want kept (`woman` does not keep *women*). A unigram run also writes the kept
-words to the vocabulary whatever their frequency: they follow the
-`output_vocabulary_top_n` most frequent, so the file is that many lines plus
-the kept words that rank below them (the run says which). Listing a word in
-the unigram filter is therefore enough to keep it in the longer n-grams,
-which are filtered against that vocabulary; without this a rare word passed
-the unigram rules, missed the cut, and vanished from the corpus. Tokens the acquire run built from
-word sequences (`combined_multigrams`, say `A.I.` and `working-class`) are kept
-without being listed, read from the raw database's provenance record; the UI
-shows them beside the list. Those tokens are not lemmatized either: each was
-made to your specification, entry by entry, and stays as made (lowercased
-with everything else). If you want a plural folded into its singular, say so
-where the token is made: `human beings => human-being`. In the UI the setting
-is an editor with a row per token and a *Match case* switch.
+**Always keep** (`always_include`, and `always_include_case` for spellings
+whose capitalization must match) names tokens kept whatever the other rules
+say. An entry is matched against the token as it appears in the data,
+case-folded unless it is on the case list: `he` keeps *He* and *HE*; `AI` on
+the case list keeps *AI* but not *ai*. A kept token is still lowercased and
+lemmatized, so list every spelling you want kept (`woman` does not keep
+*women*). A unigram run adds the kept words to the vocabulary whatever their
+frequency, so listing a word there keeps it in the longer n-grams too. Tokens
+made at acquisition (`combined_multigrams`) are kept without being listed and
+are never lemmatized: to fold a plural, say so where the token is made
+(`human beings => human-being`).
 
 **Lemmas and part of speech** (`lemmatize_by_tag`, on by default; English).
-spaCy's lookup table gives one lemma per spelling, whatever the word is doing:
-*building* becomes *build* whether it is a noun or a verb, and *leaves* is
-*leave* on a tree as much as out of a room. Google's tagged n-grams say which
-it is, and the filter uses that where spaCy's own tables can vouch for the
-answer. For a noun, verb, adjective or adverb:
+spaCy's lookup table gives one lemma per spelling: *building* becomes *build*
+whether it is a noun or a verb. Google's tagged n-grams say which it is, and
+the filter uses the tag where spaCy's tables vouch for the answer. For a
+noun, verb, adjective or adverb:
 
 1. an irregular form listed for that part of speech wins (*leaves* the noun
    is *leaf*; *better* the adjective is *good*);
-2. otherwise, if the lookup's lemma is one that part of speech can have, it
-   stands (*years* is *year*, *glasses* is *glass*, as before);
-3. otherwise the lookup's lemma belongs to another part of speech, and the
-   word keeps the form its own allows: *building* the noun stays *building*,
-   *left* the adjective stays *left*, *saw* the noun stays *saw*;
-4. a word the tables do not know, a tag of another kind, or no tag at all:
-   the lookup decides, as it always did.
+2. otherwise the lookup's lemma stands if that part of speech can have it
+   (*years* → *year*);
+3. otherwise the word keeps its own form: *building* the noun stays
+   *building*, *saw* the noun stays *saw*;
+4. a word the tables do not know, or no tag: the lookup decides.
 
-So the tag changes a lemma only when the lookup's answer is not a legitimate
-lemma for that part of speech, or an irregular form says otherwise. Nothing is
-ever stripped from a word the tables do not know, which is what spaCy's own
-rule lemmatizer does when it is given only a coarse tag (*business* →
-*busines*). The effect is that words the lookup merges across parts of speech
-come apart: *building* and *build*, *meeting* and *meet* are separate
-vocabulary items. A vocabulary must be made the same way as the n-grams
-filtered against it, or every such token would miss it; each run records how
-it made its lemmas, and the stage refuses a vocabulary made the other way, so
-after changing the setting (or on a corpus filtered before 0.12) run the
-unigram filter again first. `lemmatize_by_tag: false` is the lookup alone.
-Untagged n-grams (`acquire.ngram_type: untagged`) have no tags to use, so
-they get the lookup alone whatever the setting, and the run is recorded that
-way: a vocabulary built from tagged unigrams is refused for them.
+Nothing is ever stripped from an unknown word (spaCy's rule lemmatizer, given
+only a coarse tag, turns *business* into *busines*). A vocabulary must be
+lemmatized the same way as the n-grams filtered against it: each run records
+how, and the stage refuses a mismatch, so after changing the setting run the
+unigram filter again. Untagged n-grams always get the lookup alone.
 
-The stage is built like the acquire stage, with a database where that has
-downloads. The work is split into key ranges (*work units*) balanced by data
-volume, from the source database's own file metadata, so there is no
-pre-scan. Worker processes each scan a unit, and hand it over as one sorted
-SST file; the parent adopts that file together with the unit's marker in a
-single ingest call, so a unit's records and the fact that it is done are in
-the destination together or not at all, wherever the job is killed. When
-every unit is in, the parent compacts the destination, which is what folds
-the units' files into one sorted database and sums the counts of records
-that arrived from more than one unit. Compaction is not optional. A worker
-holds the source open with rocks-shim's `scan` profile (only the files its
-range touches, nothing pinned, a small cache), so its memory does not grow
-with the database: about 280 MB while it scans, and more for a moment at the
-end of each unit, when it merges the sorted parts it spooled into one file.
-For a pivoted run that is a thousand or two parts and a peak of 0.5 to
-0.85 GB (measured on the English 5-grams); the Submit tab's estimate allows
-0.9 GB a worker plus 4 GB, so 40 workers fit in the default 40G, and 0.4 GB
-a worker for a unigram run. Slurm's own `MaxRSS` will read much higher than
-that for the same job, because it counts the pages forked workers share once
-per worker, and a job's memory also fills with page cache from the spool
-files, which is given back under pressure. A run that is interrupted resumes
-from the units it had finished (`mode: resume`); `mode: restart` starts over,
-after deleting the destination database, and both the UI and the command
-line ask before it does (see [Command line](#command-line)).
-A resume finishes only the units not yet done, so it must be given what the
-run that started the destination was given: the destination records the
-vocabulary (by its content, not its path), how lemmas are made, the keep
-lists and the rules, and a resume with any of them changed is refused with
-the difference named. A rebuilt vocabulary therefore needs `mode: restart`;
-resuming would have finished the database with units filtered two ways, and
-every count check would have passed.
+- **Resuming.** The work is split into key ranges balanced by data volume;
+  each range's output and its marker go in together, so an interrupted run
+  resumes from the ranges it finished (`mode: resume`). A resume must be
+  given what the first run was given (the vocabulary's content, how lemmas
+  are made, the keep lists, the rules) and is refused, naming the
+  difference, if anything changed; a rebuilt vocabulary needs `mode:
+  restart`. A source whose acquisition never finished compacting is refused.
+- **Checked counts** (`verify_counts`, on by default). The run checks that
+  it read exactly what the source holds, that the destination holds exactly
+  what it wrote, and that what it read equals what it kept plus what it
+  dropped. A difference fails the run and no vocabulary is written. The
+  outcome goes into the provenance and the Progress tab.
+- **Memory.** About 0.5 to 0.9 GB per worker on 5-grams (the Submit tab
+  allows 0.9 GB plus 4 GB; 0.4 GB per worker for unigrams). Slurm's
+  `MaxRSS` reads higher, because it counts shared pages once per worker.
 
-The source must be a finished database: one whose acquisition stopped before
-compacting (a file failed, the job ran out of time) is refused, with a
-message saying to run that stage again.
+When spellings merge under one lemma their volume counts are added, so a
+filtered record's volume count is an upper bound on the books it appears in.
+Occurrence counts are exact.
 
-**The run checks its own counts** (`verify_counts`, on by default), in the
-same way an acquisition does. Filtering only ever moves counts and adds them
-together, so three totals must fit together exactly, and each unit records
-all of them in its marker:
-
-- **What was read.** Every unit totals the occurrences and volume counts of
-  every source record in its range, kept or not. Each record lies in exactly
-  one unit, so the units together must have read exactly what the source
-  holds. Where the acquisition that made the source verified its counts,
-  that figure is on record and the two are compared: a key range the
-  partition skipped, or gave to two units, shows as a difference. A source
-  acquired before counts were verified has no figure to compare with, and
-  the run says so.
-- **What was written.** Every unit totals what it emits, before records with
-  the same key are summed. After compaction the destination is read once, in
-  parallel, and must hold exactly the sum of what the units emitted, with
-  every value's years in ascending order (workers check that as they spool,
-  and put right any value that is not). A unit taken in twice, or a record
-  lost on the way, shows as a difference.
-- **What was dropped.** Every unit also totals the n-grams it drops, from
-  those records themselves and not by subtraction. A kept n-gram goes out
-  with every count it came in with (lowercased, lemmatized, binned, split
-  into one record per year, but not a count more or less), so what was read
-  must equal what was kept plus what was dropped. The two checks above
-  cannot see a count lost in between, in binning or in the pivot: the
-  source would still be read in full and the destination would still hold
-  what was emitted. This one can. It also gives the share of occurrences
-  the filter removed, shown on the Progress tab as the run goes.
-
-A difference fails the run and no vocabulary is written from it. The outcome
-is recorded in the database's provenance and shown on the Progress tab.
-
-One thing the counts do not promise: when spellings merge under one lemma,
-their volume counts are added. A book that contains both *building* and
-*buildings* is counted for each, so a filtered record's volume count is an
-upper bound on the books it appears in. Occurrence counts are exact.
+On the Progress tab, a filter run keeps four counts apart: *scanned* (source
+records read), *kept* (source records that passed), *year records* (pivoted
+runs: one per n-gram and year), and *in database* (after compaction, fewer,
+since records with the same key merge). Kept and in database depend only on
+the corpus and the rules.
 
 ## Davies corpora
 
@@ -826,240 +521,58 @@ above; they are kept until those corpora are read the new way.
 ## Terminal user interface
 
 `lexichron-ui` is a terminal interface for people who would rather not edit
-YAML or write Slurm scripts by hand. It works over a plain SSH session and
-needs nothing set up in advance: fill in where the corpus should go and what
-to download, and submit. The installer above puts it on your PATH; it starts
-the interface together with a small helper on the host, so that jobs can be
-submitted and watched from inside the container. (`lexichron-ui
-/path/to/lexichron.yaml` opens an existing settings file; a project
-environment created with `new-project` also has its own `.venv/lexichron-ui`
-that uses that environment.)
+YAML or write Slurm scripts. It works over plain SSH and needs no setup: fill
+in where the corpus should go and what to download, and submit. It starts a
+small helper on the host beside it so jobs can be submitted and watched from
+inside the container. `lexichron-ui /path/to/lexichron.yaml` opens a settings
+file; a project made with `new-project` has its own `.venv/lexichron-ui`.
+Started straight from the image (`apptainer run --app ui
+lexichron-0.14.7.sif`), everything works except Submit and the job table.
 
-Above the tabs, two bars:
+Two bars sit above the tabs:
 
-- **Corpus** — the corpus everything below acts on. Type the directory that
-  holds your corpora (the one `<release>/<name>/<N>gram_files` folders
-  live under, or a Davies corpus's `coha/` folder) and pick one of those
-  found; a Davies corpus is listed twice, as its tokens and its sentences; the line beneath says how far it
-  has got (acquired, filtered, how many searches and ensembles) and where its
-  settings file is. Choosing a corpus opens that file, so the form always
-  describes the corpus you are looking at. *New corpus* asks for the
-  kind of corpus, then the directory, corpus and n-gram size of one that
-  does not exist yet (for a Davies corpus: the corpus, and whether this is
-  its tokens or its sentences), and takes you to Acquire, the stage that
-  creates it. Acquire's form is the one for that kind of corpus. The UI remembers the
-  directory and the last settings file between sessions.
-- **Stage** — *Acquire*, *Filter*, *Tune* and *Train* choose the stage that
-  Settings, Run and Submit act on. A stage whose prerequisite is missing is
-  greyed out, with the reason as its tooltip: Filter needs the database
-  Acquire makes, Tune and Train the pivoted database Filter makes. Filter is
-  offered without the vocabulary it would use by default (the 1-grams' for
-  2-5-grams, the tokens' for a Davies corpus's sentences); the line under
-  the corpus bar says when that vocabulary is missing.
+- **Corpus**: the corpus everything acts on. Type the directory that holds
+  your corpora and pick one; the line beneath says how far it has got
+  (acquired, filtered, searches, ensembles). Choosing a corpus opens its
+  settings file. *New corpus* sets up one that does not exist yet and takes
+  you to Acquire.
+- **Stage**: Acquire, Filter, Tune, Train or Measure. A stage whose input is
+  missing is greyed out, with the reason as its tooltip.
 
-Tabs:
+The tabs:
 
-- **Settings** — a form for
-  that stage's settings, with rarely-used settings under *Advanced*; the
-  corpus itself is named at the top of the form and chosen on the bar. Hover a `?` (or press F1) for help on a setting. Missing or
-  invalid settings are reported at the top as you type. *Save* writes the
-  settings file beside the database it describes,
-  `<corpus directory>/<release>/<name>/<n>gram_files/lexichron.yaml`, so
-  each corpus carries its own settings; that corpus's runs, logs and
-  progress go in `.lexichron/` next to it. If that file exists but was not
-  the one opened (the UI was started with no path, or the corpus fields
-  were changed to another corpus), *Save* asks before replacing it, since
-  the form was not filled from it. The exact Python call
-  that will run is under *Resolved call* for anyone who wants to check it.
-  Plain `lexichron-ui` reopens the file you saved last time, so closing the
-  UI while a job runs and reopening it later brings back the settings and
-  the job's progress.
-- **Run** — runs the stage here, streaming its output. For small tests on a
-  login node (set a small file range) or inside an interactive allocation.
-- **Submit** — Slurm account, partition, CPUs, memory, time and, for tune
-  and train, the number of jobs. The values come from three layers and a
-  line under the form says where each came from: lexichron's defaults per
-  stage (40 CPUs for acquire and filter, with 28G and 40G; a 64-CPU, 64G slice for a day or two, split
-  over a job array, for tune and train), and smaller ones for a Davies
-  corpus, by stage and unit, sized from COHA (20 CPUs and 12G for an hour to
-  acquire, one worker an archive; 10 or 20 CPUs for half an hour to filter;
-  32 CPUs and 32G for 12 hours to tune or train, train split over 3 jobs);
-  a note under the form says how to size the job for the corpus at hand
-  (for a Davies acquire run, how many archives there are to read); your own account and partition,
-  kept in `~/.lexichron/slurm.yaml` for every corpus (the first account you
-  save goes there; *Use account as my default* moves a later change there);
-  and the corpus's settings file, whose `slurm:` section holds a block per
-  stage (`slurm.train`) and, when they differ from your defaults, an
-  account and partition for that corpus alone. Switching stage shows that
-  stage's values. A script is never written without an account: Slurm
-  would otherwise charge the job to your default project without anyone
-  choosing it.
-  *Write batch script* writes `lexichron.<stage>.sbatch` next to the settings
-  file; *Submit* also submits it and shows the job id. A line above the
-  buttons says what the script runs the stage with: the image the UI was
-  started from, or, from a development environment, the `lexichron` on
-  the job's PATH. *Jobs*, shown for the tune and train stages only, splits
-  the run over that many jobs: the script becomes a Slurm job array whose
-  tasks each take every N-th year of the run and write into the same
-  output, so a run too long for one job's time limit, or one that should
-  spread over several nodes, is one submission; the grid summary on the
-  Settings tab says how the years would split. An array needs the search or
-  ensemble to have a name (*Search name*, *Ensemble name* on the Settings
-  tab): an unnamed one is named by the time it starts, so each task would
-  start its own and none would see the others' models. Submit refuses it,
-  and so does the stage. *Job name* is only what Slurm calls the job. The acquire and filter
-  stages write one database and run as one job, parallel inside it. Run, Write
-  batch script and Submit all check first whether the settings would make
-  the stage delete its earlier output (a database, a tuning search); if so,
-  a dialog says what and how much, and *Keep it* cancels. A restart
-  submitted as a job array is deleted here, after that dialog, since the
-  tasks cannot do it (each would delete what the others are writing); the
-  tasks then resume into the empty directory. The tab also
-  shows a rough memory estimate for the job (workers × per-worker need plus
-  the parent process; the script sets the worker count from the CPUs unless
-  the stage's `workers` is set), and asks before submitting a job whose
-  memory looks too small — the usual way to lose a queue wait to an
-  out-of-memory kill.
-- **Progress** — the latest runs, newest first, whether started with *Run
-  here* or by a Slurm job: a progress bar, what is being worked on, the
-  run's inputs, anything that has gone wrong and what it will lead to, a
-  grid of meters, and the tail of the run's log (collapsed; click *Log* to
-  open it), refreshed every few seconds. The meters keep
-  three record counts apart: what was *read* (raw n-grams for
-  acquisition, source records for filtering), what was *kept* and handed
-  to the database (fewer: records with the same key merge before
-  insertion) and what the final database *holds* (fewer again, exact once
-  compacted). A filter run also shows what each rule removed:
-  tokens that were not alphabetic, too short, stopwords or not in the
-  vocabulary, and n-grams dropped for having too few real tokens; its
-  headline names the step it is on (the work units, compaction, the count
-  check, the vocabulary), its *Scan rate* is source records read per second
-  with units in flight included, and its *Checks* group shows the count
-  check from the start and whether the source was read in full. The
-  Runs table's *Records* column is the records kept so far while a run is
-  going and the compacted database's count (marked `*`) once it is done;
-  *Clear finished runs* removes the records of runs that are no longer
-  running. (Every run writes
-  `.lexichron/runs/<time>_<stage>/progress.json`; the UI reads it, so it can
-  be closed and reopened while a job runs.) Your queued and running Slurm
-  jobs are listed underneath, with a *Cancel* button.
-
-  An acquisition's screen reads as follows. The words are general ones,
-  "records" and "reading", except where a run says more about what it
-  reads: a Google Books acquisition downloads its files and says so; a
-  Davies acquisition counts *tokens read*, and what can fail to be read
-  there is a *row* of the tagged files.
-  - *The headline and the bar* say which step the run is on (`step 1 of 3:
-    downloading and parsing the files`, then compaction, the count check,
-    and archiving if asked for) and how far it is **by size**: the listing
-    gives every file's compressed size, and files differ by orders of
-    magnitude in what they hold, so a count of files says little.
-    *Remaining* is an estimate for the files only; the steps that follow
-    are single long operations with no estimate.
-  - *Scan rate* is the raw records (n-grams, one per line; a Davies
-    corpus's tokens) read per second while files were being read, files still in flight included (workers report every few
-    seconds). It does not depend on how much of what is read is kept.
-  - *In flight* shows files waiting for a worker, being downloaded and
-    parsed, and waiting for the database. The last should stay near zero: a
-    finished file is adopted in one short operation.
-  - *Records* are given for this session and, since the database
-    accumulates over acquisition jobs, for the entire corpus: the *records
-    read* (n-grams, one per data line; the session's figure includes files
-    still being read), those *kept*, with their share of the records in
-    finished files, and the files from which *nothing* was *kept*: read in
-    full, with no line that passed the token-type filter. For tagged
-    n-grams that is most files, and a small share kept is what a correct
-    run looks like.
-  - *Checks* shows the count check from the start (pending, checking,
-    verified, or the difference found), the *occurrences* (the total in the
-    files read so far, and the database's once it has been checked), the
-    *unread lines*, whose counts could not be read in full, and the
-    *reordered values*, which arrived with years out of order and were put
-    in order. A line that could not be read,
-    or a file that failed, is also written under the headline the moment it
-    happens, with what it will lead to: the run finishes what it can and
-    then ends with an error.
-- **Inspect** — look inside a database: pick which of the corpus's databases
-  or vocabulary files to open (or type any path), and show the first rows, the rows
-  from a key, or the rows with a prefix, decoded for the database's layout
-  (`lexichron inspect` on the command line does the same); selecting a row
-  of an n-gram-keyed database shows its full year series, and *How it was
-  made* shows the database's provenance record. Databases are opened
-  read-only with a small footprint, so this is fine on a login node. With
-  the Tune, Train or Measure stage selected, the tab shows that stage's
-  own output instead: a search's scores, an ensemble's years and noise
-  profile, or a measure's years × words (below).
-
-Run straight from the image instead (`apptainer run --app ui lexichron-0.14.6.sif`)
-and everything works except *Submit* and the job table, since Slurm commands
-are not visible from inside the container.
-
-## Example notebooks
-
-The `notebooks/` folder contains one notebook per workflow. Copy the ones you
-need into your project directory and edit the paths and settings at the top.
-
-**Google Ngrams**
-
-| Notebook | What it does |
-|---|---|
-| `unigrams_workflow.ipynb` | Download and ingest 1-grams, filter and lemmatize them, and write a vocabulary whitelist |
-| `multigrams_workflow.ipynb` | Download and ingest 2–5-grams, filter them against the whitelist, and pivot to per-year format |
-| `training_workflow.ipynb` | Train per-year `word2vec` models on processed n-grams, then normalize and align them |
-| `ngram_change_analysis_workflow_eng.ipynb` | Track semantic change over time in the English models (similarity, relatedness, dimension projections) |
-| `ngram_change_analysis_workflow_rus.ipynb` | The same analyses for Russian |
-
-**Davies corpora, the older route** (COHA, COCA, Movies; these use the notebook-era `daviesprep` modules, not the stages; for COHA see [Davies corpora](#davies-corpora))
-
-| Notebook | What it does |
-|---|---|
-| `davies_acquisition_workflow.ipynb` | Ingest Davies corpus files with year and genre metadata, filter them, and write a whitelist |
-| `coha_training_workflow.ipynb` | Train and align per-year `word2vec` models on COHA |
-| `movies_training_workflow.ipynb` | The same for the Movies corpus |
-| `coha_change_analysis_workflow.ipynb` | Track semantic change in the COHA models |
-
-For the full set of options, see the docstrings in `lexichron.stages.filter`,
-`ngramprep.ngram_filter.config` and `daviesprep.davies_filter.config`.
-
-## Output files
-
-The n-gram stages lay their outputs out under the `db_path_stub` you give
-them. It may name environment variables and start with `~`
-(`/scratch/$USER/NLP_corpora/Google_Books`): they are expanded where the
-stage runs, the settings file keeps them as written, and one file then
-serves everyone on a cluster. A variable that is not set is an error, not a
-directory named `$USER`.
-
-```
-{db_path_stub}/{release}/{name}/{N}gram_files/
-    {N}grams.db                 raw n-grams as downloaded (acquire)
-    {N}grams.db/lexichron.json  how the database was made (every database
-                                a stage writes carries one; see below)
-    1grams_processed.db         filtered unigrams, keyed by lemma (filter)
-    1grams_processed.db/whitelist.txt   the vocabulary built from them
-    {N}grams_pivoted.db         filtered 2-5-grams keyed year-first, one record
-                                per n-gram and year: what training reads (filter)
-    {N}grams_processed.db       2-5-grams keyed by n-gram, only when
-                                "Pivot by year" is turned off
-    logs/                       one log per filter run
-    tuning/<name>/              a hyperparameter search (tune): models, scores, tables
-    models/<name>/              an ensemble of final models (train): train.json,
-                                y<year>/c<corpus>_s<seed>.npz, y<year>/year.json
-    lexichron.yaml              the settings the UI saved
-    .lexichron/runs/            progress records of every run
-```
-
-A Davies corpus is laid out as `{db_path_stub}/{name}/token_files/` and
-`sentence_files/`, with `tokens*` and `sentences*` where an n-gram corpus
-has `{N}grams*` (see [Davies corpora](#davies-corpora)).
-
-Nothing temporary is left behind: workers spool their files under the
-job's scratch directory, and each is moved into the database (or deleted)
-as it is ingested.
-
-Model training writes one model per year (or per year bin) into the model
-directory you specify. Use `common_db.compress_db()` to archive a database for
-long-term storage or transfer.
+- **Settings**: the stage's form, with rarely used settings under
+  *Advanced*; hover a `?` or press F1 for help. Problems are reported as you
+  type. *Save* writes `lexichron.yaml` beside the database it describes (and
+  asks before replacing a file that was not the one opened); *Resolved call*
+  shows the exact Python call. Plain `lexichron-ui` reopens the file you
+  saved last.
+- **Run**: runs the stage here, for small tests or inside an interactive
+  allocation.
+- **Submit**: account, partition, CPUs, memory, time and, for tune, train
+  and measure, the number of jobs. Defaults come from lexichron (per stage,
+  and smaller for a Davies corpus), then your account and partition in
+  `~/.lexichron/slurm.yaml`, then the corpus file's `slurm:` section; a line
+  says where each value came from, and a note says how to size the job.
+  *Write batch script* writes `lexichron.<stage>.sbatch`; *Submit* also
+  submits it. *Jobs* above 1 makes a job array whose tasks each take every
+  N-th year; it needs a named search or ensemble. The tab estimates the
+  job's memory and asks before submitting one that looks too small, and it
+  asks before anything that would delete earlier output. A script is never
+  written without an account.
+- **Progress**: recent runs, newest first, whether run here or by Slurm,
+  with a progress bar, what is being worked on, problems and what they will
+  lead to, meters, and the log's tail. An acquisition's bar measures
+  progress by file size, not file count, and its meters keep records *read*,
+  *kept* and *held* by the database apart; a filter run shows what each rule
+  removed and the count check as it goes. Your Slurm jobs are listed below
+  with a *Cancel* button. The UI reads each run's
+  `.lexichron/runs/<time>_<stage>/progress.json`, so it can be closed and
+  reopened while a job runs.
+- **Inspect**: look inside a database or vocabulary file, as `lexichron
+  inspect` does (read-only, fine on a login node), and see how it was made.
+  With Tune, Train or Measure selected, it shows a search's scores, an
+  ensemble's years and noise profile, or a measure's years × words.
 
 ## Hyperparameter search (`tune`)
 
@@ -1121,9 +634,7 @@ settings before any final model is trained.
   change ratios). The scores themselves live one per file under
   `scores/` (a cell-year each) and `pairs/` (a year pair each); the tables
   are exports rebuilt from the files, and `lexichron inspect` and the
-  Inspect tab read the files, so they are current whoever is still writing
-  (a search from before 0.9 has only its tables; its next run or read
-  imports them). The Inspect tab shows the columns in families
+  Inspect tab read the files, so they are current whoever is still writing. The Inspect tab shows the columns in families
   (benchmarks, neighbourhoods, valence axis, or all) with the ± spreads on
   or off, so the table fits an ordinary window.
 - **The suggestions.** Each family stars its own cell by its own rule, and
@@ -1146,30 +657,13 @@ settings before any final model is trained.
   and year pairs. `lexichron inspect <corpus>/tuning/<name>` prints the
   same table (`--key <cell>` adds that cell's years).
 - **While it runs.** A cell is scored as soon as its models for a year are
-  on disk, while the other cells' models still train, and its year pairs as
-  soon as the later year's model exists; `results.tsv` and `pairs.tsv` grow
-  row by row and the summary is rewritten after every year, so the Inspect
-  tab shows a provisional picture at any point. Only one cell's models are
-  in memory at a time: the stage needs a few hundred MB per training
-  process (`workers / workers_per_model` of them) plus the corpus writer,
-  whatever the size of the grid. Years are not a barrier: the models are
-  one queue in year order, a training slot that frees up takes the next
-  model whose corpus is ready, and corpora are written one year ahead, so
-  a year's last models and the next year's first ones train side by side
-  (a year's corpus and non-seed-0 models are deleted when its last model
-  lands). Within a year the costliest cells are queued first (by epochs ×
-  vector size, × the window for skip-gram), so the short ones fill the
-  slots as the long ones free them; a cell's models stay together and it
-  is scored when its last one lands. A model's threads are fixed when it
-  starts: one that starts when fewer models remain than there are slots
-  gets the spare CPUs (`workers_per_model` is a minimum). The long models
-  start first, with `workers_per_model` threads, so a task runs about as
-  long as its costliest model takes and uses fewer cores toward the end: a
-  search over 100 to 300 dimensions and 10 to 30 epochs used 55 to 62% of
-  its CPU time. The image rebuilds gensim's `corpus_file` reader free
-  of the GIL (`scripts/patch_gensim.py`): the stock build re-takes the GIL
-  once per line, which on five-token n-gram lines caps a model at three or
-  four cores however many threads it has.
+  on disk, and its year pairs as soon as the later year's model exists, so
+  the tables and the Inspect tab show a provisional picture at any point.
+  Only one cell's models are in memory at a time: a few hundred MB per
+  training process (`workers / workers_per_model` of them) plus the corpus
+  writer, whatever the grid's size. The models of all years form one queue,
+  costliest first, with corpora written a year ahead (how the queue is
+  scheduled: [docs/architecture.md](docs/architecture.md)).
 - **Growing a grid.** Models are kept under `tuning/<name>/models/`; in
   resume mode a rerun with more values trains only the new cells, and
   scores already in the tables are kept rather than recomputed.
@@ -1331,6 +825,61 @@ first.
   Slurm settings ask for 8 CPUs and 16 GB; *Jobs* splits the years over a
   job array as for `tune` and `train`.
 
+## Example notebooks
+
+The `notebooks/` folder has one notebook per workflow; copy the ones you need
+into your project and edit the settings at the top.
+
+| Notebook | What it does |
+|---|---|
+| `unigrams_workflow.ipynb` | Acquire and filter 1-grams and write the vocabulary |
+| `multigrams_workflow.ipynb` | Acquire 2–5-grams and filter them against the vocabulary into the year-keyed database |
+
+The other notebooks predate the `tune`, `train` and `measure` stages and use
+the notebook-era `train`, `analyze` and `daviesprep` modules: single aligned
+models per year rather than replicate ensembles. They are kept for COCA and
+the Movies corpus, which the stages do not read yet, and as references:
+`training_workflow.ipynb`, `ngram_change_analysis_workflow_eng.ipynb` and
+`_rus.ipynb` (Google Books); `davies_acquisition_workflow.ipynb`,
+`coha_training_workflow.ipynb`, `movies_training_workflow.ipynb` and
+`coha_change_analysis_workflow.ipynb` (Davies).
+
+## Output files
+
+The n-gram stages lay their outputs out under the `db_path_stub` you give
+them. It may name environment variables and start with `~`
+(`/scratch/$USER/NLP_corpora/Google_Books`): they are expanded where the
+stage runs, the settings file keeps them as written, and one file then
+serves everyone on a cluster. A variable that is not set is an error, not a
+directory named `$USER`.
+
+```
+{db_path_stub}/{release}/{name}/{N}gram_files/
+    {N}grams.db                 raw n-grams as downloaded (acquire)
+    {N}grams.db/lexichron.json  how the database was made (every database
+                                a stage writes carries one; see below)
+    1grams_processed.db         filtered unigrams, keyed by lemma (filter)
+    1grams_processed.db/whitelist.txt   the vocabulary built from them
+    {N}grams_pivoted.db         filtered 2-5-grams keyed year-first, one record
+                                per n-gram and year: what training reads (filter)
+    {N}grams_processed.db       2-5-grams keyed by n-gram, only when
+                                "Pivot by year" is turned off
+    logs/                       one log per filter run
+    tuning/<name>/              a hyperparameter search (tune): models, scores, tables
+    models/<name>/              an ensemble of final models (train): train.json,
+                                y<year>/c<corpus>_s<seed>.npz, y<year>/year.json
+    lexichron.yaml              the settings the UI saved
+    .lexichron/runs/            progress records of every run
+```
+
+A Davies corpus is laid out as `{db_path_stub}/{name}/token_files/` and
+`sentence_files/`, with `tokens*` and `sentences*` where an n-gram corpus
+has `{N}grams*` (see [Davies corpora](#davies-corpora)).
+
+Nothing temporary is left behind: workers spool their files under the
+job's scratch directory, and each is moved into the database (or deleted)
+as it is ingested.
+
 ## Provenance
 
 Every database a stage finishes carries a `lexichron.json` in its directory:
@@ -1349,25 +898,24 @@ to Google's files. (Runs made by notebooks calling the stage functions
 directly get a record only when they pass `progress_path`; the command
 line and the UI always do.)
 
-## Reading a filter run's figures
+## Upgrading from older versions
 
-The Progress tab (and the run's log) keep four record counts apart:
+Running `new-project` with the new image brings a project up to date (see
+[Updating a project](#updating-a-project-to-a-new-release)). Beyond that:
 
-- **Scanned**: records read from the source database.
-- **Kept**: source records that passed the filter. For 2-5-grams this is
-  the number of n-grams kept, each with its whole year series.
-- **Year records** (pivoted runs only): records made from them, one per
-  n-gram and year.
-- **Inserted**: records handed to the database, fewer than the above because
-  records that normalize to the same key merge inside a worker's chunk
-  before insertion.
-- **In database**: what the compacted database holds: fewer again, since the
-  same key arrives from several chunks and work units and those merge only
-  at compaction.
+- **Before 0.14.6**, a project's kernel ran `.venv/host-python` and could not
+  submit Slurm jobs; `new-project` now registers one that runs
+  `.venv/host-kernel`. Before 0.14.7, `new-project` dropped `--env` and
+  `--bind` settings not given again.
+- **Before 0.14**, the corpus identifier was `corpus.language`; such files
+  and `--set corpus.language=` load as `corpus.name`.
+- **Before 0.12**, the filter made lemmas without tags. Run the unigram
+  filter again before filtering longer n-grams against its vocabulary; the
+  stage refuses a mismatch.
+- **Before 0.10**, project launchers had no GPU support.
+- **Before 0.9**, a tuning search kept only its tables; its next run or read
+  imports them into per-cell score files.
 
-Kept and In database are properties of the corpus and the rules; Inserted
-and Year records depend on partitioning and chunk size.
-
-## Support and Maintenance
+## Support and maintenance
 
 This is research software, provided as-is. Issues and pull requests are welcome, but there is no guarantee of a response or of ongoing maintenance. If you depend on it, consider maintaining your own fork.
