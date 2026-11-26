@@ -18,6 +18,10 @@
 #                  container when the kernel runs. May be repeated.
 #   --env K=V      Environment variable set inside the container for this
 #                  project (e.g. --env CMDSTAN=/path/to/cmdstan). May be repeated.
+#                  Run again on an existing project, the --env and --bind
+#                  settings of its current launcher are kept; one given here
+#                  replaces a kept variable of the same name.
+#   --reset        Do not keep the current launcher's --env and --bind settings.
 #   --no-install   Do not install <project>/requirements.txt even if present.
 #
 # Creates:
@@ -46,12 +50,14 @@
 
 set -euo pipefail
 
-usage() { sed -n '2,48p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 [ $# -ge 1 ] || usage
 
 PROJECT_DIR="$1"; shift
-PASSTHROUGH=()
+ENVS=()
+BINDS=()
+RESET=0
 KERNEL_NAME=""
 DISPLAY_NAME=""
 INSTALL_REQS=1
@@ -60,8 +66,9 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --name)    KERNEL_NAME="$2"; shift 2 ;;
         --display) DISPLAY_NAME="$2"; shift 2 ;;
-        --bind)    PASSTHROUGH+=("--bind" "$2"); shift 2 ;;
-        --env)     PASSTHROUGH+=("--env" "$2"); shift 2 ;;
+        --bind)    BINDS+=("$2"); shift 2 ;;
+        --env)     ENVS+=("$2"); shift 2 ;;
+        --reset)   RESET=1; shift ;;
         --no-install) INSTALL_REQS=0; shift ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; usage ;;
@@ -138,6 +145,31 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Settings kept from the current launcher: rerunning new-project for a new
+# release must not drop what the project needs (CMDSTAN, an extra bind). The
+# launcher is read, not a record of the last run, so a hand edit is kept too.
+# ---------------------------------------------------------------------------
+if [ "$RESET" = 0 ] && [ -f "$VENV/host-python" ]; then
+    GIVEN=()
+    for kv in "${ENVS[@]-}"; do [ -n "$kv" ] && GIVEN+=("env=$kv"); done
+    for d in "${BINDS[@]-}"; do [ -n "$d" ] && GIVEN+=("bind=$d"); done
+    mapfile -t KEPT < <(python3 /opt/lexichron/launcher_settings.py "$VENV/host-python" "$PROJECT_DIR" \
+                            "${GIVEN[@]+"${GIVEN[@]}"}")
+    KEPT_ENVS=(); KEPT_BINDS=()
+    for kv in "${KEPT[@]-}"; do
+        case "$kv" in
+            env=*)  KEPT_ENVS+=("${kv#env=}");   echo "Keeping --env ${kv#env=} from the current launcher" ;;
+            bind=*) KEPT_BINDS+=("${kv#bind=}"); echo "Keeping --bind ${kv#bind=} from the current launcher" ;;
+        esac
+    done
+    ENVS=("${KEPT_ENVS[@]+"${KEPT_ENVS[@]}"}" "${ENVS[@]+"${ENVS[@]}"}")
+    BINDS=("${KEPT_BINDS[@]+"${KEPT_BINDS[@]}"}" "${BINDS[@]+"${BINDS[@]}"}")
+fi
+PASSTHROUGH=()
+for kv in "${ENVS[@]-}"; do [ -n "$kv" ] && PASSTHROUGH+=("--env" "$kv"); done
+for d in "${BINDS[@]-}"; do [ -n "$d" ] && PASSTHROUGH+=("--bind" "$d"); done
+
+# ---------------------------------------------------------------------------
 # Kernel for this project. Make sure the project directory itself is visible
 # at kernel start (register_kernel.sh skips it if a site bind already covers it).
 # ---------------------------------------------------------------------------
@@ -148,7 +180,7 @@ bash /opt/lexichron/register_kernel.sh \
     --name "$KERNEL_NAME" \
     --display "$DISPLAY_NAME" \
     --bind "$PROJECT_DIR" \
-    "${PASSTHROUGH[@]}"
+    "${PASSTHROUGH[@]+"${PASSTHROUGH[@]}"}"
 
 # ---------------------------------------------------------------------------
 # Project requirements, if any. pip runs inside this container; the venv is on

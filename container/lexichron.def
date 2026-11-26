@@ -37,6 +37,7 @@ From: {{ BASE }}
     container/new_project.sh /opt/lexichron/new_project.sh
     container/host_bridge.sh /opt/lexichron/host_bridge.sh
     container/host_kernel.sh /opt/lexichron/host_kernel.sh
+    container/launcher_settings.py /opt/lexichron/launcher_settings.py
     container/install_ui.sh /opt/lexichron/install_ui.sh
     install.sh /opt/lexichron/install.sh
     examples /opt/lexichron/examples
