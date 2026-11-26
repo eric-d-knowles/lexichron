@@ -105,7 +105,7 @@ its module if needed), and re-pull the image if a scratch purge removes it.
 The commands below say `apptainer`; on a Singularity cluster type
 `singularity` or `alias apptainer=singularity`.
 
-- A specific version: `LEXICHRON_0.14.7=0.14.7 bash install.sh`.
+- A specific version: `LEXICHRON_VERSION=0.14.7 bash install.sh`.
 - A broken download is resumed with curl and checked against the
   registry's SHA-256; rerun the installer if it is interrupted.
   `LEXICHRON_FETCH=curl` uses curl from the start, and
