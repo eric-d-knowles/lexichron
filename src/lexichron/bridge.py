@@ -121,7 +121,8 @@ class HostBridge(SlurmRunner):
         if not self.available():
             raise BridgeUnavailable(
                 f"no host bridge at {self.dir}; start the UI through the project's "
-                f".venv/lexichron-ui launcher to enable Slurm actions"
+                f".venv/lexichron-ui launcher, or a notebook on the project's kernel "
+                f"(.venv/host-kernel), to enable Slurm actions"
             )
         req_id = uuid.uuid4().hex
         req_dir, res_dir = self.dir / "req", self.dir / "res"

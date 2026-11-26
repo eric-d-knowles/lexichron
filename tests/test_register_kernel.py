@@ -95,3 +95,25 @@ def test_a_job_without_a_gpu_on_a_gpu_node_gets_the_cpu(launcher, tmp_path):
     assert run().startswith("apptainer exec --env JAX_PLATFORMS=cpu ")
     fake.write_text('#!/usr/bin/env bash\necho "GPU 0: NVIDIA L40S (UUID: GPU-0)"\n')
     assert run().startswith("apptainer exec --nv ")
+
+
+def _register(tmp_path, *extra):
+    """Run register_kernel.sh for a fake image; return the kernelspec it wrote."""
+    import json
+    env = dict(os.environ, APPTAINER_CONTAINER=str(tmp_path / "lexichron-9.9.9.sif"),
+               JUPYTER_DATA_DIR=str(tmp_path / "jupyter"))
+    env.pop("BASH_ENV", None); env.pop("ENV", None)
+    subprocess.run(["bash", str(REGISTER), "--launcher", str(tmp_path / "host-python"), "--name", "k", *extra],
+                   env=env, check=True, capture_output=True, text=True)
+    return json.loads((tmp_path / "jupyter" / "kernels" / "k" / "kernel.json").read_text())
+
+
+def test_the_kernelspec_runs_the_launcher_by_default(tmp_path):
+    assert _register(tmp_path)["argv"][0] == str(tmp_path / "host-python")
+
+
+def test_the_kernelspec_can_run_another_command(tmp_path):
+    """new-project points the kernel at host-kernel, which starts the Slurm bridge."""
+    spec = _register(tmp_path, "--kernel-command", str(tmp_path / "host-kernel"))
+    assert spec["argv"] == [str(tmp_path / "host-kernel"), "-m", "ipykernel_launcher", "-f", "{connection_file}"]
+    assert (tmp_path / "host-python").exists()                 # the launcher is still written

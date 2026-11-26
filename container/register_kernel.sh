@@ -29,13 +29,17 @@
 #                  chosen Python inside the image with the right binds and
 #                  environment, so it can be called by path from Slurm
 #                  scripts: `/path/to/launcher script.py`.
+#   --kernel-command P
+#                  What the kernelspec runs (default: the launcher). The
+#                  new-project app passes <project>/.venv/host-kernel, which
+#                  starts the Slurm host bridge and then the launcher.
 #
 # Afterwards, restart Jupyter (or reload the VS Code / Positron window) and
 # pick the kernel from the kernel menu.
 
 set -euo pipefail
 
-usage() { sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,37p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 EXTRA_BINDS=()
 KERNEL_NAME=""
@@ -43,6 +47,7 @@ DISPLAY_NAME=""
 PYTHON="python"
 ENVS=()
 LAUNCHER=""
+KERNEL_COMMAND=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -52,6 +57,7 @@ while [ $# -gt 0 ]; do
         --python)  PYTHON="$2"; shift 2 ;;
         --env)     ENVS+=("$2"); shift 2 ;;
         --launcher) LAUNCHER="$2"; shift 2 ;;
+        --kernel-command) KERNEL_COMMAND="$2"; shift 2 ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
@@ -110,6 +116,7 @@ KERNEL_DIR="${JUPYTER_DATA_DIR:-$HOME/.local/share/jupyter}/kernels/${KERNEL_NAM
 mkdir -p "$KERNEL_DIR"
 [ -n "$LAUNCHER" ] || LAUNCHER="$KERNEL_DIR/launcher"
 mkdir -p "$(dirname "$LAUNCHER")"
+[ -n "$KERNEL_COMMAND" ] || KERNEL_COMMAND="$LAUNCHER"
 
 ENV_ARGS=""
 for kv in "${ENVS[@]-}"; do
@@ -156,11 +163,11 @@ exec "\$runtime" exec\$nv \$binds${ENV_ARGS} "\$img" "\$py" "\$@"
 EOF
 chmod 755 "$LAUNCHER"
 
-python3 - "$KERNEL_DIR/kernel.json" "$LAUNCHER" "$DISPLAY_NAME" <<'EOF'
+python3 - "$KERNEL_DIR/kernel.json" "$KERNEL_COMMAND" "$DISPLAY_NAME" <<'EOF'
 import json, sys
-out, launcher, display = sys.argv[1:]
+out, command, display = sys.argv[1:]
 spec = {
-    "argv": [launcher, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
+    "argv": [command, "-m", "ipykernel_launcher", "-f", "{connection_file}"],
     "display_name": display,
     "language": "python",
     "metadata": {"debugger": True},
