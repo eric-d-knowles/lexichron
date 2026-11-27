@@ -43,7 +43,7 @@ If you use lexichron in your research, please cite it:
   title = {lexichron: Scalable tools for temporal linguistic analysis},
   year = {2026},
   url = {https://github.com/eric-d-knowles/lexichron},
-  version = {0.14.7}
+  version = {0.14.8}
 }
 ```
 
@@ -105,7 +105,7 @@ its module if needed), and re-pull the image if a scratch purge removes it.
 The commands below say `apptainer`; on a Singularity cluster type
 `singularity` or `alias apptainer=singularity`.
 
-- A specific version: `LEXICHRON_VERSION=0.14.7 bash install.sh`.
+- A specific version: `LEXICHRON_VERSION=0.14.8 bash install.sh`.
 - A broken download is resumed with curl and checked against the
   registry's SHA-256; rerun the installer if it is interrupted.
   `LEXICHRON_FETCH=curl` uses curl from the start, and
@@ -120,7 +120,7 @@ working with lexichron from your own notebooks and scripts.
 or an existing one such as a fresh clone) and run:
 
 ```bash
-apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.7.sif /scratch/$USER/projects/gender-semantics
+apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-0.14.8.sif /scratch/$USER/projects/gender-semantics
 ```
 
 This creates `gender-semantics/.venv`, a Python environment that inherits
@@ -132,7 +132,7 @@ others with `--bind /path`, and set environment variables for the project
 with `--env NAME=VALUE`.
 
 **3. Open a notebook** in JupyterLab, Positron or VS Code and pick
-*Python (gender-semantics | lexichron 0.14.7)* from the kernel menu (reload
+*Python (gender-semantics | lexichron 0.14.8)* from the kernel menu (reload
 the window if it is not listed). The repository's
 [`notebooks/`](https://github.com/eric-d-knowles/lexichron/tree/main/notebooks)
 folder has examples to copy.
@@ -199,7 +199,7 @@ so processes can share a GPU. For double-precision work, data-center GPUs
 (A100, H100) are far faster than workstation ones (L40S).
 
 The image is read-only: every output path must be on a host directory such
-as `/scratch`. `apptainer run-help lexichron-0.14.7.sif` prints a usage
+as `/scratch`. `apptainer run-help lexichron-0.14.8.sif` prints a usage
 summary; `container/README.md` describes how the image is built.
 
 ### Development installation (conda)
@@ -527,7 +527,7 @@ small helper on the host beside it so jobs can be submitted and watched from
 inside the container. `lexichron-ui /path/to/lexichron.yaml` opens a settings
 file; a project made with `new-project` has its own `.venv/lexichron-ui`.
 Started straight from the image (`apptainer run --app ui
-lexichron-0.14.7.sif`), everything works except Submit and the job table.
+lexichron-0.14.8.sif`), everything works except Submit and the job table.
 
 Two bars sit above the tabs:
 
@@ -905,7 +905,7 @@ Running `new-project` with the new image brings a project up to date (see
 
 - **Before 0.14.6**, a project's kernel ran `.venv/host-python` and could not
   submit Slurm jobs; `new-project` now registers one that runs
-  `.venv/host-kernel`. Before 0.14.7, `new-project` dropped `--env` and
+  `.venv/host-kernel`. Before 0.14.8, `new-project` dropped `--env` and
   `--bind` settings not given again.
 - **Before 0.14**, the corpus identifier was `corpus.language`; such files
   and `--set corpus.language=` load as `corpus.name`.
