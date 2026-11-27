@@ -156,8 +156,9 @@ apptainer run --app new-project $SCRATCH/lexichron/images/lexichron-<version>.si
 It keeps `.venv` and what you installed, keeps the launcher's `--env` and
 `--bind` settings (passing one again replaces it; `--reset` drops them all),
 points the launchers at the new image, and registers a kernel named for the
-new version. Switch the notebook to that kernel and restart it; remove the old
-one with `rm -r ~/.local/share/jupyter/kernels/<project>-lexichron-<old version>`.
+new version. Switch the notebook to that kernel and restart it. The project's
+kernels from earlier releases are listed; `--remove-old-kernels` removes them
+(only kernels that run this project's `.venv`).
 Data, settings files and notebooks are untouched, and running jobs keep the
 image they started with. If a future image moves to a newer Python than
 3.11, the command refuses and says how to recreate the environment.

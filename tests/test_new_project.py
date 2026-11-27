@@ -87,3 +87,26 @@ def test_the_kernel_runs_host_kernel_and_a_users_own_is_kept(new_project):
     host_kernel.write_text("#!/usr/bin/env bash\n# mine\nexec \"$(dirname \"$0\")/host-python\" \"$@\"\n")
     out, _ = run()
     assert "Keeping your own" in out and "# mine" in host_kernel.read_text()
+
+
+def _kernel(root, name, argv0):
+    d = root / name
+    d.mkdir(parents=True)
+    (d / "kernel.json").write_text(json.dumps({"argv": [str(argv0), "-m", "ipykernel_launcher", "-f", "{connection_file}"]}))
+    return d
+
+
+def test_earlier_kernels_are_listed_and_removed_on_request(new_project):
+    run, project, tmp_path = new_project
+    kernels = tmp_path / "jupyter" / "kernels"
+    older = _kernel(kernels, "proj-lexichron-9.9.8", project / ".venv" / "host-python")
+    other = _kernel(kernels, "elsewhere-lexichron-9.9.8", tmp_path / "elsewhere" / ".venv" / "host-python")
+    mine = _kernel(kernels, "my-own", "/usr/bin/python3")
+    out, _ = run()
+    assert "proj-lexichron-9.9.8" in out and "--remove-old-kernels" in out
+    assert older.exists()                                       # only listed
+    out, _ = run("--remove-old-kernels")
+    assert "Removed the earlier kernel proj-lexichron-9.9.8" in out
+    assert not older.exists()
+    assert other.exists() and mine.exists()                     # not this project's
+    assert (kernels / "proj-lexichron-9.9.9" / "kernel.json").exists()   # the one just registered

@@ -22,6 +22,10 @@
 #                  settings of its current launcher are kept; one given here
 #                  replaces a kept variable of the same name.
 #   --reset        Do not keep the current launcher's --env and --bind settings.
+#   --remove-old-kernels
+#                  Remove this project's kernels from earlier releases (those
+#                  whose kernel.json runs this project's .venv). Without it,
+#                  they are listed.
 #   --no-install   Do not install <project>/requirements.txt even if present.
 #
 # Creates:
@@ -50,7 +54,7 @@
 
 set -euo pipefail
 
-usage() { sed -n '2,52p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
+usage() { sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 1; }
 
 [ $# -ge 1 ] || usage
 
@@ -58,6 +62,7 @@ PROJECT_DIR="$1"; shift
 ENVS=()
 BINDS=()
 RESET=0
+REMOVE_OLD_KERNELS=0
 KERNEL_NAME=""
 DISPLAY_NAME=""
 INSTALL_REQS=1
@@ -69,6 +74,7 @@ while [ $# -gt 0 ]; do
         --bind)    BINDS+=("$2"); shift 2 ;;
         --env)     ENVS+=("$2"); shift 2 ;;
         --reset)   RESET=1; shift ;;
+        --remove-old-kernels) REMOVE_OLD_KERNELS=1; shift ;;
         --no-install) INSTALL_REQS=0; shift ;;
         -h|--help) usage ;;
         *) echo "Unknown option: $1"; usage ;;
@@ -220,6 +226,34 @@ args=("\$@"); [ \${#args[@]} -gt 0 ] || args=("\$PROJECT_DIR/lexichron.yaml")
 LEXICHRON_BRIDGE_DIR="\$BRIDGE_DIR" "$VENV/host-python" -m lexichron.cli ui "\${args[@]}"
 EOF
 chmod 755 "$UI_LAUNCHER"
+
+# ---------------------------------------------------------------------------
+# Kernels from earlier runs: each release registers its own, and they pile up.
+# A kernel is this project's if its kernel.json runs a command in this .venv;
+# the one just registered is left alone, and so is every other project's.
+# ---------------------------------------------------------------------------
+mapfile -t OLD_KERNELS < <(python3 - "${JUPYTER_DATA_DIR:-$HOME/.local/share/jupyter}/kernels" "$KERNEL_NAME" "$VENV" <<'PY'
+import json, os, sys
+root, current, venv = sys.argv[1:]
+for name in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+    try:
+        with open(os.path.join(root, name, "kernel.json")) as fh:
+            argv0 = json.load(fh)["argv"][0]
+    except (OSError, ValueError, KeyError, IndexError, TypeError):
+        continue
+    if name != current and os.path.dirname(os.path.abspath(argv0)) == venv:
+        print(os.path.join(root, name))
+PY
+)
+if [ ${#OLD_KERNELS[@]} -gt 0 ]; then
+    echo ""
+    if [ "$REMOVE_OLD_KERNELS" = 1 ]; then
+        for d in "${OLD_KERNELS[@]}"; do rm -rf "$d" && echo "Removed the earlier kernel $(basename "$d")"; done
+    else
+        echo "Earlier kernels for this project (remove them with --remove-old-kernels):"
+        for d in "${OLD_KERNELS[@]}"; do echo "  $(basename "$d")"; done
+    fi
+fi
 
 echo ""
 echo "Project environment ready."
