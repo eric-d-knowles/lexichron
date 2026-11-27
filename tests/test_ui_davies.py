@@ -171,7 +171,9 @@ def test_new_davies_corpus_and_its_settings_file(tmp_path):
     asyncio.run(scenario())
     saved = yaml.safe_load((root / "coha" / "token_files" / "lexichron.yaml").read_text())
     assert saved["corpus"] == {"source": "davies", "name": "coha", "unit": "tokens", "db_path_stub": str(root)}
-    assert saved["acquire"] == {"source_dir": "/data/english-corpora/COHA", "workers": 20}
+    # the stage being edited is written in full, its defaults included
+    assert saved["acquire"] == {"source_dir": "/data/english-corpora/COHA", "workers": 20,
+                                "ngram_type": "tagged", "overwrite_db": False}
     # and it runs from the command line as saved
     from lexichron.cli import _resolve, stage_entry
     from lexichron.config import build_call, corpus_source, load_project

@@ -1462,3 +1462,43 @@ def test_a_corpus_directory_written_with_a_variable_is_used_expanded_and_saved_a
         assert "db_path_stub: $CORPUS_ROOT" in saved
 
     asyncio.run(scenario())
+
+
+def test_a_save_writes_every_setting_the_stage_form_shows_defaults_included(tmp_path):
+    """The file used to keep only values that differ from the defaults, so a
+    stage set to 100 dimensions and 10 epochs saved without either, and a file
+    checked by eye looked as if they had been lost. The stage being edited is
+    now written in full; other stages and advanced settings keep the old rule
+    unless the file already has them."""
+    import yaml
+    corpus = tmp_path / "corpora" / "20200217" / "eng" / "5gram_files"
+    corpus.mkdir(parents=True)
+    proj = corpus / "lexichron.yaml"
+    proj.write_text(f"corpus:\n  release: '20200217'\n  name: eng\n  ngram_size: 5\n  db_path_stub: {tmp_path / 'corpora'}\n"
+                    "train:\n  window: 5\n  name: ens1\n")
+
+    async def scenario():
+        app = LexichronApp(str(proj), "train")
+        async with app.run_test(size=(160, 50)) as pilot:
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            app.action_save()
+            await pilot.pause()
+            saved = yaml.safe_load(proj.read_text().split("\n", 1)[1])
+            train = saved["train"]
+            # the defaults the form shows are written, as is what was set
+            assert (train["vector_size"], train["epochs"], train["corpus_replicates"]) == (100, 10, 20)
+            assert train["window"] == 5 and train["name"] == "ens1"
+            # an advanced setting left at its default is not; nor is a stage not being edited
+            assert "temp_dir" not in train and "vector_size" not in (saved.get("tune") or {})
+            # a value the file has is kept when another stage is edited and saved
+            app.select_stage("tune")
+            await pilot.pause()
+            app.action_save()
+            await pilot.pause()
+            again = yaml.safe_load(proj.read_text().split("\n", 1)[1])
+            assert again["train"]["vector_size"] == 100 and again["train"]["epochs"] == 10
+        _assert_clean(app)
+
+    asyncio.run(scenario())

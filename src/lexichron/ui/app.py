@@ -1531,6 +1531,16 @@ class LexichronApp(App):
             if sec.name in ("acquire", DAVIES_ACQUIRE) and \
                     sec.name != self._form_of("acquire", self._source(cfg)):
                 continue                                       # the Acquire form of the other kind of corpus
+            # What a save writes. The stage being edited: every setting its
+            # form shows, defaults included, so the file says what will run
+            # and a later change of a default cannot alter it unseen. (Only
+            # non-default values used to be written, and a file checked by
+            # eye looked as if vector size and epochs had not been saved.)
+            # Advanced settings, and the other stages, keep the old rule: a
+            # value is written when it differs from the default or the file
+            # already had it, so a stage written in full stays in full.
+            editing = sec.name == self.stage or (self.stage == "acquire" and sec.name in ("acquire", DAVIES_ACQUIRE))
+            had = self.config.get(_yaml_section(sec.name)) or {}
             for f in sec.fields:
                 w = self.query_one(f"#f-{sec.name}-{f.name}")
                 if f.kind in ("keeplist", "multigrams"):       # one widget, two settings
@@ -1551,7 +1561,9 @@ class LexichronApp(App):
                     raise
                 except ValueError:
                     raise ConfigError(f"{f.title}: not a valid {f.kind}")
-                if v is None or (f.kind == "bool" and v == f.default) or v == f.default and not f.required:
+                if v is None:
+                    continue
+                if v == f.default and not f.required and not (editing and not f.advanced) and f.name not in had:
                     continue
                 vals[f.name] = v
             if sec.name == "corpus":
